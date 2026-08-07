@@ -725,7 +725,7 @@ export default function StaffAttendance() {
                   <Label htmlFor="log-date">Date</Label>
                   <Input id="log-date" type="date" value={logDate} onChange={(e) => setLogDate(e.target.value)} />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="log-clock-in">Clock In <span className="text-muted-foreground text-xs">(optional)</span></Label>
                     <Input id="log-clock-in" type="time" value={logClockIn} onChange={(e) => setLogClockIn(e.target.value)} />

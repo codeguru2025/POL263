@@ -494,11 +494,11 @@ export default function StaffLeads() {
                           <Button type="button" variant="ghost" size="icon" className="h-5 w-5 absolute top-1.5 right-1.5" onClick={() => removeQuoteDep(i)}>
                             <X className="h-3 w-3" />
                           </Button>
-                          <div className="grid grid-cols-2 gap-1.5 pr-6">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pr-6">
                             <Input className="h-8 text-xs" placeholder="First name" value={dep.firstName} onChange={(e) => updateQuoteDep(i, "firstName", e.target.value)} />
                             <Input className="h-8 text-xs" placeholder="Last name" value={dep.lastName} onChange={(e) => updateQuoteDep(i, "lastName", e.target.value)} />
                           </div>
-                          <div className="grid grid-cols-2 gap-1.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                             <Input className="h-8 text-xs" type="date" value={dep.dateOfBirth} onChange={(e) => updateQuoteDep(i, "dateOfBirth", e.target.value)} />
                             {!dep.dateOfBirth && (
                               <Input className="h-8 text-xs" type="number" min="0" max="120" placeholder="Est. age if DOB unknown" value={dep.estimatedAge} onChange={(e) => updateQuoteDep(i, "estimatedAge", e.target.value)} />

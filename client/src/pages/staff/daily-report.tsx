@@ -173,7 +173,7 @@ export default function DailyReport() {
                 const curs: string[] = is.currencies?.length ? is.currencies : ["USD"];
                 return (
                   <div className="space-y-2 text-sm">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Income</p>
                         <p className="tabular-nums font-medium">{currencyLines(is.income.total)}</p>
@@ -209,7 +209,7 @@ export default function DailyReport() {
               {(() => {
                 const cf = report.financials.cashFlow;
                 return (
-                  <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                     <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Cash in</p><p className="font-semibold tabular-nums text-emerald-600">{currencyLines(cf.cashIn)}</p></div>
                     <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Cash out</p><p className="font-semibold tabular-nums text-destructive">{currencyLines(cf.outflows.total)}</p></div>
                     <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Net cash</p><p className="font-semibold tabular-nums">{currencyLines(cf.netCash)}</p></div>

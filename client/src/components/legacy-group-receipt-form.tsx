@@ -48,7 +48,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string
         This group has no member policies yet. Record the lump-sum payment here — it will appear in financials
         immediately. Once members are added and given policies, future payments use the member-selection form below.
       </p>
-      <div className="grid grid-cols-3 gap-4 max-w-md">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-md">
         <div>
           <Label htmlFor={`${uid}-amount`}>Amount</Label>
           <Input id={`${uid}-amount`} type="number" step="0.01" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />

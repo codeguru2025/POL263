@@ -279,7 +279,7 @@ export function ImportWizard({ orgId }: { orgId: string }) {
             )}
             <div className="space-y-3 max-w-2xl">
               {uploadResult.fieldSpec.map((spec) => (
-                <div key={spec.field} className="grid grid-cols-2 gap-3 items-center">
+                <div key={spec.field} className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                   <Label className="flex items-center gap-1.5">
                     {spec.label}
                     {spec.required && <Badge variant="outline" className="text-[10px] px-1.5 py-0">required</Badge>}
@@ -337,7 +337,7 @@ export function ImportWizard({ orgId }: { orgId: string }) {
             </p>
             <div className="space-y-3 max-w-2xl">
               {planValues.map((value) => (
-                <div key={value} className="grid grid-cols-2 gap-3 items-center">
+                <div key={value} className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                   <Label>{value}</Label>
                   <Select
                     value={planValueMapping[value] || USE_LEGACY_PLACEHOLDER}

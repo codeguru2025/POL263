@@ -396,7 +396,7 @@ export default function JoinRegisterPage() {
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="firstName">First name *</Label>
                 <Input
@@ -438,7 +438,7 @@ export default function JoinRegisterPage() {
                 data-testid="input-phone"
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="dateOfBirth">Date of birth *</Label>
                 <Input
@@ -577,7 +577,7 @@ export default function JoinRegisterPage() {
               ))}
               {showDepForm && (
                 <div className="p-3 border rounded-md bg-muted/20 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs">First Name *</Label>
                       <Input className="h-8 text-sm" value={depDraft.firstName} onChange={(e) => setDepDraft({ ...depDraft, firstName: e.target.value })} />
@@ -598,7 +598,7 @@ export default function JoinRegisterPage() {
                       <option value="extended">Extended Family</option>
                     </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs" htmlFor="dep-draft-date-of-birth">Date of Birth</Label>
                       <Input id="dep-draft-date-of-birth" className="h-8 text-sm" type="date" value={depDraft.dateOfBirth} onChange={(e) => setDepDraft({ ...depDraft, dateOfBirth: e.target.value })} />
@@ -641,7 +641,7 @@ export default function JoinRegisterPage() {
                 </Button>
               ) : (
                 <div className="p-3 border rounded-md bg-muted/20 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs" htmlFor="beneficiary-first-name">First Name *</Label>
                       <Input id="beneficiary-first-name" className="h-8 text-sm" value={beneficiary.firstName} onChange={(e) => setBeneficiary({ ...beneficiary, firstName: e.target.value, fromDependentIndex: null })} />
@@ -663,7 +663,7 @@ export default function JoinRegisterPage() {
                       <option value="other">Other</option>
                     </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div>
                       <Label className="text-xs" htmlFor="beneficiary-national-id">National ID</Label>
                       <Input id="beneficiary-national-id" className="h-8 text-sm" value={beneficiary.nationalId} onChange={(e) => setBeneficiary({ ...beneficiary, nationalId: e.target.value })} />

@@ -94,7 +94,7 @@ export default function StaffMyVCard() {
           {statsLoading ? (
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           ) : (
-            <div className="grid grid-cols-2 gap-4 max-w-md">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
               <div className="rounded-lg border p-4">
                 <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1"><Eye className="h-3.5 w-3.5" /> Page views</div>
                 <p className="text-2xl font-bold tabular-nums">{stats?.pageViews ?? 0}</p>

@@ -911,7 +911,7 @@ function DependentsSection({ clientId }: { clientId: string }) {
         {showForm && (
           <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
             <p className="text-sm font-medium">Add a new dependent</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label htmlFor="form-first-name">First Name *</Label>
                 <Input id="form-first-name" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-dep-first-name" />
@@ -934,7 +934,7 @@ function DependentsSection({ clientId }: { clientId: string }) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label htmlFor="form-date-of-birth">Date of Birth</Label>
                 <Input id="form-date-of-birth" type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} data-testid="input-dep-dob" />
@@ -1124,7 +1124,7 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
             ) : (
               <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
                 <p className="text-sm font-medium">Enter beneficiary details</p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <Label htmlFor="ben-form-first-name">First Name *</Label>
                     <Input id="ben-form-first-name" value={benForm.firstName} onChange={(e) => setBenForm({ ...benForm, firstName: e.target.value })} data-testid="input-ben-first-name" />
@@ -1148,7 +1148,7 @@ function BeneficiarySection({ policy, clientId }: { policy: Policy; clientId: st
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <Label htmlFor="ben-form-national-id">National ID</Label>
                     <Input id="ben-form-national-id" value={benForm.nationalId} onChange={(e) => setBenForm({ ...benForm, nationalId: e.target.value })} data-testid="input-ben-national-id" />

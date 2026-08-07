@@ -247,7 +247,7 @@ export default function TenantSignup() {
                   })}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="ts-book-status">Book status</Label>
                   <Select value={bookStatus} onValueChange={setBookStatus}>
@@ -275,7 +275,7 @@ export default function TenantSignup() {
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="ts-phone">Business phone</Label>
                   <Input id="ts-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -330,7 +330,7 @@ export default function TenantSignup() {
 
                   <div className="space-y-2">
                     <Label>Billing cycle</Label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <button
                         className={`rounded-lg border px-4 py-3 text-left ${billingCycle === "monthly" ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
                         onClick={() => setBillingCycle("monthly")}>

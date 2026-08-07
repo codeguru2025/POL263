@@ -426,7 +426,7 @@ function InlineGroupReceiptForm({ group, onSuccess }: { group: Group; onSuccess:
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 max-w-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-sm">
             <div>
               <Label>Total amount</Label>
               <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total collected" />
@@ -1268,7 +1268,7 @@ function PoolSocietySection({ group }: { group: Group }) {
                 <SelectContent>{members.map((m: any) => <SelectItem key={m.id} value={m.id}>{m.fullName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Amount *</Label><Input type="number" step="0.01" value={contribAmount} onChange={(e) => setContribAmount(e.target.value)} /></div>
               <div className="space-y-2">
                 <Label>Currency</Label>
@@ -1303,7 +1303,7 @@ function PoolSocietySection({ group }: { group: Group }) {
               </Select>
             </div>
             <div className="space-y-2"><Label>Event Type *</Label><Input placeholder="e.g. death" value={payoutEventType} onChange={(e) => setPayoutEventType(e.target.value)} /></div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Amount (optional — uses matching rule if blank)</Label><Input type="number" step="0.01" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} /></div>
               <div className="space-y-2">
                 <Label>Currency</Label>
@@ -1802,7 +1802,7 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
     <div className="space-y-6">
       <div className="space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Group Details</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="form-data-name">Group Name *</Label>
             <Input id="form-data-name" value={formData.name} onChange={(e) => update("name", e.target.value)} placeholder="e.g. Sunrise Community Group" data-testid={`input-${prefix}-group-name`} />
@@ -1832,7 +1832,7 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
 
       <div className="border-t pt-4 space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Chairperson</h3>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2"><Label>Full Name</Label><Input value={formData.chairpersonName} onChange={(e) => update("chairpersonName", e.target.value)} placeholder="Full name" data-testid={`input-${prefix}-chairperson-name`} /></div>
           <div className="space-y-2"><Label>Phone</Label><Input value={formData.chairpersonPhone} onChange={(e) => update("chairpersonPhone", e.target.value)} placeholder="+263 77 123 4567" data-testid={`input-${prefix}-chairperson-phone`} /></div>
           <div className="space-y-2"><Label>Email</Label><Input type="email" value={formData.chairpersonEmail} onChange={(e) => update("chairpersonEmail", e.target.value)} placeholder="email@example.com" data-testid={`input-${prefix}-chairperson-email`} /></div>
@@ -1841,7 +1841,7 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
 
       <div className="border-t pt-4 space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Secretary</h3>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2"><Label>Full Name</Label><Input value={formData.secretaryName} onChange={(e) => update("secretaryName", e.target.value)} placeholder="Full name" data-testid={`input-${prefix}-secretary-name`} /></div>
           <div className="space-y-2"><Label>Phone</Label><Input value={formData.secretaryPhone} onChange={(e) => update("secretaryPhone", e.target.value)} placeholder="+263 77 123 4567" data-testid={`input-${prefix}-secretary-phone`} /></div>
           <div className="space-y-2"><Label>Email</Label><Input type="email" value={formData.secretaryEmail} onChange={(e) => update("secretaryEmail", e.target.value)} placeholder="email@example.com" data-testid={`input-${prefix}-secretary-email`} /></div>
@@ -1850,7 +1850,7 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
 
       <div className="border-t pt-4 space-y-4">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Treasurer</h3>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2"><Label>Full Name</Label><Input value={formData.treasurerName} onChange={(e) => update("treasurerName", e.target.value)} placeholder="Full name" data-testid={`input-${prefix}-treasurer-name`} /></div>
           <div className="space-y-2"><Label>Phone</Label><Input value={formData.treasurerPhone} onChange={(e) => update("treasurerPhone", e.target.value)} placeholder="+263 77 123 4567" data-testid={`input-${prefix}-treasurer-phone`} /></div>
           <div className="space-y-2"><Label>Email</Label><Input type="email" value={formData.treasurerEmail} onChange={(e) => update("treasurerEmail", e.target.value)} placeholder="email@example.com" data-testid={`input-${prefix}-treasurer-email`} /></div>
@@ -1860,18 +1860,18 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
       {formData.type === "corporate" && (
         <div className="border-t pt-4 space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Company Details</h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2"><Label>Company Name</Label><Input value={formData.companyName} onChange={(e) => update("companyName", e.target.value)} placeholder="Company name" data-testid={`input-${prefix}-company-name`} /></div>
             <div className="space-y-2"><Label>Capacity</Label><Input type="number" value={formData.capacity} onChange={(e) => update("capacity", e.target.value)} placeholder="Number of members" data-testid={`input-${prefix}-capacity`} /></div>
           </div>
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">HR Manager</h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2"><Label>Full Name</Label><Input value={formData.hrManagerName} onChange={(e) => update("hrManagerName", e.target.value)} placeholder="Full name" data-testid={`input-${prefix}-hr-manager-name`} /></div>
             <div className="space-y-2"><Label>Phone</Label><Input value={formData.hrManagerPhone} onChange={(e) => update("hrManagerPhone", e.target.value)} placeholder="+263 77 123 4567" data-testid={`input-${prefix}-hr-manager-phone`} /></div>
             <div className="space-y-2"><Label>Email</Label><Input type="email" value={formData.hrManagerEmail} onChange={(e) => update("hrManagerEmail", e.target.value)} placeholder="email@example.com" data-testid={`input-${prefix}-hr-manager-email`} /></div>
           </div>
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider pt-2">Contact Person</h4>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2"><Label>Full Name</Label><Input value={formData.contactPersonName} onChange={(e) => update("contactPersonName", e.target.value)} placeholder="Full name" data-testid={`input-${prefix}-contact-person-name`} /></div>
             <div className="space-y-2"><Label>Phone</Label><Input value={formData.contactPersonPhone} onChange={(e) => update("contactPersonPhone", e.target.value)} placeholder="+263 77 123 4567" data-testid={`input-${prefix}-contact-person-phone`} /></div>
             <div className="space-y-2"><Label>Email</Label><Input type="email" value={formData.contactPersonEmail} onChange={(e) => update("contactPersonEmail", e.target.value)} placeholder="email@example.com" data-testid={`input-${prefix}-contact-person-email`} /></div>

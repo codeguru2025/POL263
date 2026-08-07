@@ -1915,7 +1915,7 @@ function CaseDetailView({
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div><p className="text-xs text-muted-foreground">Quoted</p><p className="text-lg font-bold tabular-nums">{cur} {quoted.toFixed(2)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Received</p><p className="text-lg font-bold tabular-nums text-emerald-600">{cur} {received.toFixed(2)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Outstanding</p><p className={`text-lg font-bold tabular-nums ${outstanding > 0 ? "text-amber-600" : ""}`}>{cur} {outstanding.toFixed(2)}</p></div>
@@ -1962,7 +1962,7 @@ function CaseDetailView({
                   const cost = profitLoss.costByCurrency?.[cur] || 0;
                   const profit = profitLoss.profitByCurrency?.[cur] ?? (revenue - cost);
                   return (
-                    <div key={cur} className="grid grid-cols-3 gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0">
+                    <div key={cur} className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-b border-border/40 pb-3 last:border-0 last:pb-0">
                       <div>
                         <p className="text-xs text-muted-foreground">Revenue ({cur})</p>
                         <p className="text-lg font-bold tabular-nums text-emerald-600">{cur} {revenue.toFixed(2)}</p>

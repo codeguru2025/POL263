@@ -212,7 +212,7 @@ export function DirectoryPage({ title, description, icon: Icon, type, singularLa
                 <Label htmlFor="name">Name *</Label>
                 <Input id="name" value={form.name || ""} onChange={f("name")} placeholder={`${singularLabel} or company name`} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label htmlFor="contact-person">Contact person</Label>
                   <Input id="contact-person" value={form.contactPerson || ""} onChange={f("contactPerson")} placeholder="Full name" />
@@ -222,7 +222,7 @@ export function DirectoryPage({ title, description, icon: Icon, type, singularLa
                   <Input id="city-town" value={form.city || ""} onChange={f("city")} placeholder="e.g. Harare" />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label htmlFor="phone">Phone</Label>
                   <Input id="phone" value={form.phone || ""} onChange={f("phone")} placeholder="+263 77 …" />

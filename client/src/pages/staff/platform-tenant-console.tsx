@@ -443,7 +443,7 @@ function BrandingTab({ tenantId, branding, onSaved }: { tenantId: string; brandi
             <Label htmlFor="pt-address">Address</Label>
             <Input id="pt-address" value={address} onChange={(e) => setAddress(e.target.value)} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label htmlFor="pt-phone">Phone</Label>
               <Input id="pt-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -475,7 +475,7 @@ function BrandingTab({ tenantId, branding, onSaved }: { tenantId: string; brandi
             <Label htmlFor="pt-footerText">Footer Text (on documents)</Label>
             <Input id="pt-footerText" value={footerText} onChange={(e) => setFooterText(e.target.value)} />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label htmlFor="pt-prefix">Policy Number Prefix</Label>
               <Input id="pt-prefix" value={policyNumberPrefix} onChange={(e) => setPolicyNumberPrefix(e.target.value)} placeholder="e.g. POL-" />
@@ -816,7 +816,7 @@ function StorageTab({ tenantId, storage, onSaved }: { tenantId: string; storage:
           <Label htmlFor="pts-prefix">Path prefix</Label>
           <Input id="pts-prefix" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="pts-bucket">Bucket (optional)</Label>
             <Input id="pts-bucket" value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="Shared bucket if empty" />
@@ -830,7 +830,7 @@ function StorageTab({ tenantId, storage, onSaved }: { tenantId: string; storage:
           <Label htmlFor="pts-endpoint">Endpoint (optional)</Label>
           <Input id="pts-endpoint" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="pts-accessKeyId">Access Key ID (optional)</Label>
             <Input id="pts-accessKeyId" value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} />

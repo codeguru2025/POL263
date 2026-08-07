@@ -373,7 +373,7 @@ export default function AgentVCardPage() {
               <Label>Your full name</Label>
               <Input value={policyholderName} onChange={(e) => setPolicyholderName(e.target.value)} data-testid="input-policyholder-name" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Date of birth</Label>
                 <Input type="date" value={policyholderDob} onChange={(e) => setPolicyholderDob(e.target.value)} data-testid="input-policyholder-dob" />
@@ -394,7 +394,7 @@ export default function AgentVCardPage() {
                   <X className="h-3.5 w-3.5" />
                 </Button>
                 <p className="text-xs font-medium text-muted-foreground">Dependant {i + 1}</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <Input placeholder="First name" value={dep.firstName} onChange={(e) => updateDependent(i, "firstName", e.target.value)} />
                   <Input placeholder="Last name" value={dep.lastName} onChange={(e) => updateDependent(i, "lastName", e.target.value)} />
                 </div>

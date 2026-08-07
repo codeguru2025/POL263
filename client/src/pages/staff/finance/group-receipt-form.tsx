@@ -180,7 +180,7 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
               )}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4 max-w-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-sm">
             <div>
               <Label>Total amount</Label>
               <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" />

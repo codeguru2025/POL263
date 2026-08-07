@@ -294,7 +294,7 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
             className="lg:col-span-2"
           >
             <div className="p-4 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {[true, false].map((flagged) => {
                   const rows = (ex.countryFlag.revenueByCountry || []).filter((r: any) => r.flagged === flagged);
                   const label = flagged ? ex.countryFlag.flagLabel : ex.countryFlag.homeLabel;
@@ -313,7 +313,7 @@ function ExecutiveSummarySection({ execSummary, execLoading, branchesList, perio
                   );
                 })}
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-md bg-muted/30 p-3 text-center">
                   <p className="text-xs text-muted-foreground">{ex.countryFlag.flagLabel} services done</p>
                   <p className="text-2xl font-bold tabular-nums">{ex.countryFlag.serviceCount}</p>
@@ -1238,7 +1238,7 @@ export default function StaffDashboard() {
 
           <CardSection title="Lapse & retention metrics" icon={AlertTriangle} contentClassName="pt-2">
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="bg-emerald-50 rounded-lg p-4 text-center">
                     <p className="text-xs text-muted-foreground mb-1">Retention Rate</p>
                     <p className="text-3xl font-bold text-emerald-600 tabular-nums" data-testid="stat-retention-rate">

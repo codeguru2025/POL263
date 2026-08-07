@@ -593,7 +593,7 @@ export default function StaffClients() {
           ) : selectedClient ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <CardSection title="Personal Information" icon={Users}>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-muted-foreground">Full Name</p>
                       <p className="font-medium" data-testid="text-detail-fullname">
@@ -963,7 +963,7 @@ export default function StaffClients() {
               </CardSection>
 
               <CardSection title="Enrollment & Access" icon={KeyRound}>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-muted-foreground">Activation Code</p>
                       <p className="font-mono font-medium" data-testid="text-detail-activation-code">
@@ -1501,7 +1501,7 @@ function DependentFormFields({
     setDepForm({ ...depForm, [field]: value });
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <div className="space-y-2">
         <Label htmlFor="dep-form-first-name">First Name *</Label>
         <Input id="dep-form-first-name"

@@ -356,7 +356,7 @@ export default function ExecutiveReport() {
             {/* Quotes / conversion */}
             {report.quotes && (
               <CardSection title="Quotes & Conversion" description="How many quotes were issued and how many converted to a paid service.">
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                   <StatTile label="Total quotes" value={String(report.quotes.totalQuotes)} />
                   <StatTile label="Converted" value={String(report.quotes.convertedQuotes)} color="#15803d" />
                   <StatTile label="Conversion rate" value={pct(report.quotes.conversionRate)} />
@@ -432,7 +432,7 @@ export default function ExecutiveReport() {
                     })()}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 mt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
                   <StatTile label="Storage fees (cross-check)" value={currencyLines(report.mortuary.storageFeeTotal)} />
                   <StatTile label="Chapel/wash-bay fees (cross-check)" value={currencyLines(report.mortuary.chapelFeeTotal)} />
                 </div>
@@ -442,7 +442,7 @@ export default function ExecutiveReport() {
             {/* Fleet */}
             {report.fleet && (
               <CardSection title="Fleet Costs" description="Fuel and maintenance spend for the period.">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <StatTile label="Fuel" value={currencyLines(report.fleet.fuelCost)} color="#b91c1c" />
                   <StatTile label="Maintenance" value={currencyLines(report.fleet.maintenanceCost)} color="#b91c1c" />
                 </div>

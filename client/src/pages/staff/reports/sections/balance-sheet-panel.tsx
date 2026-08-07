@@ -128,7 +128,7 @@ export function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged 
     >
       <div className="space-y-4 p-4">
         {/* KPI summary */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="rounded-md border p-3">
             <p className="text-xs text-muted-foreground">Total assets (USD)</p>
             <p className="text-lg font-bold tabular-nums text-emerald-600">{fmt(cu.totalAssets || 0)}</p>
