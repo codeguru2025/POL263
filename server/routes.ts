@@ -7236,6 +7236,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { paidBy, paidAt, status } = req.body;
     if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
     if (!["paid_at_admission", "paid_at_collection"].includes(status)) return res.status(400).json({ message: "status must be paid_at_admission or paid_at_collection" });
+    const feeAmount = parseFloat(String(intake.storageFeeAmount ?? ""));
+    if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This intake has no valid storage fee amount set" });
     const before = intake;
     const updated = await storage.recordStoragePayment(req.params.id as string, user.organizationId, {
       storageFeePaidBy: paidBy,
@@ -7243,7 +7245,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       storageFeeStatus: status,
     });
     await auditLog(req, "RECORD_STORAGE_PAYMENT", "MortuaryIntake", req.params.id as string, before, updated);
-    return res.json(updated);
+    // A storage fee payment is real cash income — issue a service receipt so it's picked up by
+    // queryReceipts() in financial-statements.ts (income statement / daily report only sum
+    // payment_receipts + service_receipts, they never read mortuary_intakes directly).
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const receipt = await storage.createServiceReceipt({
+      organizationId: user.organizationId,
+      branchId: intake.branchId ?? null,
+      funeralCaseId: intake.funeralCaseId ?? null,
+      quotationId: null,
+      receiptNumber,
+      amount: feeAmount.toFixed(2),
+      currency: intake.storageFeeCurrency || "USD",
+      paymentChannel: channel,
+      issuedByUserId: effectiveUserId,
+      issuedAt: new Date(),
+      status: "issued",
+      idempotencyKey: null,
+      notes: `Mortuary storage fee — ${intake.deceasedName} (${status === "paid_at_admission" ? "paid at admission" : "paid at collection"})`,
+    });
+    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
+    return res.json({ ...updated, serviceReceiptId: receipt.id });
   });
 
   // Dispatch
@@ -7296,6 +7320,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (dispatch.chapelWashBayFeeStatus === "paid") return res.status(400).json({ message: "Chapel & wash bay fee is already paid" });
     const { paidBy } = req.body;
     if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    const feeAmount = parseFloat(String(dispatch.chapelWashBayFeeAmount ?? ""));
+    if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This dispatch has no valid chapel & wash bay fee amount set" });
     const before = dispatch;
     const updated = await storage.recordChapelWashBayPayment(req.params.id as string, user.organizationId, {
       chapelWashBayFeePaidBy: paidBy,
@@ -7303,6 +7329,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       chapelWashBayFeeStatus: "paid",
     });
     await auditLog(req, "RECORD_CHAPEL_WASH_BAY_PAYMENT", "MortuaryDispatch", dispatch.id, before, updated);
+    // Same gap as the storage-payment route above — issue a service receipt so this shows up
+    // as income, not just a status flag on the dispatch row.
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const receipt = await storage.createServiceReceipt({
+      organizationId: user.organizationId,
+      branchId: null,
+      funeralCaseId: dispatch.funeralCaseId ?? null,
+      quotationId: null,
+      receiptNumber,
+      amount: feeAmount.toFixed(2),
+      currency: dispatch.chapelWashBayFeeCurrency || "USD",
+      paymentChannel: channel,
+      issuedByUserId: effectiveUserId,
+      issuedAt: new Date(),
+      status: "issued",
+      idempotencyKey: null,
+      notes: "Mortuary chapel & wash bay fee",
+    });
+    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
     return res.json(updated);
   });
 
@@ -9879,12 +9926,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (before.status === "paid") return res.status(400).json({ message: "Charge is already paid" });
     const paidBy = typeof req.body.paidBy === "string" ? req.body.paidBy.trim() : "";
     if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
+    const feeAmount = parseFloat(String(before.computedAmount ?? ""));
+    if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This charge has no valid amount set" });
     const updated = await storage.recordCaseServiceChargePayment(id, user.organizationId, {
       paidBy,
       paidByUserId: typeof req.body.paidByUserId === "string" && req.body.paidByUserId ? req.body.paidByUserId : undefined,
     });
     await auditLog(req, "RECORD_CASE_SERVICE_CHARGE_PAYMENT", "CaseServiceCharge", id, before, updated);
-    return res.json(updated);
+    // Same gap as the mortuary storage/chapel-wash-bay payment routes — this was flipping
+    // case_service_charges.status to 'paid' with no corresponding service_receipts row, so the
+    // payment never appeared in queryReceipts()'s income totals (financial-statements.ts).
+    const fc = await storage.getFuneralCase(before.funeralCaseId, user.organizationId);
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
+    const receipt = await storage.createServiceReceipt({
+      organizationId: user.organizationId,
+      branchId: fc?.branchId ?? null,
+      funeralCaseId: before.funeralCaseId,
+      quotationId: null,
+      receiptNumber,
+      amount: feeAmount.toFixed(2),
+      currency: before.currency || "USD",
+      paymentChannel: channel,
+      issuedByUserId: effectiveUserId,
+      issuedAt: new Date(),
+      status: "issued",
+      idempotencyKey: null,
+      notes: `Mortuary service charge: ${before.name}`,
+    });
+    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
+    return res.json({ ...updated, serviceReceiptId: receipt.id });
   });
 
   app.delete("/api/case-service-charges/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {

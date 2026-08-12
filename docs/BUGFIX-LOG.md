@@ -10,6 +10,61 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-12 — Mortuary/funeral-day fee payments never counted as income
+
+Augustus noticed a mortuary fee paid that day didn't show up in the daily report's income total.
+
+**Root cause:** three separate "mark this fee as paid" routes update a status flag directly on
+their own domain table and stop there — none of them ever create a `service_receipts` row, which
+is the only place `queryReceipts()` (`server/financial-statements.ts`) looks for cash-service
+income when building the income statement / daily report:
+- `POST /api/mortuary-intakes/:id/storage-payment` (partner-parlour storage fee) → only updated
+  `mortuary_intakes.storage_fee_*`
+- `POST /api/mortuary-intakes/:id/chapel-wash-bay-payment` (legacy combined fee, now dead for new
+  dispatches — `chapelWashBayUsed` is force-set `false` on every new dispatch) → only updated
+  `mortuary_dispatches.chapel_wash_bay_fee_*`
+- `POST /api/case-service-charges/:id/payment` (the live path — chapel/body-wash/removal/etc.
+  billed via the mortuary service rate card) → only updated `case_service_charges.status`
+
+Each of these tables tracks "is this fee paid" as its own source of truth, completely disconnected
+from the `service_receipts`/`payment_receipts` tables that `buildIncomeStatement` actually sums.
+The daily report's "operations" section does list mortuary intakes/dispatches, but only as
+informational counts — dollar figures come exclusively from `buildIncomeStatement`.
+
+**Fix:** all three routes (`server/routes.ts`) now also call `storage.createServiceReceipt(...)`
+(same helper `POST /api/funeral-cases/:id/receipts` already used) immediately after flipping the
+status flag — issuing a real receipt with the fee amount/currency, linked `funeralCaseId`/
+`branchId` where available, `paymentChannel` defaulting to `"cash"`. Each route now also guards
+against a missing/zero fee amount (400) instead of silently issuing a $0 receipt.
+
+**Backfill:** scanned Falakhe's tenant DB (the only org with any paid rows in these tables — the
+shared platform DB had none for any other tenant) and found 25 storage-fee payments dating back to
+2026-06-28, including the one Augustus flagged, that were paid but never got a receipt ($480
+total, USD). Wrote `scripts/backfill-mortuary-storage-receipts.mjs` — issues one `service_receipts`
+row per affected intake, backdated to the actual `storage_fee_paid_at`, attributed to the staff
+member who recorded it (looked up from `audit_logs.actor_id` for the matching
+`RECORD_STORAGE_PAYMENT` entry; 3 rows had no `actor_id` on the audit row and were attributed to
+Augustus's tenant-local user id, consistent with the earlier blank-attribution cleanup convention
+in [[project_falakhe_tenant]]). Idempotent via `metadata_json->>'mortuaryIntakeId'`, safe to rerun.
+Ran once against Falakhe's DB — 25/25 created, 0 skipped. No paid chapel-wash-bay or
+case-service-charge rows existed yet anywhere, so no backfill was needed for those two paths.
+
+**Verified:** `npm run check` clean; 331/331 tests pass; queried `service_receipts` post-backfill —
+today's (2026-08-12) $20 fee (MTONISELWA NYATHI) now appears, and the 25-row backfill sums to
+exactly $480.00 USD.
+
+**Lesson for next time:** in this codebase, a domain table that tracks its own `*_status`/`*_paid`
+column (as opposed to going through `payment_receipts`/`service_receipts`) is a strong signal that
+it's *invisible to every financial report* — `buildIncomeStatement`/`queryReceipts` only ever read
+those two receipt tables (plus `legacy_group_receipts` via raw SQL), never the source domain
+tables. When adding or auditing any "mark as paid" action anywhere in the app (new module, new fee
+type, new one-off payment button), check whether it ends by mutating a status flag alone versus
+actually issuing a receipt — if the former, it will silently never show up in income, no matter
+how correct the rest of its logic is. `grep` for `.set({.*[Ss]tatus.*paid` across `routes.ts`
+next time this class of report-mismatch bug is suspected.
+
+---
+
 ## 2026-08-07 — Fixed-column form grids overlapped on mobile: 58 sites across 22 files with no responsive fallback
 
 Augustus reported policy search "not filtering" (turned out to be a stale cached bundle from a
