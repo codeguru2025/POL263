@@ -34,7 +34,7 @@ import {
   vehicleLocationPings, vehicleAlerts,
   notificationTemplates, notificationLogs, inboundEmails, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
-  productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, settlementAllocations, termsAndConditions,
+  productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, groupLedgerEntries, settlementAllocations, termsAndConditions,
   accumulationAccounts, accumulationContributions, accumulationWithdrawals,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
@@ -141,6 +141,7 @@ import {
   type GroupMember, type InsertGroupMember,
   type GroupContribution, type InsertGroupContribution,
   type GroupPoolPayout, type InsertGroupPoolPayout,
+  type GroupLedgerEntry, type InsertGroupLedgerEntry,
   type AccumulationAccount, type InsertAccumulationAccount,
   type AccumulationContribution, type InsertAccumulationContribution,
   type AccumulationWithdrawal, type InsertAccumulationWithdrawal,
@@ -5165,6 +5166,17 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return updated;
   }
+  async getGroupLedgerEntries(orgId: string, groupId: string): Promise<GroupLedgerEntry[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(groupLedgerEntries)
+      .where(and(eq(groupLedgerEntries.organizationId, orgId), eq(groupLedgerEntries.groupId, groupId)))
+      .orderBy(desc(groupLedgerEntries.createdAt));
+  }
+  async createGroupLedgerEntry(entry: InsertGroupLedgerEntry): Promise<GroupLedgerEntry> {
+    const tdb = await getDbForOrg(entry.organizationId);
+    const [created] = await tdb.insert(groupLedgerEntries).values(entry).returning();
+    return created;
+  }
   /** Formalizes an existing informal society in one commit — every roster member and their
    *  historical contributions, or none of them, never a half-imported society. */
   async bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }> {
@@ -5976,6 +5988,7 @@ export class DatabaseStorage implements IStorage {
       informantFullNames?: string; informantPhone?: string; informantAddress?: string;
       deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
       quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+      groupId?: string | null;
     },
     items: Omit<InsertFuneralQuotationItem, "quotationId">[]
   ): Promise<FuneralQuotation> {
@@ -6004,6 +6017,7 @@ export class DatabaseStorage implements IStorage {
             ...(data.casketType !== undefined ? { casketType: data.casketType } : {}),
             ...(data.quotationDate !== undefined ? { quotationDate: data.quotationDate } : {}),
             ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),
+            ...(data.groupId !== undefined ? { groupId: data.groupId } : {}),
           })
           .where(eq(funeralQuotations.id, existing.id))
           .returning();
@@ -6047,6 +6061,7 @@ export class DatabaseStorage implements IStorage {
       informantFullNames?: string; informantPhone?: string; informantAddress?: string;
       deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
       quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+      groupId?: string | null;
     },
     items: Omit<InsertFuneralQuotationItem, "quotationId">[]
   ): Promise<FuneralQuotation> {
@@ -6086,6 +6101,7 @@ export class DatabaseStorage implements IStorage {
       informantFullNames?: string; informantPhone?: string; informantAddress?: string;
       deceasedName?: string; deceasedAge?: number; deceasedSex?: string; casketType?: string;
       quotationDate?: string; vatRate?: number; discountAmount?: number; paymentType?: string;
+      groupId?: string | null;
     },
     items: Omit<InsertFuneralQuotationItem, "quotationId">[]
   ): Promise<FuneralQuotation | undefined> {

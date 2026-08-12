@@ -3131,6 +3131,12 @@ export const funeralQuotations = pgTable(
      *  type-inference chain with claims<->funeralQuotations<->funeralCases). Nullable — most
      *  quotes are plain cash-service quotes with no claim involved. */
     claimId: uuid("claim_id").references(() => claims.id),
+    /** Set to mark this quote as payable from a burial society's group ledger rather than cash
+     *  (e.g. hiring a bus not covered by the member's benefits) — presence is the "special
+     *  quotation type" Augustus asked for, rather than a separate quotation table. When set, the
+     *  quote is submitted as a claim (claimType "group_service") which debits the group's ledger
+     *  on approval — see server/group-ledger.ts and the claim-approval transition route. */
+    groupId: uuid("group_id").references(() => groups.id),
     quotationNumber: text("quotation_number").notNull(),
     currency: text("currency").default("USD").notNull(),
     // Legacy total field kept for backward compat; new code uses grandTotal.
@@ -3162,6 +3168,7 @@ export const funeralQuotations = pgTable(
   (t) => [
     index("fq_org_idx").on(t.organizationId),
     index("fq_claim_idx").on(t.claimId),
+    index("fq_group_idx").on(t.groupId),
     // Partial uniqueness (one quote per case) is enforced in the migration via a partial index WHERE funeral_case_id IS NOT NULL.
     uniqueIndex("fq_number_org_idx").on(t.organizationId, t.quotationNumber),
   ]
@@ -3969,6 +3976,45 @@ export const groupPoolPayouts = pgTable(
 export const insertGroupPoolPayoutSchema = createInsertSchema(groupPoolPayouts).omit({ id: true, createdAt: true });
 export type GroupPoolPayout = typeof groupPoolPayouts.$inferSelect;
 export type InsertGroupPoolPayout = z.infer<typeof insertGroupPoolPayoutSchema>;
+
+/**
+ * Group ledger — a running premium-in/claim-out balance per group, distinct from the
+ * pool-society tables above (which track voluntary member contributions/payouts, deliberately
+ * disconnected from premiums and claims — see server/pool-society.ts's header comment). This is
+ * the ledger group receipts and burial-society service quotations actually credit/debit.
+ * Pure balance computation (no persisted balance column, same "no second source of truth"
+ * principle as computePoolBalance) lives in server/group-ledger.ts.
+ */
+export const groupLedgerEntries = pgTable(
+  "group_ledger_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
+    /** premium_credit | claim_debit | adjustment_credit | adjustment_debit | historical_import.
+     *  Always a positive amount below — direction is implied by entryType (same convention as
+     *  petty_cash_transactions.type), so adjustments needing either direction get their own two
+     *  entry types rather than a signed amount on one ambiguous "adjustment" type. */
+    entryType: text("entry_type").notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    description: text("description"),
+    /** payment_receipt | legacy_group_receipt | claim | import — not a real FK since it points
+     *  at a different table depending on the value; referenceId is that row's id. */
+    referenceType: text("reference_type"),
+    referenceId: uuid("reference_id"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("gle_org_idx").on(t.organizationId),
+    index("gle_group_idx").on(t.groupId),
+    index("gle_type_idx").on(t.entryType),
+  ]
+);
+export const insertGroupLedgerEntrySchema = createInsertSchema(groupLedgerEntries).omit({ id: true, createdAt: true });
+export type GroupLedgerEntry = typeof groupLedgerEntries.$inferSelect;
+export type InsertGroupLedgerEntry = z.infer<typeof insertGroupLedgerEntrySchema>;
 
 // ─── REMINDERS ─────────────────────────────────────────────
 // Personal per-user reminders, persisted server-side.

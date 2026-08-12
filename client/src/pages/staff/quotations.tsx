@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
@@ -554,7 +555,37 @@ function QuotationDetailPanel({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const currency = quote.currency || "USD";
+
+  // Group-service quotations — presence of quote.groupId marks this quote as payable from a
+  // burial society's group ledger rather than cash (e.g. a bus not covered by benefits). See
+  // server/group-ledger.ts.
+  const { data: groups = [] } = useQuery<any[]>({ queryKey: ["/api/groups"] });
+  const groupOptions: SearchableOption[] = groups.map((g: any) => ({ value: g.id, label: g.name }));
+  const setGroupMutation = useMutation({
+    mutationFn: async (groupId: string | null) => {
+      const res = await apiRequest("PATCH", `/api/quotations/${quote.id}`, { groupId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/quotations", quote.id] });
+      toast({ title: quote.groupId ? "Group service link removed" : "Marked as a group service" });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const submitAsGroupClaim = () => {
+    const params = new URLSearchParams({
+      create: "1",
+      quotationId: quote.id,
+      groupId: quote.groupId,
+      cashInLieuAmount: String(quote.grandTotal ?? quote.total ?? 0),
+      currency,
+      deceasedName: quote.deceasedName || "",
+    });
+    setLocation(`/staff/claims?${params.toString()}`);
+  };
 
   const deleteCollateralMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -607,8 +638,36 @@ function QuotationDetailPanel({
               Send for Authorisation
             </Button>
           )}
+          {quote.groupId && (
+            <Button variant="default" size="sm" className="gap-1" onClick={submitAsGroupClaim}>
+              <Users className="h-4 w-4" /> Submit as Group Claim
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Group service — presence of a linked group marks this quote as payable from that
+          burial society's ledger rather than cash. Submitting it debits the group's ledger only
+          once the resulting claim is reviewed and approved (server/group-ledger.ts). */}
+      <CardSection title="Group Service (Burial Society)" icon={Users}>
+        <div className="flex items-end gap-2 flex-wrap">
+          <div className="min-w-[240px] space-y-1">
+            <Label className="text-xs">Payable from group ledger</Label>
+            <SearchableSelect
+              options={groupOptions}
+              value={quote.groupId || ""}
+              onChange={(v) => setGroupMutation.mutate(v || null)}
+              placeholder="Not a group service — search to link a group…"
+              searchPlaceholder="Search groups…"
+            />
+          </div>
+          {quote.groupId && (
+            <p className="text-xs text-muted-foreground pb-2">
+              This quote's total ({currency} {Number(quote.grandTotal ?? quote.total ?? 0).toFixed(2)}) will debit this group's ledger once submitted and approved as a claim.
+            </p>
+          )}
+        </div>
+      </CardSection>
 
       {/* Quote number + date */}
       <div className="flex items-center gap-4 text-sm text-muted-foreground">

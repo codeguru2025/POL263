@@ -488,7 +488,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
-  const [activeSection, setActiveSection] = useState<"members" | "receipt" | "history" | "pool">("members");
+  const [activeSection, setActiveSection] = useState<"members" | "receipt" | "history" | "pool" | "ledger">("members");
   const [showLegacyDialog, setShowLegacyDialog] = useState(false);
   const [legacyFirst, setLegacyFirst] = useState("");
   const [legacyLast, setLegacyLast] = useState("");
@@ -634,13 +634,13 @@ function GroupDetailPanel({ group }: { group: Group }) {
 
       {/* Section tabs */}
       <div className="flex border-b px-4 gap-1">
-        {(["members", "receipt", "history", "pool"] as const).map((s) => (
+        {(["members", "receipt", "history", "ledger", "pool"] as const).map((s) => (
           <button
             key={s}
             onClick={() => setActiveSection(s)}
             className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeSection === s ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
           >
-            {s === "members" ? `Members (${groupPolicies.length})` : s === "receipt" ? "Issue Receipt" : s === "history" ? "Receipt History" : "Pool Society"}
+            {s === "members" ? `Members (${groupPolicies.length})` : s === "receipt" ? "Issue Receipt" : s === "history" ? "Receipt History" : s === "ledger" ? "Group Ledger" : "Pool Society"}
           </button>
         ))}
       </div>
@@ -800,6 +800,15 @@ function GroupDetailPanel({ group }: { group: Group }) {
         </div>
       )}
 
+      {/* Group ledger: real premium-in/claim-out balance — distinct from Pool Society above.
+          Credited by group receipts (legacy lump-sum and regular per-member), debited by
+          approved group-service claims (server/group-ledger.ts). */}
+      {activeSection === "ledger" && (
+        <div className="p-4">
+          <GroupLedgerSection group={group} />
+        </div>
+      )}
+
       {/* Legacy member capture dialog */}
       <Dialog open={showLegacyDialog} onOpenChange={setShowLegacyDialog}>
         <DialogContent className="max-w-md">
@@ -876,6 +885,90 @@ function GroupDetailPanel({ group }: { group: Group }) {
 // Formalizes an informal burial society/cash club: roster + historical contributions can be
 // bulk-imported in one atomic operation, day-to-day contributions/payouts recorded from then on.
 // Deliberately separate from the policy-based Members/Receipt tabs above.
+
+// ─── Group Ledger (Phase 2) ──────────────────────────────────
+// Real premium-in/claim-out balance per group — credited by group receipts (legacy lump-sum and
+// regular per-member), debited by approved group-service claims. Distinct from Pool Society
+// below, which tracks voluntary member contributions and stays untouched by this.
+
+const LEDGER_ENTRY_LABELS: Record<string, string> = {
+  premium_credit: "Premium payment",
+  claim_debit: "Claim payout",
+  adjustment_credit: "Adjustment (credit)",
+  adjustment_debit: "Adjustment (debit)",
+  historical_import: "Historical payment (imported)",
+};
+const LEDGER_CREDIT_TYPES = new Set(["premium_credit", "adjustment_credit", "historical_import"]);
+
+function GroupLedgerSection({ group }: { group: Group }) {
+  const groupId = group.id;
+
+  const { data: entries = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/groups", groupId, "ledger"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/ledger`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const { data: balanceData } = useQuery<{ balance: Record<string, number> }>({
+    queryKey: ["/api/groups", groupId, "ledger-balance"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/ledger-balance`, { credentials: "include" });
+      if (!res.ok) return { balance: {} };
+      return res.json();
+    },
+  });
+  const balance = balanceData?.balance || {};
+  const balanceEntries = Object.entries(balance);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {balanceEntries.length === 0 ? (
+          <div className="rounded-md border p-3 sm:col-span-3">
+            <p className="text-xs text-muted-foreground">Ledger balance</p>
+            <p className="text-lg font-bold tabular-nums">No entries yet</p>
+          </div>
+        ) : (
+          balanceEntries.map(([currency, amount]) => (
+            <div key={currency} className="rounded-md border p-3">
+              <p className="text-xs text-muted-foreground">Balance ({currency})</p>
+              <p className={`text-lg font-bold tabular-nums ${amount >= 0 ? "text-emerald-600" : "text-destructive"}`}>
+                {currency} {amount.toFixed(2)}
+              </p>
+            </div>
+          ))
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+      ) : entries.length === 0 ? (
+        <EmptyState icon={FileStack} title="No ledger activity yet" description="Group receipts credit this ledger automatically; approved group-service claims debit it." className="border-0 bg-transparent py-8" />
+      ) : (
+        <div className="rounded-md border divide-y">
+          {entries.map((e: any) => {
+            const isCredit = LEDGER_CREDIT_TYPES.has(e.entryType);
+            return (
+              <div key={e.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                <div>
+                  <p className="font-medium">{LEDGER_ENTRY_LABELS[e.entryType] || e.entryType}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {e.description || "—"} · {new Date(e.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <span className={`font-medium tabular-nums ${isCredit ? "text-emerald-600" : "text-destructive"}`}>
+                  {isCredit ? "+" : "-"}{e.currency} {parseFloat(e.amount).toFixed(2)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function PoolSocietySection({ group }: { group: Group }) {
   const { toast } = useToast();

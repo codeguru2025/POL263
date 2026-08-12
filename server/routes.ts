@@ -5535,6 +5535,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           structuredLog("error", "Platform fee failed (group receipt)", { policyId: r.policyId, error: err?.message });
         }
       }
+      // Credit the group ledger for the total cleared this batch — one entry per batch (not per
+      // policy), matching how the batch is presented as a single receipt to the group. Backdated
+      // batches credit later, per-policy, at approval time (POST /api/payment-receipts/:id/approve)
+      // since each pending receipt in a backdated batch is approved individually.
+      try {
+        await storage.createGroupLedgerEntry({
+          organizationId: user.organizationId,
+          groupId,
+          entryType: "premium_credit",
+          amount: amountNum.toFixed(2),
+          currency: currency || "USD",
+          description: `Group receipt ${groupRef}`,
+          referenceType: "payment_receipt",
+          referenceId: results[0]?.id,
+          createdBy: user.id,
+        });
+      } catch (err: any) {
+        structuredLog("error", "Group ledger credit failed (group receipt)", { groupId, groupRef, error: err?.message });
+      }
     }
     return res.status(201).json({ receipted: results.length, results, pendingApproval: isBackdated, groupRef });
     } catch (err: any) {
@@ -5690,6 +5709,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       });
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
+      // Backdated group receipts credit the group ledger here (per-policy, at approval time)
+      // rather than at submission — the non-backdated path credits immediately in POST
+      // /api/group-receipt since that money is already cleared. Only fires for receipts that
+      // were actually part of a group batch (metadataJson.groupId set).
+      const receiptGroupId = (receipt.metadataJson as any)?.groupId;
+      if (receiptGroupId) {
+        try {
+          await storage.createGroupLedgerEntry({
+            organizationId: user.organizationId,
+            groupId: receiptGroupId,
+            entryType: "premium_credit",
+            amount: receipt.amount,
+            currency: receipt.currency,
+            description: `Group receipt ${receipt.receiptNumber} (backdated, approved)`,
+            referenceType: "payment_receipt",
+            referenceId: receipt.id,
+            createdBy: user.id,
+          });
+        } catch (err: any) {
+          structuredLog("error", "Group ledger credit failed (backdated group receipt approval)", { groupId: receiptGroupId, receiptId, error: err?.message });
+        }
+      }
       return res.json({ message: "Receipt approved and applied." });
     } catch (err: any) {
       if (err?.message === "RECEIPT_ALREADY_RESOLVED") {
@@ -6277,6 +6318,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return row;
     });
     await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
+    // Group-service claim, approved — debit the group's ledger for the payout amount. This is
+    // the moment a group-service quotation's ledger deduction actually commits, after going
+    // through the same review/approval procedure as any other claim (segregation of duties,
+    // waiting-period/ex-gratia checks above) — satisfies "groups must also follow the standing
+    // claims procedure." Only fires once, on the submitted->approved transition (not on later
+    // scheduled/payable/paid/closed transitions of the same claim).
+    if (toStatus === "approved" && updated.groupId && updated.cashInLieuAmount) {
+      try {
+        await storage.createGroupLedgerEntry({
+          organizationId: claim.organizationId,
+          groupId: updated.groupId,
+          entryType: "claim_debit",
+          amount: updated.cashInLieuAmount,
+          currency: updated.currency,
+          description: `Claim ${updated.claimNumber} approved`,
+          referenceType: "claim",
+          referenceId: updated.id,
+          createdBy: user.id,
+        });
+      } catch (err: any) {
+        structuredLog("error", "Group ledger debit failed (claim approval)", { claimId: updated.id, groupId: updated.groupId, error: err?.message });
+      }
+    }
     // Notify submitter of status change
     if (claim.submittedBy && claim.submittedBy !== user.id) {
       notifyUser(claim.organizationId, claim.submittedBy, {
@@ -9453,6 +9517,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       vatRate: req.body.vatRate ? parseFloat(req.body.vatRate) : undefined,
       discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : undefined,
       paymentType: req.body.paymentType,
+      groupId: req.body.groupId !== undefined ? (req.body.groupId || null) : undefined,
     };
     let quote: any;
     if (existing.funeralCaseId) {
@@ -11140,6 +11205,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ balance: computePoolBalance(contributions, payouts) });
   });
 
+  // ── Group ledger (premium-in/claim-out balance — distinct from the pool-balance/contributions
+  // routes above, which are the separate voluntary-contribution pool-society system) ──
+  app.get("/api/groups/:id/ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    const entries = await storage.getGroupLedgerEntries(user.organizationId, groupId);
+    return res.json(entries);
+  });
+
+  app.get("/api/groups/:id/ledger-balance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    const { computeGroupLedgerBalance } = await import("./group-ledger");
+    const entries = await storage.getGroupLedgerEntries(user.organizationId, groupId);
+    return res.json({ balance: computeGroupLedgerBalance(entries) });
+  });
+
   app.patch("/api/groups/:id/payout-rules", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
@@ -11334,6 +11420,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       } catch (err: any) {
         structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err?.message });
+      }
+
+      try {
+        await storage.createGroupLedgerEntry({
+          organizationId: user.organizationId,
+          groupId,
+          entryType: "premium_credit",
+          amount: String(amount),
+          currency: String(currency).toUpperCase(),
+          description: `Legacy group receipt ${receiptNumber}`,
+          referenceType: "legacy_group_receipt",
+          referenceId: created.id as string,
+          createdBy: user.id,
+        });
+      } catch (err: any) {
+        structuredLog("error", "Group ledger credit failed (legacy group receipt)", { groupId, error: err?.message });
       }
 
       return res.status(201).json(created);

@@ -43,7 +43,7 @@ const CLAIM_TRANSITIONS: Record<string, string[]> = {
   paid: ["closed"],
 };
 
-const CLAIM_TYPES = ["death", "accidental_death", "disability", "repatriation", "cash_in_lieu"];
+const CLAIM_TYPES = ["death", "accidental_death", "disability", "repatriation", "cash_in_lieu", "group_service"];
 
 const BLANK_CLAIM = {
   policyId: "",
@@ -57,6 +57,10 @@ const BLANK_CLAIM = {
   currency: "USD",
   assessmentNotes: "",
   recommendation: "",
+  // Set when arriving from a group-service quotation's "Submit as Group Claim" button
+  // (quotations.tsx) — see the deep-link useEffect below.
+  quotationId: "",
+  groupId: "",
 };
 
 export default function StaffClaims() {
@@ -69,7 +73,25 @@ export default function StaffClaims() {
   );
   const createSearch = useSearch();
   useEffect(() => {
-    if (new URLSearchParams(createSearch).get("create") === "1") setShowCreateDialog(true);
+    const params = new URLSearchParams(createSearch);
+    if (params.get("create") !== "1") return;
+    setShowCreateDialog(true);
+    // Arrived from a group-service quotation's "Submit as Group Claim" button
+    // (quotations.tsx) — pre-fill everything except policyId, which staff must still pick
+    // (the relevant member's own policy within the group).
+    const quotationId = params.get("quotationId");
+    const groupId = params.get("groupId");
+    if (quotationId && groupId) {
+      setNewClaim((p) => ({
+        ...p,
+        quotationId,
+        groupId,
+        claimType: "group_service",
+        deceasedName: params.get("deceasedName") || p.deceasedName,
+        cashInLieuAmount: params.get("cashInLieuAmount") || p.cashInLieuAmount,
+        currency: params.get("currency") || p.currency,
+      }));
+    }
   }, [createSearch]);
   const [showTransitionDialog, setShowTransitionDialog] = useState(false);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
@@ -269,6 +291,8 @@ export default function StaffClaims() {
       policyId: newClaim.policyId,
       clientId: newClaim.clientId || undefined,
       funeralCaseId: foundCase?.id || undefined,
+      quotationId: newClaim.quotationId || undefined,
+      groupId: newClaim.groupId || undefined,
       claimType: newClaim.claimType,
       deceasedName: newClaim.deceasedName || undefined,
       deceasedRelationship: newClaim.deceasedRelationship || undefined,
@@ -620,6 +644,11 @@ export default function StaffClaims() {
                   ))}
                 </SelectContent>
               </Select>
+              {newClaim.groupId && (
+                <p className="text-xs text-muted-foreground">
+                  Linked to a group-service quotation — approving this claim will debit the group's ledger for the cash-in-lieu amount below.
+                </p>
+              )}
             </div>
 
             {/* Deceased details */}
