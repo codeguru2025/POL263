@@ -112,9 +112,14 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "view:all_clients", "use:ai", "manage:attendance",
   ],
   administrator: [
+    // write:role and manage:permissions are deliberately excluded: administrator is a
+    // tenant-scoped operational role, not the platform owner. Letting admins edit role/
+    // permission definitions would let them self-escalate past any restriction placed on
+    // them here. Only the platform owner (isPlatformOwner bypass) manages RBAC definitions;
+    // admins can still assign existing roles to users via write:user.
     "read:organization", "write:organization", "read:branch", "write:branch",
-    "read:user", "write:user", "delete:user", "read:role", "write:role",
-    "manage:permissions", "read:audit_log", "read:policy", "write:policy", "edit:premium",
+    "read:user", "write:user", "delete:user", "read:role",
+    "read:audit_log", "read:policy", "write:policy", "edit:premium",
     "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
     "read:product", "write:product", "manage:settings", "read:funeral_ops",
     "write:funeral_ops", "read:finance", "write:finance", "approve:finance",

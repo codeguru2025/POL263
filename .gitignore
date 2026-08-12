@@ -11,3 +11,6 @@ vite.config.ts.*
 .claude/
 uploads
 testsprite_tests/tmp/
+.design-sync/
+.ds-sync/
+ds-bundle/
