@@ -1533,6 +1533,10 @@ export const claims = pgTable(
     clientId: uuid("client_id")
       .notNull()
       .references(() => clients.id),
+    /** Set when this claim's payout is meant to debit a group's ledger rather than (or in
+     *  addition to) a cash payout — see server/group-ledger.ts (future phase). Nullable —
+     *  harmless/unused until the group-ledger debit logic is built. */
+    groupId: uuid("group_id").references(() => groups.id),
     claimNumber: text("claim_number").notNull(),
     claimType: text("claim_type").notNull(),
     status: text("status").default("submitted").notNull(),
@@ -1547,6 +1551,12 @@ export const claims = pgTable(
     currency: text("currency").default("USD").notNull(),
     isWaitingPeriodWaived: boolean("is_waiting_period_waived").default(false),
     fraudFlags: jsonb("fraud_flags"),
+    /** Approved despite not strictly qualifying under the policy — a goodwill payout. Distinct,
+     *  first-class flag (not buried in fraudFlags) so ex-gratia payouts are reportable as their
+     *  own category. exGratiaReason is required whenever isExGratia is true (enforced at the
+     *  approval route, server/routes.ts POST /api/claims/:id/transition). */
+    isExGratia: boolean("is_ex_gratia").default(false).notNull(),
+    exGratiaReason: text("ex_gratia_reason"),
     submittedBy: uuid("submitted_by").references(() => users.id),
     verifiedBy: uuid("verified_by").references(() => users.id),
     approvedBy: uuid("approved_by").references(() => users.id),
@@ -1558,6 +1568,7 @@ export const claims = pgTable(
     index("claims_policy_idx").on(t.policyId),
     index("claims_status_idx").on(t.status),
     index("claims_client_idx").on(t.clientId),
+    index("claims_group_idx").on(t.groupId),
     uniqueIndex("claim_number_org_idx").on(t.claimNumber, t.organizationId),
   ]
 );
@@ -3114,6 +3125,12 @@ export const funeralQuotations = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     // Nullable: standalone quotes exist before a funeral case is created.
     funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id),
+    /** Set once this cash-service quote (e.g. a service beyond the client's policy benefits) has
+     *  been submitted and paid out as a claim — same "sink" direction as funeralCases.claimId,
+     *  so claims itself never references forward into quotations/cases (avoids a circular FK
+     *  type-inference chain with claims<->funeralQuotations<->funeralCases). Nullable — most
+     *  quotes are plain cash-service quotes with no claim involved. */
+    claimId: uuid("claim_id").references(() => claims.id),
     quotationNumber: text("quotation_number").notNull(),
     currency: text("currency").default("USD").notNull(),
     // Legacy total field kept for backward compat; new code uses grandTotal.
@@ -3144,6 +3161,7 @@ export const funeralQuotations = pgTable(
   },
   (t) => [
     index("fq_org_idx").on(t.organizationId),
+    index("fq_claim_idx").on(t.claimId),
     // Partial uniqueness (one quote per case) is enforced in the migration via a partial index WHERE funeral_case_id IS NOT NULL.
     uniqueIndex("fq_number_org_idx").on(t.organizationId, t.quotationNumber),
   ]

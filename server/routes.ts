@@ -2497,7 +2497,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const depFirstName = toUpperTrim(body.firstName, false);
     const depLastName = toUpperTrim(body.lastName, false);
-    const relationship = toUpperTrim(body.relationship, false);
+    // Legacy captures allow bare first+last name — relationship defaults to "MEMBER" rather than
+    // being required, same relaxation already applied to DOB/gender below.
+    const relationship = toUpperTrim(body.relationship, false) || (isLegacyDependentCapture ? "MEMBER" : "");
     const dateOfBirth = body.dateOfBirth ? String(body.dateOfBirth).trim() : null;
     const gender = body.gender ? toUpperTrim(body.gender, false) : null;
     const nationalIdDep = body.nationalId ? normalizeNationalId(body.nationalId) : null;
@@ -6093,8 +6095,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
       }
+      // Optional cross-links — validate they exist and belong to this org before accepting them,
+      // same "don't trust a bare id from the client" posture as funeralCaseId above. The
+      // quotation link is written the other direction (funeralQuotations.claimId, after the
+      // claim exists) — see the comment on that column in shared/schema.ts for why.
+      let linkedQuotation: any = null;
+      if (req.body.quotationId) {
+        linkedQuotation = await storage.getQuotationById(req.body.quotationId, user.organizationId);
+        if (!linkedQuotation) return res.status(404).json({ message: "Quotation not found" });
+      }
+      if (req.body.groupId) {
+        const group = await storage.getGroup(req.body.groupId, user.organizationId);
+        if (!group) return res.status(404).json({ message: "Group not found" });
+      }
+
+      const { quotationId: _quotationId, ...bodyWithoutQuotationId } = req.body;
       const parsed = insertClaimSchema.parse({
-        ...req.body,
+        ...bodyWithoutQuotationId,
         ...caseFillPatch,
         ...hospitalCashPatch,
         organizationId: user.organizationId,
@@ -6128,6 +6145,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await storage.updateFuneralCase(linkedCase.id, { claimId: claim.id }, user.organizationId);
         } catch (linkErr: any) {
           structuredLog("error", "Failed to link claim to funeral case", { claimId: claim.id, funeralCaseId: linkedCase.id, error: linkErr?.message });
+        }
+      }
+      if (linkedQuotation) {
+        try {
+          await storage.linkQuotationToClaim(linkedQuotation.id, claim.id, user.organizationId);
+        } catch (linkErr: any) {
+          structuredLog("error", "Failed to link claim to quotation", { claimId: claim.id, quotationId: linkedQuotation.id, error: linkErr?.message });
         }
       }
       // Auto-create approval request — all claims require manager approval
@@ -6207,6 +6231,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
 
+    // Ex gratia — a general "this doesn't strictly qualify under the policy, approving anyway as
+    // a goodwill payment" declaration, available on any approval (not tied to the automated
+    // waiting-period check above, which stays exactly as-is). Same "explicit reason, never
+    // silent" posture: isExGratia without a reason is rejected outright.
+    let exGratia: { reason: string } | undefined;
+    if (toStatus === "approved" && req.body.isExGratia) {
+      const exGratiaReason = typeof req.body.exGratiaReason === "string" ? req.body.exGratiaReason.trim() : "";
+      if (!exGratiaReason) {
+        return res.status(400).json({ message: "exGratiaReason is required to approve a claim as ex gratia." });
+      }
+      exGratia = { reason: exGratiaReason };
+    }
+
     const before = { ...claim };
     const updateData: any = { status: toStatus };
     if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
@@ -6217,6 +6254,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         waitingPeriod: { violated: true, waitingPeriodEndDate: waitingPeriodOverride.waitingPeriodEndDate, overriddenBy: effectiveUserId, overrideReason: waitingPeriodOverride.reason, overriddenAt: new Date().toISOString() },
       };
     }
+    if (exGratia) {
+      updateData.isExGratia = true;
+      updateData.exGratiaReason = exGratia.reason;
+    }
 
     // Status update + history row must commit together — a crash between the two would leave
     // an approved/rejected claim with no record of who/when/why in its status history.
@@ -6224,9 +6265,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [row] = await txDb.update(claims).set(updateData)
         .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
         .returning();
-      const historyReason = waitingPeriodOverride
+      let historyReason = waitingPeriodOverride
         ? `${reason ? `${reason} — ` : ""}Waiting period override: ${waitingPeriodOverride.reason}`
         : reason;
+      if (exGratia) {
+        historyReason = `${historyReason ? `${historyReason} — ` : ""}Ex gratia: ${exGratia.reason}`;
+      }
       await txDb.insert(claimStatusHistory).values({
         claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyReason, changedBy: effectiveUserId,
       });

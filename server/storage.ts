@@ -5936,6 +5936,13 @@ export class DatabaseStorage implements IStorage {
     const items = await tdb.select().from(funeralQuotationItems).where(eq(funeralQuotationItems.quotationId, quote.id));
     return { ...quote, items };
   }
+  /** Best-effort back-link once a cash-service quote (e.g. a service beyond the client's policy
+   *  benefits) has been submitted as a claim — see the claimId column comment in schema.ts for
+   *  why this is a reverse write rather than a claims.quotationId column. */
+  async linkQuotationToClaim(quotationId: string, claimId: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(funeralQuotations).set({ claimId }).where(eq(funeralQuotations.id, quotationId));
+  }
   async getQuotationsByOrg(orgId: string, opts?: { q?: string; status?: string; limit?: number; offset?: number }): Promise<FuneralQuotation[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions: any[] = [eq(funeralQuotations.organizationId, orgId)];

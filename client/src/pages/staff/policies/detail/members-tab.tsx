@@ -539,9 +539,11 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
                   <Input id="detail-dep-form-last-name" value={detailDepForm.lastName} onChange={(e) => setDetailDepForm({ ...detailDepForm, lastName: e.target.value })} placeholder="Last name" />
                 </div>
                 <div>
-                  <Label className="text-xs" htmlFor="detail-dep-form-relationship">Relationship *</Label>
+                  <Label className="text-xs" htmlFor="detail-dep-form-relationship">
+                    Relationship {selectedPolicy?.isLegacy ? "(optional — defaults to \"Member\")" : "*"}
+                  </Label>
                   <Select value={detailDepForm.relationship} onValueChange={(v) => setDetailDepForm({ ...detailDepForm, relationship: v })}>
-                    <SelectTrigger id="detail-dep-form-relationship"><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectTrigger id="detail-dep-form-relationship"><SelectValue placeholder={selectedPolicy?.isLegacy ? "Member (default)" : "Select..."} /></SelectTrigger>
                     <SelectContent>
                       {["Spouse","Son","Daughter","Father","Mother","Brother","Sister","Grandparent","Grandchild","Uncle","Aunt","Nephew","Niece","Cousin","In-law","Other"].map((r) => (
                         <SelectItem key={r} value={r}>{r}</SelectItem>
@@ -573,7 +575,7 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
                 <Button variant="outline" onClick={() => setDetailAddDepOpen(false)}>Cancel</Button>
                 <Button
                   onClick={() => detailAddDepMutation.mutate(detailDepForm)}
-                  disabled={!detailDepForm.firstName || !detailDepForm.lastName || !detailDepForm.relationship || detailAddDepMutation.isPending}
+                  disabled={!detailDepForm.firstName || !detailDepForm.lastName || (!selectedPolicy?.isLegacy && !detailDepForm.relationship) || detailAddDepMutation.isPending}
                 >
                   {detailAddDepMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Add Dependent

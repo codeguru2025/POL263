@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -76,6 +77,8 @@ export default function StaffClaims() {
   const [transitionTarget, setTransitionTarget] = useState("");
   const [transitionReason, setTransitionReason] = useState("");
   const [waitingPeriodOverrideReason, setWaitingPeriodOverrideReason] = useState("");
+  const [isExGratia, setIsExGratia] = useState(false);
+  const [exGratiaReason, setExGratiaReason] = useState("");
 
   const [newClaim, setNewClaim] = useState({ ...BLANK_CLAIM });
 
@@ -84,6 +87,10 @@ export default function StaffClaims() {
   const [policyMembers, setPolicyMembers] = useState<any[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState("");
+  // Cash-in-lieu auto-suggestion — resolved from the policy's product version once selected;
+  // staff can still freely overwrite the suggested amount.
+  const [selectedProductVersion, setSelectedProductVersion] = useState<any>(null);
+  const [cashInLieuTouched, setCashInLieuTouched] = useState(false);
 
   // Optional funeral-case link — if a case already exists for the same death, blank-fill
   // deceased details from it instead of asking again (mirrors funerals.tsx's quotation lookup).
@@ -125,6 +132,8 @@ export default function StaffClaims() {
     setSelectedPolicy(policy || null);
     setSelectedMemberId("");
     setPolicyMembers([]);
+    setSelectedProductVersion(null);
+    setCashInLieuTouched(false);
     if (id) {
       setLoadingMembers(true);
       fetch(getApiBase() + `/api/policies/${id}/members`, { credentials: "include" })
@@ -133,6 +142,20 @@ export default function StaffClaims() {
         .catch(() => setPolicyMembers([]))
         .finally(() => setLoadingMembers(false));
     }
+    // Best-effort cash-in-lieu suggestion — silently no-ops if the caller's role lacks
+    // read:product or the policy has no product version; staff can always enter it manually.
+    if (policy?.productVersionId) {
+      fetch(getApiBase() + "/api/product-versions", { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((versions) => {
+          const pv = Array.isArray(versions) ? versions.find((v: any) => v.id === policy.productVersionId) : null;
+          setSelectedProductVersion(pv || null);
+          if (pv?.cashInLieuAdult && !cashInLieuTouched) {
+            setNewClaim((p) => (p.cashInLieuAmount ? p : { ...p, cashInLieuAmount: pv.cashInLieuAdult }));
+          }
+        })
+        .catch(() => setSelectedProductVersion(null));
+    }
   };
 
   const resetCreateForm = () => {
@@ -140,6 +163,8 @@ export default function StaffClaims() {
     setSelectedPolicy(null);
     setPolicyMembers([]);
     setSelectedMemberId("");
+    setSelectedProductVersion(null);
+    setCashInLieuTouched(false);
     setCaseSearch("");
     setFoundCase(null);
     setCaseLookupError("");
@@ -179,8 +204,13 @@ export default function StaffClaims() {
   });
 
   const transitionMutation = useMutation({
-    mutationFn: async ({ id, toStatus, reason, waitingPeriodOverrideReason }: { id: string; toStatus: string; reason: string; waitingPeriodOverrideReason?: string }) => {
-      const res = await apiRequest("POST", `/api/claims/${id}/transition`, { toStatus, reason, waitingPeriodOverrideReason: waitingPeriodOverrideReason || undefined });
+    mutationFn: async ({ id, toStatus, reason, waitingPeriodOverrideReason, isExGratia, exGratiaReason }: { id: string; toStatus: string; reason: string; waitingPeriodOverrideReason?: string; isExGratia?: boolean; exGratiaReason?: string }) => {
+      const res = await apiRequest("POST", `/api/claims/${id}/transition`, {
+        toStatus, reason,
+        waitingPeriodOverrideReason: waitingPeriodOverrideReason || undefined,
+        isExGratia: isExGratia || undefined,
+        exGratiaReason: exGratiaReason || undefined,
+      });
       return res.json();
     },
     onSuccess: () => {
@@ -190,6 +220,8 @@ export default function StaffClaims() {
       setTransitionTarget("");
       setTransitionReason("");
       setWaitingPeriodOverrideReason("");
+      setIsExGratia(false);
+      setExGratiaReason("");
       toast({ title: "Status updated", description: "Claim status has been transitioned." });
     },
     onError: (err: Error) => {
@@ -213,6 +245,8 @@ export default function StaffClaims() {
     setTransitionTarget(nextStates[0] || "");
     setTransitionReason("");
     setWaitingPeriodOverrideReason("");
+    setIsExGratia(false);
+    setExGratiaReason("");
     setShowTransitionDialog(true);
   };
 
@@ -248,7 +282,11 @@ export default function StaffClaims() {
 
   const handleTransition = () => {
     if (!selectedClaim || !transitionTarget) return;
-    transitionMutation.mutate({ id: selectedClaim.id, toStatus: transitionTarget, reason: transitionReason, waitingPeriodOverrideReason });
+    if (isExGratia && !exGratiaReason.trim()) {
+      toast({ title: "Validation", description: "A reason is required to approve as ex gratia.", variant: "destructive" });
+      return;
+    }
+    transitionMutation.mutate({ id: selectedClaim.id, toStatus: transitionTarget, reason: transitionReason, waitingPeriodOverrideReason, isExGratia, exGratiaReason });
   };
 
   const formatDate = (d: string | null | undefined) => {
@@ -277,6 +315,11 @@ export default function StaffClaims() {
         <div className="flex items-center gap-2">
           <FileWarning className="h-4 w-4 text-primary/70 shrink-0" />
           {c.claimNumber}
+          {(c as any).isExGratia && (
+            <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200 text-[10px]">
+              Ex Gratia
+            </Badge>
+          )}
         </div>
       ),
       headClassName: "pl-6",
@@ -502,10 +545,15 @@ export default function StaffClaims() {
                         setSelectedMemberId(v);
                         const m = policyMembers.find((x: any) => String(x.id) === v);
                         if (m) {
+                          const isChildMember = m.age != null && m.age < 18;
+                          const suggested = isChildMember
+                            ? selectedProductVersion?.cashInLieuChild
+                            : selectedProductVersion?.cashInLieuAdult;
                           setNewClaim((p) => ({
                             ...p,
                             deceasedName: m.memberName || p.deceasedName,
                             deceasedRelationship: m.relationship && m.relationship !== "Policy Holder" ? m.relationship : p.deceasedRelationship,
+                            cashInLieuAmount: !cashInLieuTouched && suggested ? suggested : p.cashInLieuAmount,
                           }));
                         }
                       }}
@@ -620,7 +668,7 @@ export default function StaffClaims() {
 
             {/* Cash-in-lieu */}
             <div className="space-y-2">
-              <Label>Cash-in-Lieu Amount <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Label>Cash-in-Lieu Amount <span className="text-muted-foreground text-xs">(optional{selectedProductVersion?.cashInLieuAdult || selectedProductVersion?.cashInLieuChild ? " — suggested from the product, editable" : ""})</span></Label>
               <div className="flex gap-2">
                 <Select value={newClaim.currency} onValueChange={(v) => setNewClaim((p) => ({ ...p, currency: v }))}>
                   <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
@@ -636,7 +684,7 @@ export default function StaffClaims() {
                   step="0.01"
                   placeholder="0.00"
                   value={newClaim.cashInLieuAmount}
-                  onChange={(e) => setNewClaim((p) => ({ ...p, cashInLieuAmount: e.target.value }))}
+                  onChange={(e) => { setCashInLieuTouched(true); setNewClaim((p) => ({ ...p, cashInLieuAmount: e.target.value })); }}
                   data-testid="input-claim-cash-in-lieu"
                 />
               </div>
@@ -738,6 +786,29 @@ export default function StaffClaims() {
                   />
                 </div>
               )}
+              {transitionTarget === "approved" && (
+                <div className="space-y-2 rounded-md border border-amber-200 bg-amber-500/5 p-3">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="claim-ex-gratia"
+                      checked={isExGratia}
+                      onCheckedChange={(v) => setIsExGratia(v === true)}
+                      data-testid="checkbox-ex-gratia"
+                    />
+                    <Label htmlFor="claim-ex-gratia" className="cursor-pointer">
+                      Approve as ex gratia (doesn't strictly qualify, approving as a goodwill payment)
+                    </Label>
+                  </div>
+                  {isExGratia && (
+                    <Textarea
+                      value={exGratiaReason}
+                      onChange={(e) => setExGratiaReason(e.target.value)}
+                      placeholder="Explain why this claim is being approved despite not strictly qualifying…"
+                      data-testid="input-ex-gratia-reason"
+                    />
+                  )}
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -805,6 +876,19 @@ export default function StaffClaims() {
                     <p className="text-muted-foreground">Filed</p>
                     <p className="font-medium">{formatDate(selectedClaim.createdAt as any)}</p>
                   </div>
+                  {(selectedClaim as any).isExGratia && (
+                    <div className="sm:col-span-2">
+                      <p className="text-muted-foreground">Ex Gratia</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200" data-testid="badge-ex-gratia">
+                          Ex Gratia
+                        </Badge>
+                        {(selectedClaim as any).exGratiaReason && (
+                          <span className="text-xs text-muted-foreground">{(selectedClaim as any).exGratiaReason}</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {selectedClaim.funeralCaseId && (
                   <Link
