@@ -7558,6 +7558,37 @@ export class DatabaseStorage implements IStorage {
             sourceSystemLabel: batch.sourceSystemLabel,
           }));
           successRows++;
+        } else if (batch.entityType === "group_ledger_entry") {
+          // The group itself is NOT being imported (unlike every other entity type above) — it
+          // already exists in POL263, resolved by exact name match rather than via import_records.
+          const { __rowIndex, externalKey, groupName, paymentDate, description, ...entryFields } = row;
+          const [group] = await tx.select({ id: groups.id }).from(groups)
+            .where(and(eq(groups.organizationId, orgId), ilike(groups.name, groupName)));
+          if (!group) {
+            throw new Error(`Row ${__rowIndex + 1}: group "${groupName}" was not found — check it matches an existing group's name exactly.`);
+          }
+
+          const [entry] = await tx.insert(groupLedgerEntries).values({
+            organizationId: orgId,
+            groupId: group.id,
+            entryType: "historical_import",
+            description: description || `Imported payment ${externalKey}`,
+            referenceType: "import",
+            createdBy: actor.userId,
+            createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
+            ...entryFields,
+          }).returning();
+
+          await tx.insert(importRecords).values({
+            batchId, organizationId: orgId, entityType: "group_ledger_entry",
+            externalKey, entityId: entry.id, sourceRowIndex: __rowIndex,
+          });
+          await tx.insert(auditLogs).values(buildLegacyAuditLogRow({
+            organizationId: orgId, entityType: AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, entityId: entry.id,
+            after: entry, historicalDate: new Date(`${paymentDate}T12:00:00.000Z`),
+            sourceSystemLabel: batch.sourceSystemLabel,
+          }));
+          successRows++;
         } else {
           throw new Error(`Commit not yet implemented for entity type: ${batch.entityType}`);
         }
@@ -7874,6 +7905,8 @@ export class DatabaseStorage implements IStorage {
             await tx.delete(policies).where(inArray(policies.id, entityIds));
           } else if (batch.entityType === "claim") {
             await tx.delete(claims).where(inArray(claims.id, entityIds));
+          } else if (batch.entityType === "group_ledger_entry") {
+            await tx.delete(groupLedgerEntries).where(inArray(groupLedgerEntries.id, entityIds));
           }
           await tx.delete(importRecords).where(eq(importRecords.batchId, batchId));
         }

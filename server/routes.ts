@@ -781,6 +781,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
+  // Org-admin-scoped historical group-payments import (Phase 6) — same csv/xlsx upload shape as
+  // the platform-owner-only legacy-import tool (server/platform-routes.ts), but hard-restricted
+  // to entityType "group_ledger_entry" and gated by write:finance instead of requirePlatformOwner,
+  // since backfilling a group's own historical ledger is routine tenant-admin work, not a
+  // whole-org data migration.
+  const groupLedgerImportUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 15 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.(csv|xlsx|xls)$/i.test(path.extname(file.originalname));
+      if (allowed) cb(null, true);
+      else cb(new Error("File must be .csv, .xlsx, or .xls"));
+    },
+  });
+  function handleGroupLedgerImportUploadError(err: any, _req: any, res: any, next: any) {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ message: "File too large (max 15MB)" });
+      return res.status(400).json({ message: err.message });
+    }
+    if (err?.message) return res.status(400).json({ message: err.message });
+    next(err);
+  }
+
   const POLICY_DOC_ALLOWED_MIMES = new Set([
     "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
     "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -11144,6 +11167,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(byPolicy);
   });
 
+  // Phase 5: attach one add-on to every member's policy in a group in one action, instead of
+  // opening each policy individually. Additive and idempotent — policies that already have this
+  // add-on are silently skipped (policy-level add-ons are unique per (policyId, addOnId), see
+  // the pao_policy_level_uniq partial index), never duplicated or replaced.
+  app.post("/api/groups/:id/add-ons/bulk-apply", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const addOnId = String(req.body.addOnId || "");
+    if (!addOnId) return res.status(400).json({ message: "addOnId required" });
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    const catalog = await storage.getAddOns(user.organizationId);
+    const addOn = catalog.find((a) => a.id === addOnId);
+    if (!addOn) return res.status(404).json({ message: "Add-on not found" });
+    const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
+    const tdb = await getDbForOrg(user.organizationId);
+    let applied = 0;
+    for (const p of policiesList) {
+      const result = await tdb.execute(sql`
+        INSERT INTO policy_add_ons (policy_id, add_on_id)
+        VALUES (${p.id}, ${addOnId})
+        ON CONFLICT (policy_id, add_on_id) WHERE policy_member_id IS NULL DO NOTHING
+        RETURNING id
+      `);
+      if ((result.rows ?? result).length > 0) applied++;
+    }
+    await auditLog(req, "BULK_APPLY_GROUP_ADDON", "Group", groupId, null, { addOnId, addOnName: addOn.name, applied, totalPolicies: policiesList.length });
+    return res.json({ applied, totalPolicies: policiesList.length, alreadyHadIt: policiesList.length - applied });
+  });
+
   // ─── Pool-society engine (Phase 3d): member roster, contribution ledger, pool balance,
   // payout rules. Self-contained — no interaction with policies/claims or with the existing
   // lump-sum legacy_group_receipts ledger below. See server/pool-society.ts.
@@ -11291,6 +11344,130 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { computeGroupLedgerBalance } = await import("./group-ledger");
     const entries = await storage.getGroupLedgerEntries(user.organizationId, groupId);
     return res.json({ balance: computeGroupLedgerBalance(entries) });
+  });
+
+  app.post("/api/groups/ledger/import/upload", requireAuth, requireTenantScope, requirePermission("write:finance"), groupLedgerImportUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    try {
+      const { parseUploadedFile, cacheParsedUpload, getFieldSpec, MAX_IMPORT_ROWS } = await import("./legacy-import");
+      const parsed = await parseUploadedFile(req.file.buffer, req.file.originalname);
+      if (parsed.rows.length === 0) return res.status(400).json({ message: "File has no data rows" });
+      if (parsed.rows.length > MAX_IMPORT_ROWS) {
+        return res.status(400).json({ message: `File has ${parsed.rows.length} rows — split into files of ${MAX_IMPORT_ROWS} or fewer.` });
+      }
+      const fieldSpec = getFieldSpec("group_ledger_entry");
+      const suggestedMapping: Record<string, string> = {};
+      for (const spec of fieldSpec) {
+        const normalize = (s: string) => s.trim().toLowerCase().replace(/[\s_-]/g, "");
+        const match = parsed.headers.find((h) => normalize(h) === normalize(spec.field) || normalize(h) === normalize(spec.label));
+        if (match) suggestedMapping[spec.field] = match;
+      }
+      const uploadToken = cacheParsedUpload(user.organizationId, req.file.originalname, parsed);
+      return res.json({ uploadToken, headers: parsed.headers, sampleRows: parsed.rows.slice(0, 20), totalRows: parsed.rows.length, suggestedMapping, fieldSpec });
+    } catch (err: any) {
+      return res.status(400).json({ message: err?.message || "Failed to parse file" });
+    }
+  });
+  app.use("/api/groups/ledger/import/upload", handleGroupLedgerImportUploadError);
+
+  app.post("/api/groups/ledger/import/preview", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { uploadToken, columnMapping, sourceSystemLabel } = req.body || {};
+    if (!columnMapping || typeof columnMapping !== "object") {
+      return res.status(400).json({ message: "columnMapping is required" });
+    }
+    try {
+      const { getCachedUpload, transformAndValidateRow } = await import("./legacy-import");
+      const cached = getCachedUpload(String(uploadToken || ""), user.organizationId);
+      if (!cached) return res.status(400).json({ message: "Upload expired or not found — please re-upload the file" });
+
+      const existingKeys = await storage.getExistingImportExternalKeys(user.organizationId, "group_ledger_entry");
+      const seenInFile = new Set<string>();
+      const validRows: any[] = [];
+      const errorReport: { rowIndex: number; field: string; message: string }[] = [];
+
+      cached.rows.forEach((rawRow, idx) => {
+        const result = transformAndValidateRow("group_ledger_entry", rawRow, idx, columnMapping);
+        if (result.errors.length > 0) {
+          errorReport.push(...result.errors);
+          return;
+        }
+        const externalKey = result.value.externalKey;
+        if (existingKeys.has(externalKey) || seenInFile.has(externalKey)) {
+          errorReport.push({ rowIndex: idx, field: "externalKey", message: `Legacy ID "${externalKey}" is already imported or duplicated in this file` });
+          return;
+        }
+        seenInFile.add(externalKey);
+        validRows.push({ ...result.value, __rowIndex: idx });
+      });
+
+      const batch = await storage.createImportBatch({
+        organizationId: user.organizationId,
+        entityType: "group_ledger_entry",
+        sourceSystemLabel: sourceSystemLabel || null,
+        fileName: cached.fileName,
+        columnMapping,
+        valueMappings: null,
+        status: "previewed",
+        totalRows: cached.rows.length,
+        successRows: validRows.length,
+        errorRows: errorReport.length,
+        previewSnapshot: validRows,
+        errorReport,
+        createdByUserId: user.id,
+      });
+
+      return res.status(201).json({ batchId: batch.id, totalRows: batch.totalRows, successRows: batch.successRows, errorRows: batch.errorRows, sampleErrors: errorReport.slice(0, 50) });
+    } catch (err: any) {
+      structuredLog("error", "POST /api/groups/ledger/import/preview failed", { error: err?.message, orgId: user.organizationId });
+      return res.status(500).json({ message: err?.message || "Preview failed" });
+    }
+  });
+
+  app.get("/api/groups/ledger/import/batches", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const batches = await storage.listImportBatches(user.organizationId, "group_ledger_entry");
+    return res.json(batches.map(({ previewSnapshot, ...rest }: any) => rest));
+  });
+
+  app.post("/api/groups/ledger/import/batches/:batchId/commit", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const batchId = req.params.batchId as string;
+    try {
+      const { AUDIT_ENTITY_TYPE_LABEL } = await import("./legacy-import");
+      const batch = await storage.getImportBatch(batchId, user.organizationId);
+      if (!batch || batch.entityType !== "group_ledger_entry") return res.status(404).json({ message: "Import batch not found" });
+      if (batch.status !== "previewed") return res.status(400).json({ message: `Batch is already ${batch.status}` });
+      if (batch.successRows === 0) return res.status(400).json({ message: "No valid rows to import" });
+
+      const result = await storage.commitImportBatch(user.organizationId, batchId, { userId: user.id });
+      await auditLog(req, "bulk_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, result);
+      return res.json(result);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/groups/ledger/import/batches/:batchId/commit failed", { error: err?.message, batchId });
+      return res.status(500).json({ message: err?.message || "Import commit failed" });
+    }
+  });
+
+  app.post("/api/groups/ledger/import/batches/:batchId/rollback", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const batchId = req.params.batchId as string;
+    try {
+      const { AUDIT_ENTITY_TYPE_LABEL } = await import("./legacy-import");
+      const batch = await storage.getImportBatch(batchId, user.organizationId);
+      if (!batch || batch.entityType !== "group_ledger_entry") return res.status(404).json({ message: "Import batch not found" });
+      if (batch.status !== "committed") return res.status(400).json({ message: `Batch is ${batch.status}, not committed — nothing to roll back.` });
+
+      const result = await storage.rollbackImportBatch(user.organizationId, batchId, { userId: user.id });
+      if (!result.ok) return res.status(409).json({ message: result.reason });
+
+      await auditLog(req, "rollback_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, { rolledBack: true });
+      return res.json(result);
+    } catch (err: any) {
+      structuredLog("error", "POST /api/groups/ledger/import/batches/:batchId/rollback failed", { error: err?.message, batchId });
+      return res.status(500).json({ message: err?.message || "Rollback failed" });
+    }
   });
 
   app.patch("/api/groups/:id/payout-rules", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {

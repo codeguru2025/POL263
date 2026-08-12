@@ -217,6 +217,19 @@ export function getFieldSpec(entityType: ImportEntityType): ImportFieldSpec[] {
         { field: "dateOfBirth", label: "Date of birth", required: false, type: "date" },
         { field: "gender", label: "Gender", required: false, type: "text" },
       ];
+    case "group_ledger_entry":
+      // Historical group payments made before the group-ledger feature existed — backfilled as
+      // premium_credit entries. Unlike every other entity type here, the group itself is NOT
+      // being imported (it already exists in POL263) — groupName is matched against a real
+      // group by exact name (case-insensitive) at commit time, not resolved via import_records.
+      return [
+        { field: "externalKey", label: "Legacy payment/receipt ID", required: true, type: "text" },
+        { field: "groupName", label: "Group name (must match an existing group exactly)", required: true, type: "text" },
+        { field: "amount", label: "Amount", required: true, type: "number" },
+        { field: "currency", label: "Currency (USD/ZAR/ZIG)", required: false, type: "text" },
+        { field: "paymentDate", label: "Payment date", required: true, type: "date" },
+        { field: "description", label: "Description / notes", required: false, type: "text" },
+      ];
     default:
       throw new Error(`No field spec implemented yet for entity type: ${entityType}`);
   }
@@ -276,6 +289,8 @@ export function transformAndValidateRow(
       return transformClaimRow(rawRow, rowIndex, columnMapping);
     case "dependent":
       return transformDependentRow(rawRow, rowIndex, columnMapping);
+    case "group_ledger_entry":
+      return transformGroupLedgerEntryRow(rawRow, rowIndex, columnMapping);
     default:
       return { errors: [{ rowIndex, field: "_row", message: `Import not yet supported for: ${entityType}` }] };
   }
@@ -598,6 +613,56 @@ function transformDependentRow(
   };
 }
 
+export interface TransformedGroupLedgerEntryRow {
+  externalKey: string;
+  groupName: string;
+  amount: string;
+  currency: SupportedCurrency;
+  paymentDate: string;
+  description: string | null;
+}
+
+function transformGroupLedgerEntryRow(
+  rawRow: Record<string, string>,
+  rowIndex: number,
+  columnMapping: Record<string, string>
+): TransformResult<TransformedGroupLedgerEntryRow> {
+  const errors: RowError[] = [];
+
+  const externalKey = mappedValue(rawRow, columnMapping, "externalKey");
+  if (!externalKey) errors.push({ rowIndex, field: "externalKey", message: "Legacy payment/receipt ID is required" });
+
+  const groupName = mappedValue(rawRow, columnMapping, "groupName");
+  if (!groupName) errors.push({ rowIndex, field: "groupName", message: "Group name is required" });
+
+  const amountRaw = mappedValue(rawRow, columnMapping, "amount");
+  const amount = amountRaw ? parsePositiveAmount(amountRaw) : null;
+  if (!amount) errors.push({ rowIndex, field: "amount", message: `Amount must be a positive number, got "${amountRaw}"` });
+
+  const paymentDateRaw = mappedValue(rawRow, columnMapping, "paymentDate");
+  let paymentDate: string | null = null;
+  if (!paymentDateRaw) {
+    errors.push({ rowIndex, field: "paymentDate", message: "Payment date is required" });
+  } else {
+    paymentDate = parseFlexibleDate(paymentDateRaw);
+    if (!paymentDate) errors.push({ rowIndex, field: "paymentDate", message: `Could not parse date: "${paymentDateRaw}"` });
+  }
+
+  if (errors.length > 0) return { errors };
+
+  return {
+    errors: [],
+    value: {
+      externalKey,
+      groupName,
+      amount: amount!.toFixed(2),
+      currency: normalizeCurrency(mappedValue(rawRow, columnMapping, "currency")),
+      paymentDate: paymentDate!,
+      description: mappedValue(rawRow, columnMapping, "description") || null,
+    },
+  };
+}
+
 /** Resolves a legacy external key to the POL263 row created for it (via import_records) —
  *  used at commit time, inside the same transaction, to turn e.g. a policy row's
  *  `clientExternalKey` into a real `clientId`. */
@@ -660,6 +725,7 @@ export const AUDIT_ENTITY_TYPE_LABEL: Record<ImportEntityType, string> = {
   payment: "PaymentReceipt",
   claim: "Claim",
   dependent: "Dependent",
+  group_ledger_entry: "GroupLedgerEntry",
 };
 
 /** Whether a batch's imported rows still have live references pointing at them from outside the

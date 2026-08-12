@@ -14,11 +14,11 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
+import { apiRequest, apiFetch, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import {
   Plus, Search, Pencil, Layers, FileStack, Loader2, LinkIcon, UserPlus,
   Receipt, Printer, ArrowRight, ChevronDown, ChevronRight, Clock, History, ShieldCheck, Save,
-  Eye, Download, ScrollText, Share2,
+  Eye, Download, ScrollText, Share2, Puzzle,
 } from "lucide-react";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
@@ -499,6 +499,8 @@ function GroupDetailPanel({ group }: { group: Group }) {
   const [showCombinedReceipt, setShowCombinedReceipt] = useState(false);
   const [assignPolicyId, setAssignPolicyId] = useState("");
   const [showAssignDialog, setShowAssignDialog] = useState(false);
+  const [showBulkAddOnDialog, setShowBulkAddOnDialog] = useState(false);
+  const [bulkAddOnId, setBulkAddOnId] = useState("");
 
   const { data: groupPolicies = [], isLoading: loadingPolicies, refetch: refetchPolicies } = useQuery<any[]>({
     queryKey: ["/api/groups", group.id, "policies"],
@@ -577,6 +579,24 @@ function GroupDetailPanel({ group }: { group: Group }) {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const { data: addOnCatalog = [] } = useQuery<any[]>({ queryKey: ["/api/add-ons"], enabled: showBulkAddOnDialog });
+  const bulkApplyAddOnMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/groups/${group.id}/add-ons/bulk-apply`, { addOnId: bulkAddOnId });
+      return res.json() as Promise<{ applied: number; totalPolicies: number; alreadyHadIt: number }>;
+    },
+    onSuccess: (data) => {
+      setShowBulkAddOnDialog(false);
+      setBulkAddOnId("");
+      queryClient.invalidateQueries({ queryKey: ["/api/groups", group.id, "policies", "add-ons"] });
+      toast({
+        title: "Add-on applied",
+        description: `Applied to ${data.applied} of ${data.totalPolicies} member polic${data.totalPolicies === 1 ? "y" : "ies"}${data.alreadyHadIt > 0 ? ` (${data.alreadyHadIt} already had it)` : ""}.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const unassignMutation = useMutation({
     mutationFn: async (policyId: string) => {
       const res = await apiRequest("PATCH", `/api/policies/${policyId}`, { groupId: null });
@@ -628,6 +648,9 @@ function GroupDetailPanel({ group }: { group: Group }) {
           </Button>
           <Button size="sm" variant="ghost" className="gap-1.5 text-xs" onClick={() => setShowAssignDialog(true)}>
             <LinkIcon className="h-3.5 w-3.5" /> Assign Existing
+          </Button>
+          <Button size="sm" variant="ghost" className="gap-1.5 text-xs" onClick={() => setShowBulkAddOnDialog(true)}>
+            <Puzzle className="h-3.5 w-3.5" /> Bulk Apply Add-on
           </Button>
         </div>
       </div>
@@ -873,6 +896,37 @@ function GroupDetailPanel({ group }: { group: Group }) {
             <Button onClick={() => { if (assignPolicyId) assignMutation.mutate(assignPolicyId); }} disabled={!assignPolicyId || assignMutation.isPending}>
               {assignMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Assign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk-apply add-on dialog (Phase 5) — additive, skips policies that already have it. */}
+      <Dialog open={showBulkAddOnDialog} onOpenChange={setShowBulkAddOnDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Bulk Apply Add-on — {group.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Attach an add-on (e.g. Bus, Groceries, Rural Burial) to every member's policy in this group at once. Members who already have it are skipped — nothing is duplicated or removed.
+            </p>
+            <Label htmlFor="bulk-addon-id">Add-on</Label>
+            <Select value={bulkAddOnId} onValueChange={setBulkAddOnId}>
+              <SelectTrigger id="bulk-addon-id"><SelectValue placeholder="Choose an add-on…" /></SelectTrigger>
+              <SelectContent>
+                {addOnCatalog.filter((a: any) => a.isActive).map((a: any) => (
+                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {addOnCatalog.length === 0 && <p className="text-sm text-muted-foreground">No add-ons configured yet — create one in Product Builder first.</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBulkAddOnDialog(false)}>Cancel</Button>
+            <Button onClick={() => bulkApplyAddOnMutation.mutate()} disabled={!bulkAddOnId || bulkApplyAddOnMutation.isPending}>
+              {bulkApplyAddOnMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Apply to All Members
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1707,6 +1761,155 @@ function LegacyReceiptsSection() {
 
 // ─── Main Page ───────────────────────────────────────────────
 
+// ─── Historical group-payments import (Phase 6) ─────────────
+// Org-wide (a spreadsheet can cover many groups via a groupName column per row), so this lives
+// on the Groups list page rather than inside one group's detail panel. Backs onto the same
+// upload -> map -> preview -> commit engine as the platform-owner legacy-import tool, just
+// hard-restricted to entityType "group_ledger_entry" and gated by write:finance.
+function GroupLedgerImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState<"upload" | "map" | "result">("upload");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploadToken, setUploadToken] = useState("");
+  const [fieldSpec, setFieldSpec] = useState<{ field: string; label: string; required: boolean }[]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
+  const [previewResult, setPreviewResult] = useState<{ batchId: string; totalRows: number; successRows: number; errorRows: number; sampleErrors: any[] } | null>(null);
+  const [committed, setCommitted] = useState<{ successRows: number; errorRows: number } | null>(null);
+
+  const reset = () => {
+    setStep("upload"); setFile(null); setUploadToken(""); setFieldSpec([]); setHeaders([]);
+    setColumnMapping({}); setPreviewResult(null); setCommitted(null);
+  };
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error("Choose a file first");
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await apiFetch("/api/groups/ledger/import/upload", { method: "POST", body: formData });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({ message: "Upload failed" }))).message);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setUploadToken(data.uploadToken);
+      setHeaders(data.headers);
+      setFieldSpec(data.fieldSpec);
+      setColumnMapping(data.suggestedMapping || {});
+      setStep("map");
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/groups/ledger/import/preview", { uploadToken, columnMapping });
+      return res.json();
+    },
+    onSuccess: (data) => { setPreviewResult(data); setStep("result"); },
+    onError: (e: Error) => toast({ title: "Preview failed", description: e.message, variant: "destructive" }),
+  });
+
+  const commitMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/groups/ledger/import/batches/${previewResult!.batchId}/commit`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setCommitted(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+      toast({ title: "Historical payments imported", description: `${data.successRows} row(s) committed.` });
+    },
+    onError: (e: Error) => toast({ title: "Commit failed", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); onOpenChange(v); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Import Historical Group Payments</DialogTitle>
+        </DialogHeader>
+        {step === "upload" && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Upload a CSV or Excel file of payments made before this feature existed — each row needs a group name
+              (matching an existing group exactly), amount, and payment date. Imported rows are added to the
+              matching group's ledger as historical credits.
+            </p>
+            <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button onClick={() => uploadMutation.mutate()} disabled={!file || uploadMutation.isPending}>
+                {uploadMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Upload
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+        {step === "map" && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">Match each field to a column from your file.</p>
+            <div className="space-y-2 max-h-72 overflow-auto">
+              {fieldSpec.map((spec) => (
+                <div key={spec.field} className="grid grid-cols-2 gap-2 items-center">
+                  <Label className="text-xs">{spec.label}{spec.required ? " *" : ""}</Label>
+                  <Select value={columnMapping[spec.field] || "__none__"} onValueChange={(v) => setColumnMapping((m) => ({ ...m, [spec.field]: v === "__none__" ? "" : v }))}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Not mapped" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Not mapped —</SelectItem>
+                      {headers.map((h) => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setStep("upload")}>Back</Button>
+              <Button onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending || fieldSpec.some((s) => s.required && !columnMapping[s.field])}>
+                {previewMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Preview
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+        {step === "result" && previewResult && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-2 text-center text-sm">
+              <div className="rounded-md border p-2"><p className="text-muted-foreground text-xs">Total rows</p><p className="font-bold">{previewResult.totalRows}</p></div>
+              <div className="rounded-md border p-2"><p className="text-muted-foreground text-xs">Valid</p><p className="font-bold text-emerald-600">{previewResult.successRows}</p></div>
+              <div className="rounded-md border p-2"><p className="text-muted-foreground text-xs">Errors</p><p className="font-bold text-destructive">{previewResult.errorRows}</p></div>
+            </div>
+            {previewResult.sampleErrors.length > 0 && (
+              <div className="max-h-40 overflow-auto border rounded-md p-2 text-xs space-y-1">
+                {previewResult.sampleErrors.map((e: any, i: number) => (
+                  <p key={i} className="text-destructive">Row {e.rowIndex + 1} ({e.field}): {e.message}</p>
+                ))}
+              </div>
+            )}
+            {committed ? (
+              <p className="text-sm font-medium text-emerald-600">Imported {committed.successRows} row(s) successfully.</p>
+            ) : (
+              <DialogFooter>
+                <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+                <Button onClick={() => commitMutation.mutate()} disabled={previewResult.successRows === 0 || commitMutation.isPending}>
+                  {commitMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Commit {previewResult.successRows} Row{previewResult.successRows === 1 ? "" : "s"}
+                </Button>
+              </DialogFooter>
+            )}
+            {committed && (
+              <DialogFooter>
+                <Button onClick={() => onOpenChange(false)}>Done</Button>
+              </DialogFooter>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function StaffGroups() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1715,6 +1918,7 @@ export default function StaffGroups() {
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [formData, setFormData] = useState<GroupFormData>(emptyForm);
 
@@ -1776,11 +1980,17 @@ export default function StaffGroups() {
           description="Manage group policies. Click a group to view members, issue policies, and process receipts."
           titleDataTestId="text-groups-title"
           actions={(
-            <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-group">
-              <Plus className="h-4 w-4" /> New Group
-            </Button>
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="outline" className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowImportDialog(true)}>
+                <History className="h-4 w-4" /> Import Historical Payments
+              </Button>
+              <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => { setFormData(emptyForm); setShowCreateDialog(true); }} data-testid="btn-add-group">
+                <Plus className="h-4 w-4" /> New Group
+              </Button>
+            </div>
           )}
         />
+        <GroupLedgerImportDialog open={showImportDialog} onOpenChange={setShowImportDialog} />
 
         <CardSection
           title="Group registry"
