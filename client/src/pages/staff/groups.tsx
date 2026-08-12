@@ -1342,7 +1342,6 @@ function PoolSocietySection({ group }: { group: Group }) {
 function LegacyPoliciesSection() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
   const [overrides, setOverrides] = useState<Record<string, { amount: string; note: string }>>({});
   const [dirty, setDirty] = useState<Set<string>>(new Set());
 
@@ -1401,12 +1400,6 @@ function LegacyPoliciesSection() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const filtered = search
-    ? policies.filter((p) =>
-        `${p.first_name} ${p.last_name} ${p.policy_number} ${p.group_name ?? ""}`.toLowerCase().includes(search.toLowerCase())
-      )
-    : policies;
-
   return (
     <CardSection
       title="Legacy Policy Premiums"
@@ -1422,74 +1415,106 @@ function LegacyPoliciesSection() {
       }
       flush
     >
-      <div className="p-4 border-b">
-        <div className="relative w-64">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search member or policy…" className="pl-9 bg-background" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-      </div>
       {isLoading ? (
         <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-      ) : filtered.length === 0 ? (
+      ) : policies.length === 0 ? (
         <EmptyState icon={ShieldCheck} title="No legacy policies" description="Legacy policies appear here once members are added to legacy groups." className="border-0 rounded-none bg-transparent py-10" />
       ) : (
-        <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
-          <TableHeader className={dataTableStickyHeaderClass}>
-            <TableRow>
-              <TableHead className="pl-6">Member</TableHead>
-              <TableHead>Policy #</TableHead>
-              <TableHead>Group</TableHead>
-              <TableHead>Currency</TableHead>
-              <TableHead className="text-right">System Premium</TableHead>
-              <TableHead className="text-right">Override Amount</TableHead>
-              <TableHead>Override Note</TableHead>
-              <TableHead className="pr-6"></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filtered.map((p: any) => {
-              const ov = overrides[p.id] ?? { amount: "", note: "" };
-              const isDirty = dirty.has(p.id);
-              return (
-                <TableRow key={p.id} className={isDirty ? "bg-amber-50/50 dark:bg-amber-950/20" : ""}>
-                  <TableCell className="pl-6 font-medium text-sm">{p.first_name} {p.last_name}</TableCell>
-                  <TableCell className="font-mono text-sm">{p.policy_number}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{p.group_name ?? "—"}</TableCell>
-                  <TableCell className="text-sm">{p.currency}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
-                    {parseFloat(p.premium_amount).toFixed(2)}
-                  </TableCell>
-                  <TableCell className="text-right">
+        <div className="px-4 pb-4 pt-2 sm:px-6">
+          <EnhancedDataTable
+            columns={[
+              {
+                id: "member",
+                header: "Member",
+                accessor: (p) => `${p.first_name} ${p.last_name}`,
+                cell: (p) => <span className="font-medium text-sm">{p.first_name} {p.last_name}</span>,
+              },
+              {
+                id: "policyNumber",
+                header: "Policy #",
+                accessor: (p) => p.policy_number,
+                cell: (p) => <span className="font-mono text-sm">{p.policy_number}</span>,
+              },
+              {
+                id: "group",
+                header: "Group",
+                accessor: (p) => p.group_name ?? "",
+                cell: (p) => <span className="text-sm text-muted-foreground">{p.group_name ?? "—"}</span>,
+              },
+              {
+                id: "currency",
+                header: "Currency",
+                accessor: (p) => p.currency,
+              },
+              {
+                id: "systemPremium",
+                header: "System Premium",
+                align: "right",
+                accessor: (p) => parseFloat(p.premium_amount),
+                cell: (p) => <span className="tabular-nums text-sm text-muted-foreground">{parseFloat(p.premium_amount).toFixed(2)}</span>,
+              },
+              {
+                id: "overrideAmount",
+                header: "Override Amount",
+                align: "right",
+                sortable: false,
+                exportable: false,
+                cell: (p) => {
+                  const ov = overrides[p.id] ?? { amount: "", note: "" };
+                  return (
                     <Input
                       type="number"
                       step="0.01"
                       min="0"
-                      className="w-28 text-right tabular-nums text-sm h-8 ml-auto"
+                      className={`w-28 text-right tabular-nums text-sm h-8 ml-auto ${dirty.has(p.id) ? "border-amber-400 dark:border-amber-600" : ""}`}
                       placeholder={parseFloat(p.premium_amount).toFixed(2)}
                       value={ov.amount}
                       onChange={(e) => setField(p.id, "amount", e.target.value)}
                     />
-                  </TableCell>
-                  <TableCell>
+                  );
+                },
+              },
+              {
+                id: "overrideNote",
+                header: "Override Note",
+                sortable: false,
+                exportable: false,
+                cell: (p) => {
+                  const ov = overrides[p.id] ?? { amount: "", note: "" };
+                  return (
                     <Input
                       className="text-sm h-8 w-40"
                       placeholder="Reason…"
                       value={ov.note}
                       onChange={(e) => setField(p.id, "note", e.target.value)}
                     />
-                  </TableCell>
-                  <TableCell className="pr-6">
-                    {ov.amount && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => clearOverride(p.id)}>
-                        Clear
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </DataTable>
+                  );
+                },
+              },
+              {
+                id: "actions",
+                header: "",
+                align: "right",
+                sortable: false,
+                exportable: false,
+                cell: (p) => {
+                  const ov = overrides[p.id] ?? { amount: "", note: "" };
+                  return ov.amount ? (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => clearOverride(p.id)}>
+                      Clear
+                    </Button>
+                  ) : null;
+                },
+              },
+            ]}
+            rows={policies}
+            getRowKey={(p) => p.id}
+            searchPlaceholder="Search member or policy…"
+            exportFilename="legacy-policy-premiums"
+            storageKey="legacy-policy-premiums"
+            emptyMessage="No matching policies"
+          />
+        </div>
       )}
     </CardSection>
   );
