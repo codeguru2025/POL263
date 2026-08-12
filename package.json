@@ -30,6 +30,7 @@
     "db:cp:set-falakhe-db": "tsx script/cp-set-tenant-db.ts",
     "db:commission-tenant": "tsx script/commission-tenant-db.ts",
     "db:seed": "tsx script/run-seed.ts",
+    "db:sandbox": "tsx script/create-sandbox-org.ts",
     "db:setup": "npm run db:push && npm run db:seed",
     "db:migrate": "tsx script/run-migrations.ts",
     "db:migrate:status": "tsx script/migration-status.ts",
