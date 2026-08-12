@@ -5415,9 +5415,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/group-receipt", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     try {
-    const { groupId, policyIds, totalAmount, currency, receiptDate, submitterNote, notes, idempotencyKey } = req.body;
-    if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
-      return res.status(400).json({ message: "groupId, policyIds (array), and totalAmount required" });
+    const { groupId, policyIds, totalAmount, currency, receiptDate, submitterNote, notes, idempotencyKey, items } = req.body;
+    // Itemized mode (Phase 4): client sends which line items (service premium + which add-ons)
+    // were actually paid per policy, defaulting to all-checked in the UI; admin unchecks
+    // whatever wasn't paid this cycle (e.g. add-on deferred to next month). Server resolves the
+    // real add-on prices itself (getAddOnPrice) rather than trusting client-supplied amounts, and
+    // only counts add-ons actually attached to that policy. Falls back to the original "pick
+    // policies + one total, split proportionally by premium" mode when items isn't sent.
+    const isItemized = Array.isArray(items) && items.length > 0;
+    if (!groupId || (!isItemized && (!Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null))) {
+      return res.status(400).json({ message: "groupId and either items (itemized) or policyIds+totalAmount are required" });
     }
     const today = todayInHarare();
     const effectiveDate = receiptDate ? String(receiptDate).trim() : today;
@@ -5425,15 +5432,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (isBackdated && (!submitterNote || !String(submitterNote).trim())) {
       return res.status(400).json({ message: "Notes for the approver are required when backdating a receipt." });
     }
-    const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
+    const requestedPolicyIds: string[] = isItemized ? items.map((i: any) => String(i.policyId)) : policyIds;
+    const policies = await storage.getPoliciesByIds(requestedPolicyIds, user.organizationId);
     const valid = policies.filter((p) => p && p.organizationId === user.organizationId && p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
+
+    let perPolicyAmount: Record<string, number> | null = null;
+    // Human-readable line items per policy (e.g. "Service premium", "Bus add-on") — stored on
+    // each payment_receipts row's metadataJson so the batch receipt PDF can print exactly what
+    // was paid per member, not just the total.
+    let perPolicyItems: Record<string, { label: string; amount: string }[]> | null = null;
+    let amountNum: number;
+    if (isItemized) {
+      const [addOnCatalog, addOnsByPolicy] = await Promise.all([
+        storage.getAddOns(user.organizationId),
+        storage.getPolicyAddOnsBatch(valid.map((p) => p.id), user.organizationId),
+      ]);
+      const addOnMap = new Map(addOnCatalog.map((a) => [a.id, a]));
+      perPolicyAmount = {};
+      perPolicyItems = {};
+      let sum = 0;
+      for (const item of items) {
+        const policy = valid.find((p) => p.id === String(item.policyId));
+        if (!policy) continue;
+        let amt = 0;
+        const lineItems: { label: string; amount: string }[] = [];
+        if (item.includeServicePremium !== false) {
+          const premiumAmt = parseFloat(String(policy.premiumAmount || 0));
+          amt += premiumAmt;
+          lineItems.push({ label: "Service premium", amount: premiumAmt.toFixed(2) });
+        }
+        const attachedIds = new Set((addOnsByPolicy[policy.id] || []).map((a) => a.addOnId));
+        for (const addOnId of Array.isArray(item.addOnIds) ? item.addOnIds : []) {
+          if (!attachedIds.has(addOnId)) continue;
+          const ao = addOnMap.get(addOnId);
+          if (!ao) continue;
+          const price = getAddOnPrice(ao, policy.paymentSchedule || "monthly");
+          amt += price;
+          lineItems.push({ label: ao.name, amount: price.toFixed(2) });
+        }
+        perPolicyAmount[policy.id] = amt;
+        perPolicyItems[policy.id] = lineItems;
+        sum += amt;
+      }
+      amountNum = sum;
+      if (amountNum <= 0) return res.status(400).json({ message: "No line items selected — nothing to receipt." });
+    } else {
+      amountNum = parseFloat(String(totalAmount));
+    }
     const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
-    const amountNum = parseFloat(String(totalAmount));
     const results: { id: string; policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
-    // Stable lock order avoids deadlocks when multiple group receipts overlap.
-    const sortedPolicies = [...valid].sort((a, b) => a.id.localeCompare(b.id));
+    // Stable lock order avoids deadlocks when multiple group receipts overlap. Itemized mode
+    // drops any policy with nothing checked (amount 0) — it wasn't part of this receipt.
+    const sortedPolicies = (isItemized ? valid.filter((p) => (perPolicyAmount![p.id] ?? 0) > 0) : [...valid])
+      .sort((a, b) => a.id.localeCompare(b.id));
 
     // Idempotency: this route posts one transaction per policy in a single call, so a double
     // submission of the same batch (double-click, retry after a timeout) would otherwise
@@ -5454,7 +5507,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const recordedByForLedger = actorRow?.id ?? null;
       for (const policy of sortedPolicies) {
         const premium = parseFloat(String(policy.premiumAmount || 0));
-        const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+        const amount = perPolicyAmount
+          ? perPolicyAmount[policy.id].toFixed(2)
+          : totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
         const polyCurrency = currency || policy.currency || "USD";
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
         const receiptNum = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
@@ -5474,7 +5529,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             approvalStatus: "pending",
             submitterNote: String(submitterNote).trim(),
             backdatedDate: effectiveDate,
-            metadataJson: { groupId, groupRef, backdated: true },
+            metadataJson: { groupId, groupRef, backdated: true, itemsIncluded: perPolicyItems?.[policy.id] },
           }).returning();
           results.push({ id: backdatedReceipt.id, policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency, approvalStatus: "pending" });
         } else {
@@ -5506,7 +5561,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             issuedByUserId: recordedByForLedger ?? undefined,
             status: "issued",
             submitterNote: notes ? String(notes).trim() : undefined,
-            metadataJson: { groupId, groupRef, transactionId: tx.id },
+            metadataJson: { groupId, groupRef, transactionId: tx.id, itemsIncluded: perPolicyItems?.[policy.id] },
           }).returning();
           await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (group receipt)", recordedByForLedger ?? undefined);
           if (policy.status === "lapsed") {
@@ -11077,6 +11132,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(enriched);
   });
 
+  // Batch add-ons for every policy in a group — powers the itemized group-receipt grid (service
+  // premium + each member's add-ons, default-checked, admin unchecks what wasn't paid).
+  app.get("/api/groups/:id/policies/add-ons", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const group = await storage.getGroup(groupId, user.organizationId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
+    const byPolicy = await storage.getPolicyAddOnsBatch(policiesList.map((p) => p.id), user.organizationId);
+    return res.json(byPolicy);
+  });
+
   // ─── Pool-society engine (Phase 3d): member roster, contribution ledger, pool balance,
   // payout rules. Self-contained — no interaction with policies/claims or with the existing
   // lump-sum legacy_group_receipts ledger below. See server/pool-society.ts.
@@ -11378,12 +11445,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
-    const { groupId, amount, currency, paymentDate, notes } = req.body;
+    const { groupId, amount, currency, paymentDate, notes, memberBreakdown } = req.body;
     if (!groupId || !amount || !currency || !paymentDate) {
       return res.status(400).json({ message: "groupId, amount, currency and paymentDate are required" });
     }
     const group = await storage.getGroup(groupId, user.organizationId);
     if (!group) return res.status(404).json({ message: "Group not found" });
+    // Optional — which members this lump sum covers (free text: a brand-new legacy group with
+    // no policies yet has no formal client records to reference). Not required; shown on the
+    // receipt when present so "receipts show all members who would have paid" works even before
+    // any member has a real policy.
+    let memberBreakdownJson: string | null = null;
+    if (Array.isArray(memberBreakdown) && memberBreakdown.length > 0) {
+      const cleaned = memberBreakdown
+        .map((m: any) => ({ name: String(m?.name || "").trim(), amount: String(m?.amount ?? "").trim() }))
+        .filter((m: { name: string; amount: string }) => m.name);
+      if (cleaned.length > 0) memberBreakdownJson = JSON.stringify(cleaned);
+    }
     try {
       const tdb = await getDbForOrg(user.organizationId);
       const countRow = await tdb.execute(
@@ -11394,10 +11472,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const receiptNumber = `LGR-${datePart}-${String(cnt).padStart(3, "0")}`;
       const rows = await tdb.execute(sql`
         INSERT INTO legacy_group_receipts
-          (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes)
+          (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes, member_breakdown)
         VALUES
           (${user.organizationId}, ${groupId}::uuid, ${group.name}, ${receiptNumber},
-           ${String(amount)}::numeric, ${String(currency).toUpperCase()}, ${paymentDate}::date, ${notes ?? null})
+           ${String(amount)}::numeric, ${String(currency).toUpperCase()}, ${paymentDate}::date, ${notes ?? null},
+           ${memberBreakdownJson}::jsonb)
         RETURNING *
       `);
       const created = (rows.rows ?? rows)[0];

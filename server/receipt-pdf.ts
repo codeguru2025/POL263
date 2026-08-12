@@ -682,7 +682,7 @@ export async function streamLegacyGroupReceiptToResponse(
 ): Promise<void> {
   const tdb = await getDbForOrg(orgId);
   const rows = await tdb.execute(sql`
-    SELECT id, receipt_number, group_id, group_name, amount, currency, payment_date, notes, recorded_at
+    SELECT id, receipt_number, group_id, group_name, amount, currency, payment_date, notes, recorded_at, member_breakdown
     FROM legacy_group_receipts WHERE id = ${receiptId} AND organization_id = ${orgId}
   `);
   const receipt = (rows.rows ?? rows)[0] as any;
@@ -690,6 +690,19 @@ export async function streamLegacyGroupReceiptToResponse(
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
+  // Group ledger — balance as of this receipt, plus recent activity (claims/deductions), so the
+  // receipt shows every detail Augustus asked for: deducted amounts and the final ledger balance.
+  const { computeGroupLedgerBalance } = await import("./group-ledger");
+  const ledgerRows = await tdb.execute(sql`
+    SELECT entry_type, amount, currency, description, created_at
+    FROM group_ledger_entries
+    WHERE organization_id = ${orgId} AND group_id = ${receipt.group_id} AND created_at <= ${receipt.recorded_at}
+    ORDER BY created_at ASC
+  `);
+  const ledgerEntries = (ledgerRows.rows ?? ledgerRows) as any[];
+  const ledgerBalance = computeGroupLedgerBalance(ledgerEntries.map((e) => ({ entryType: e.entry_type, amount: e.amount, currency: e.currency })));
+  const recentLedgerEntries = ledgerEntries.slice(-6).reverse();
+  const memberBreakdown = Array.isArray(receipt.member_breakdown) ? receipt.member_breakdown : [];
   const [org, activeAdvert] = await Promise.all([
     storage.getOrganization(orgId),
     storage.getActiveReceiptAdvert(orgId),
@@ -779,6 +792,41 @@ export async function streamLegacyGroupReceiptToResponse(
         .text(String(receipt.notes), MARGIN, y, { width: COL });
       y = doc.y + 10;
     }
+
+    if (memberBreakdown.length > 0) {
+      sectionHeader("Members Covered");
+      for (const m of memberBreakdown) {
+        row(String(m.name || "—"), m.amount ? `${receipt.currency} ${Number(m.amount).toFixed(2)}` : "—");
+      }
+      y += 6;
+    }
+
+    sectionHeader("Group Ledger");
+    const balanceEntries = Object.entries(ledgerBalance);
+    if (balanceEntries.length === 0) {
+      row("Balance", "No ledger entries yet");
+    } else {
+      for (const [cur, bal] of balanceEntries) row(`Balance (${cur})`, `${cur} ${bal.toFixed(2)}`);
+    }
+    if (recentLedgerEntries.length > 0) {
+      y += 4;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(C_MUTED).text("Recent activity:", MARGIN, y);
+      y = doc.y + 2;
+      const entryLabel: Record<string, string> = {
+        premium_credit: "Premium payment", claim_debit: "Claim payout",
+        adjustment_credit: "Adjustment (credit)", adjustment_debit: "Adjustment (debit)",
+        historical_import: "Historical payment",
+      };
+      const isCredit = new Set(["premium_credit", "adjustment_credit", "historical_import"]);
+      for (const e of recentLedgerEntries) {
+        const sign = isCredit.has(e.entry_type) ? "+" : "-";
+        row(
+          `${entryLabel[e.entry_type] || e.entry_type} (${fmtDate(new Date(e.created_at))})`,
+          `${sign}${e.currency} ${Number(e.amount).toFixed(2)}`
+        );
+      }
+    }
+    y += 6;
 
     drawAdvertAndQr(doc, y, activeAdvert, advertImageData, qrBuffer, A4_H - MARGIN - 55, org.name || "POL263");
 
@@ -933,6 +981,18 @@ export async function streamGroupBatchReceiptToResponse(
         cx += cols[c].width;
       }
       y += 14;
+      // Itemized line items (service premium + which add-ons), when this receipt was recorded
+      // via the itemized group-receipt form — printed indented under the member's row so the
+      // receipt shows exactly what was paid, not just the total.
+      const itemsIncluded = (m.metadata_json as any)?.itemsIncluded;
+      if (Array.isArray(itemsIncluded) && itemsIncluded.length > 0) {
+        for (const item of itemsIncluded) {
+          ensureSpace(11);
+          doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
+            .text(`· ${item.label} — ${m.currency} ${Number(item.amount).toFixed(2)}`, MARGIN + 20, y, { width: COL - 20, lineBreak: false });
+          y += 10;
+        }
+      }
     });
     y += 6;
     ensureSpace(20);
@@ -949,6 +1009,55 @@ export async function streamGroupBatchReceiptToResponse(
       ensureSpace(20);
       doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT).text(String(note), MARGIN, y, { width: COL });
       y = doc.y + 10;
+    }
+
+    // Group ledger — balance as of this receipt session, plus recent activity (claims/
+    // deductions). Only shown when this session is tied to a real group (groupId set).
+    if (groupId) {
+      const { computeGroupLedgerBalance } = await import("./group-ledger");
+      const ledgerRows = await tdb.execute(sql`
+        SELECT entry_type, amount, currency, description, created_at
+        FROM group_ledger_entries
+        WHERE organization_id = ${orgId} AND group_id = ${groupId} AND created_at <= ${members[0].issued_at}
+        ORDER BY created_at ASC
+      `);
+      const ledgerEntries = (ledgerRows.rows ?? ledgerRows) as any[];
+      const ledgerBalance = computeGroupLedgerBalance(ledgerEntries.map((e) => ({ entryType: e.entry_type, amount: e.amount, currency: e.currency })));
+      const recentLedgerEntries = ledgerEntries.slice(-6).reverse();
+
+      sectionHeader("Group Ledger");
+      ensureSpace(16);
+      const balanceEntries = Object.entries(ledgerBalance);
+      if (balanceEntries.length === 0) {
+        doc.font("Helvetica").fontSize(8.5).fillColor(C_MUTED).text("No ledger entries yet", MARGIN, y);
+        y = doc.y + 4;
+      } else {
+        for (const [cur, bal] of balanceEntries) {
+          ensureSpace(14);
+          doc.font("Helvetica-Bold").fontSize(8.5).fillColor(C_TEXT).text(`Balance (${cur}): ${cur} ${bal.toFixed(2)}`, MARGIN, y);
+          y = doc.y + 2;
+        }
+      }
+      if (recentLedgerEntries.length > 0) {
+        y += 4;
+        ensureSpace(11);
+        doc.font("Helvetica-Bold").fontSize(8).fillColor(C_MUTED).text("Recent activity:", MARGIN, y);
+        y = doc.y + 2;
+        const entryLabel: Record<string, string> = {
+          premium_credit: "Premium payment", claim_debit: "Claim payout",
+          adjustment_credit: "Adjustment (credit)", adjustment_debit: "Adjustment (debit)",
+          historical_import: "Historical payment",
+        };
+        const isCredit = new Set(["premium_credit", "adjustment_credit", "historical_import"]);
+        for (const e of recentLedgerEntries) {
+          ensureSpace(11);
+          const sign = isCredit.has(e.entry_type) ? "+" : "-";
+          doc.font("Helvetica").fontSize(8).fillColor(C_TEXT)
+            .text(`${entryLabel[e.entry_type] || e.entry_type} (${fmtDate(new Date(e.created_at))}): ${sign}${e.currency} ${Number(e.amount).toFixed(2)}`, MARGIN, y, { width: COL, lineBreak: false });
+          y = doc.y + 2;
+        }
+      }
+      y += 6;
     }
 
     ensureSpace(60);

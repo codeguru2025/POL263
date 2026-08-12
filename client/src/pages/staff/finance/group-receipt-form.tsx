@@ -6,16 +6,33 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { LegacyGroupReceiptForm } from "@/components/legacy-group-receipt-form";
+
+/** Mirrors server/route-helpers.ts's getAddOnPrice — used here only to compute a display total;
+ *  the server always recomputes authoritatively from the same catalog before charging anything. */
+function getAddOnPrice(ao: any, paymentSchedule: string): number {
+  if (ao.pricingMode === "percentage") return parseFloat(String(ao.priceAmount ?? ao.priceMonthly ?? 0));
+  if (paymentSchedule === "weekly" && ao.priceWeekly) return parseFloat(String(ao.priceWeekly));
+  if (paymentSchedule === "biweekly" && ao.priceBiweekly) return parseFloat(String(ao.priceBiweekly));
+  return parseFloat(String(ao.priceMonthly ?? ao.priceAmount ?? 0));
+}
+
+interface ItemToggle {
+  premium: boolean;
+  addOns: Set<string>;
+}
 
 export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   const { toast } = useToast();
   const [groupId, setGroupId] = useState("");
   const [policyIds, setPolicyIds] = useState<Set<string>>(new Set());
   const [totalAmount, setTotalAmount] = useState("");
+  const [itemize, setItemize] = useState(false);
+  const [itemToggles, setItemToggles] = useState<Record<string, ItemToggle>>({});
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [submitterNote, setSubmitterNote] = useState("");
@@ -35,24 +52,66 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     },
     enabled: !!groupId,
   });
+  // Itemized mode (Phase 4): each member's service premium + their attached add-ons, defaulting
+  // to all-checked — admin unchecks whatever wasn't paid this cycle (e.g. bus add-on deferred to
+  // next month). Only fetched when the itemize switch is on.
+  const { data: addOnCatalog = [] } = useQuery<any[]>({ queryKey: ["/api/add-ons"], enabled: itemize });
+  const { data: policyAddOnsByPolicy = {} } = useQuery<Record<string, any[]>>({
+    queryKey: ["/api/groups", groupId, "policies", "add-ons"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/groups/${groupId}/policies/add-ons`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: itemize && !!groupId,
+  });
+  const addOnMap = new Map(addOnCatalog.map((a: any) => [a.id, a]));
+
   const today = new Date().toISOString().slice(0, 10);
   const isBackdated = receiptDate < today;
+
+  const computedTotal = itemize
+    ? Array.from(policyIds).reduce((sum, pid) => {
+        const policy = groupPolicies.find((p: any) => p.id === pid);
+        if (!policy) return sum;
+        const toggle = itemToggles[pid];
+        let amt = toggle?.premium !== false ? parseFloat(String(policy.premiumAmount || 0)) : 0;
+        const attached = policyAddOnsByPolicy[pid] || [];
+        for (const pao of attached) {
+          if (!toggle?.addOns?.has(pao.addOnId)) continue;
+          const ao = addOnMap.get(pao.addOnId);
+          if (ao) amt += getAddOnPrice(ao, policy.paymentSchedule || "monthly");
+        }
+        return sum + amt;
+      }, 0)
+    : 0;
+
   const mutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/group-receipt", {
+      const body: any = {
         groupId,
-        policyIds: Array.from(policyIds),
-        totalAmount: parseFloat(totalAmount),
         currency: "USD",
         receiptDate,
         notes: notes.trim() || undefined,
         submitterNote: submitterNote.trim() || undefined,
         idempotencyKey,
-      });
+      };
+      if (itemize) {
+        body.items = Array.from(policyIds).map((pid) => ({
+          policyId: pid,
+          includeServicePremium: itemToggles[pid]?.premium !== false,
+          addOnIds: Array.from(itemToggles[pid]?.addOns ?? []),
+        }));
+      } else {
+        body.policyIds = Array.from(policyIds);
+        body.totalAmount = parseFloat(totalAmount);
+      }
+      const res = await apiRequest("POST", "/api/group-receipt", body);
       return res.json() as Promise<{ receipted: number; pendingApproval?: boolean }>;
     },
     onSuccess: (data) => {
       setPolicyIds(new Set());
+      setItemToggles({});
       setTotalAmount("");
       setReceiptDate(today);
       setNotes("");
@@ -71,7 +130,7 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
       const createRes = await apiRequest("POST", "/api/group-payment-intents", {
         groupId,
         policyIds: Array.from(policyIds),
-        totalAmount: parseFloat(totalAmount),
+        totalAmount: itemize ? computedTotal : parseFloat(totalAmount),
         currency: "USD",
       });
       const createJson = await createRes.json() as { id: string };
@@ -117,7 +176,30 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     }
   }, [polling, pollQuery.data, onSuccess, toast]);
   const togglePolicy = (id: string) => {
-    setPolicyIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    setPolicyIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) {
+        n.delete(id);
+        setItemToggles((t) => { const nt = { ...t }; delete nt[id]; return nt; });
+      } else {
+        n.add(id);
+        // Default: everything checked (service premium + every attached add-on).
+        const attachedIds = (policyAddOnsByPolicy[id] || []).map((a: any) => a.addOnId);
+        setItemToggles((t) => ({ ...t, [id]: { premium: true, addOns: new Set(attachedIds) } }));
+      }
+      return n;
+    });
+  };
+  const togglePremium = (policyId: string) => {
+    setItemToggles((t) => ({ ...t, [policyId]: { ...t[policyId], premium: !(t[policyId]?.premium ?? true) } }));
+  };
+  const toggleAddOn = (policyId: string, addOnId: string) => {
+    setItemToggles((t) => {
+      const current = t[policyId] || { premium: true, addOns: new Set<string>() };
+      const addOns = new Set(current.addOns);
+      if (addOns.has(addOnId)) addOns.delete(addOnId); else addOns.add(addOnId);
+      return { ...t, [policyId]: { ...current, addOns } };
+    });
   };
 
   const selectedGroup = groups.find((g: any) => g.id === groupId);
@@ -129,7 +211,7 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     <div className="space-y-4">
       <div>
         <Label htmlFor="group-id">Group</Label>
-        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setPaynowIntentId(null); setPolling(false); }}>
+        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setItemToggles({}); setPaynowIntentId(null); setPolling(false); }}>
           <SelectTrigger id="group-id" className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
           <SelectContent>
             {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{(g as any).isLegacy ? " (Legacy)" : ""}</SelectItem>)}
@@ -140,50 +222,90 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         <LegacyGroupReceiptForm groupId={groupId} onSuccess={onSuccess} />
       ) : groupId && (
         <>
+          <div className="flex items-center gap-2">
+            <Switch id="itemize-switch" checked={itemize} onCheckedChange={(v) => { setItemize(v); setItemToggles({}); }} />
+            <Label htmlFor="itemize-switch" className="cursor-pointer">
+              Itemize by line item (service premium + add-ons, per member)
+            </Label>
+          </div>
           <div>
             <div className="flex items-center justify-between mb-1">
               <Label>Members (select who paid)</Label>
               <Button type="button" variant="ghost" size="sm" className="text-xs h-auto py-0.5" onClick={() => {
                 if (policyIds.size === groupPolicies.length) {
                   setPolicyIds(new Set());
+                  setItemToggles({});
                 } else {
                   setPolicyIds(new Set(groupPolicies.map((p: any) => p.id)));
+                  setItemToggles(Object.fromEntries(groupPolicies.map((p: any) => [
+                    p.id, { premium: true, addOns: new Set((policyAddOnsByPolicy[p.id] || []).map((a: any) => a.addOnId)) },
+                  ])));
                 }
               }}>
                 {policyIds.size === groupPolicies.length ? "Deselect all" : "Select all"}
               </Button>
             </div>
-            <div className="border rounded-md p-2 max-h-56 overflow-auto space-y-1">
+            <div className="border rounded-md p-2 max-h-72 overflow-auto space-y-1">
               {groupPolicies.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-2">No policies in this group.</p>
               ) : (
-                groupPolicies.map((p: any) => (
-                  <label key={p.id} className="flex items-start gap-3 cursor-pointer p-2 rounded-md hover:bg-muted/50 transition-colors">
-                    <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} className="mt-0.5" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-sm">{p.clientFirstName || "—"} {p.clientLastName || ""}</span>
-                        {!p.clientPhone && !p.clientNationalId && (
-                          <Badge variant="secondary" className="text-xs">Legacy</Badge>
-                        )}
-                        <Badge variant="outline" className="text-xs">{p.status}</Badge>
-                        <span className="text-sm font-semibold ml-auto">{p.currency} {parseFloat(p.premiumAmount || 0).toFixed(2)}</span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="font-mono text-xs text-muted-foreground">{p.policyNumber}</span>
-                        {p.clientPhone && <span className="text-xs text-muted-foreground">{p.clientPhone}</span>}
-                        {p.clientNationalId && <span className="font-mono text-xs text-muted-foreground">ID: {p.clientNationalId}</span>}
-                      </div>
+                groupPolicies.map((p: any) => {
+                  const attached = policyAddOnsByPolicy[p.id] || [];
+                  const toggle = itemToggles[p.id];
+                  return (
+                    <div key={p.id} className="rounded-md hover:bg-muted/50 transition-colors">
+                      <label className="flex items-start gap-3 cursor-pointer p-2">
+                        <input type="checkbox" checked={policyIds.has(p.id)} onChange={() => togglePolicy(p.id)} className="mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm">{p.clientFirstName || "—"} {p.clientLastName || ""}</span>
+                            {!p.clientPhone && !p.clientNationalId && (
+                              <Badge variant="secondary" className="text-xs">Legacy</Badge>
+                            )}
+                            <Badge variant="outline" className="text-xs">{p.status}</Badge>
+                            <span className="text-sm font-semibold ml-auto">{p.currency} {parseFloat(p.premiumAmount || 0).toFixed(2)}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="font-mono text-xs text-muted-foreground">{p.policyNumber}</span>
+                            {p.clientPhone && <span className="text-xs text-muted-foreground">{p.clientPhone}</span>}
+                            {p.clientNationalId && <span className="font-mono text-xs text-muted-foreground">ID: {p.clientNationalId}</span>}
+                          </div>
+                        </div>
+                      </label>
+                      {itemize && policyIds.has(p.id) && (
+                        <div className="ml-9 mb-2 space-y-1 text-xs">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={toggle?.premium !== false} onChange={() => togglePremium(p.id)} />
+                            <span>Service premium — {p.currency} {parseFloat(p.premiumAmount || 0).toFixed(2)}</span>
+                          </label>
+                          {attached.map((pao: any) => {
+                            const ao = addOnMap.get(pao.addOnId);
+                            if (!ao) return null;
+                            return (
+                              <label key={pao.id} className="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={toggle?.addOns?.has(pao.addOnId) ?? false} onChange={() => toggleAddOn(p.id, pao.addOnId)} />
+                                <span>{ao.name} — {p.currency} {getAddOnPrice(ao, p.paymentSchedule || "monthly").toFixed(2)}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  </label>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-sm">
             <div>
               <Label>Total amount</Label>
-              <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" />
+              {itemize ? (
+                <p className="h-9 flex items-center font-semibold tabular-nums text-sm" data-testid="text-itemized-total">
+                  USD {computedTotal.toFixed(2)}
+                </p>
+              ) : (
+                <Input type="number" step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="Total to split" />
+              )}
             </div>
             <div>
               <Label htmlFor="receipt-date-2">Receipt date</Label>
@@ -221,13 +343,13 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
           <div className="flex flex-wrap gap-2">
             <Button
               onClick={() => mutation.mutate()}
-              disabled={policyIds.size === 0 || !totalAmount || mutation.isPending || (isBackdated && !submitterNote.trim())}
+              disabled={policyIds.size === 0 || (itemize ? computedTotal <= 0 : !totalAmount) || mutation.isPending || (isBackdated && !submitterNote.trim())}
               data-testid="button-submit-group-receipt"
             >
               {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               {isBackdated ? `Submit for approval (${policyIds.size} policies)` : `Receipt selected (${policyIds.size} policies)`}
             </Button>
-            {!isBackdated && paynowConfig?.enabled && (
+            {!isBackdated && paynowConfig?.enabled && !itemize && (
               <Button variant="outline" onClick={() => paynowMutation.mutate()} disabled={policyIds.size === 0 || !totalAmount || paynowMutation.isPending || polling}>
                 {paynowMutation.isPending || polling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                 {polling ? "Waiting for PayNow…" : "Pay with PayNow"}
