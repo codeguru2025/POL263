@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CurrencySelect } from "@/components/currency-select";
 import { formatAmount } from "@shared/validation";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,9 +31,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Plus, Box, Search, Loader2, Package, Layers, Puzzle, BarChart3,
   Edit, ChevronDown, ChevronUp, Upload, Image, Users, Baby, Crown,
-  FileText, Trash2, RefreshCw, AlertTriangle,
+  FileText, Trash2, RefreshCw, AlertTriangle, Download, BookOpen,
 } from "lucide-react";
 
 type Product = {
@@ -127,6 +134,11 @@ const CASKET_TYPES = [
 export default function ProductBuilder() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user, permissions: userPerms } = useAuth();
+  const permissions = Array.isArray(userPerms) ? userPerms : [];
+  const canManageSettings = permissions.includes("manage:settings");
+  const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
+  const brochureFileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState("products");
   const [search, setSearch] = useState("");
   const [showCreateProduct, setShowCreateProduct] = useState(false);
@@ -154,6 +166,39 @@ export default function ProductBuilder() {
   const { data: ageBands = [], isLoading: loadingAgeBands } = useQuery<AgeBandConfig[]>({ queryKey: ["/api/age-bands"] });
 
   const { data: termsList = [], isLoading: loadingTerms } = useQuery<any[]>({ queryKey: ["/api/terms?all=true"] });
+  const { data: orgForBrochure } = useQuery<{ brochureUrl: string | null }>({
+    queryKey: ["/api/organizations", effectiveOrgId],
+    enabled: !!effectiveOrgId,
+  });
+
+  const uploadBrochureMut = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(getApiBase() + "/api/products/brochure", {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-CSRF-Token": (await getCsrfToken()) ?? "" },
+        body: formData,
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({ message: "Upload failed" }))).message);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", effectiveOrgId] });
+      toast({ title: "Brochure uploaded", description: "This will be served instead of the auto-generated one." });
+    },
+    onError: (err: Error) => toast({ title: "Upload failed", description: err.message, variant: "destructive" }),
+  });
+
+  const removeBrochureMut = useMutation({
+    mutationFn: async () => { await apiRequest("DELETE", "/api/products/brochure"); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", effectiveOrgId] });
+      toast({ title: "Custom brochure removed", description: "The auto-generated brochure will be served instead." });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
 
   const createProductMut = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -312,6 +357,52 @@ export default function ProductBuilder() {
           title="Product Builder"
           description="Configure products, benefits, add-ons, and pricing."
           titleDataTestId="text-page-title"
+          actions={(
+            <div className="flex gap-2 flex-wrap">
+              <input
+                ref={brochureFileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadBrochureMut.mutate(file);
+                  e.target.value = "";
+                }}
+              />
+              {canManageSettings ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="gap-2" data-testid="button-brochure-menu">
+                      <BookOpen className="h-4 w-4" /> Brochure <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem asChild>
+                      <a href={getApiBase() + "/api/products/brochure?download=1"} target="_blank" rel="noopener noreferrer" data-testid="link-download-brochure">
+                        <Download className="h-4 w-4 mr-2" /> Download Brochure
+                      </a>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => brochureFileInputRef.current?.click()} data-testid="button-upload-brochure">
+                      {uploadBrochureMut.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                      Upload Custom Brochure
+                    </DropdownMenuItem>
+                    {orgForBrochure?.brochureUrl && (
+                      <DropdownMenuItem onClick={() => removeBrochureMut.mutate()} data-testid="button-remove-brochure">
+                        <RefreshCw className="h-4 w-4 mr-2" /> Use Auto-Generated Instead
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <Button variant="outline" className="gap-2" asChild data-testid="button-download-brochure">
+                  <a href={getApiBase() + "/api/products/brochure?download=1"} target="_blank" rel="noopener noreferrer">
+                    <Download className="h-4 w-4" /> Download Brochure
+                  </a>
+                </Button>
+              )}
+            </div>
+          )}
         />
 
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">

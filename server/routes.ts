@@ -771,6 +771,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     },
   });
 
+  const brochureUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.pdf$/i.test(path.extname(file.originalname));
+      if (allowed && file.mimetype === "application/pdf") cb(null, true);
+      else cb(new Error("Brochure must be a PDF file"));
+    },
+  });
+
   const POLICY_DOC_ALLOWED_MIMES = new Set([
     "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
     "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -2769,6 +2779,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const product = await storage.getProduct(req.params.id as string, user.organizationId);
     if (!product || product.organizationId !== user.organizationId) return res.status(404).json({ message: "Product not found" });
     return res.json(await storage.getProductVersions(req.params.id as string, user.organizationId));
+  });
+
+  // ── Product brochure (all active products, casket/cover/rates, org logo+contact) ──
+  app.get("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    const org = await storage.getOrganization(user.organizationId);
+    if (org?.brochureUrl) return res.redirect(org.brochureUrl);
+    const { streamProductBrochurePDF } = await import("./product-brochure-pdf");
+    await streamProductBrochurePDF(user.organizationId, res, { attachment: req.query.download === "1" });
+  });
+
+  app.post("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), brochureUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    const before = await storage.getOrganization(user.organizationId);
+    const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "brochures");
+    const after = await storage.updateOrganization(user.organizationId, { brochureUrl: url });
+    await auditLog(req, "UPLOAD_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: url });
+    return res.json({ brochureUrl: after?.brochureUrl ?? url });
+  });
+  app.use("/api/products/brochure", handleMulterError);
+
+  app.delete("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getOrganization(user.organizationId);
+    await storage.updateOrganization(user.organizationId, { brochureUrl: null });
+    await auditLog(req, "REMOVE_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: null });
+    return res.json({ brochureUrl: null });
   });
 
   app.post("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {

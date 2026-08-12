@@ -64,6 +64,9 @@ export const organizations = pgTable("organizations", {
   bookSizeProjected12mo: integer("book_size_projected_12mo"),
   staffComplement: integer("staff_complement"),
   onboardingProfileCompletedAt: timestamp("onboarding_profile_completed_at"),
+  /** Admin-uploaded product brochure PDF, overriding the auto-generated one at
+   *  GET /api/products/brochure. Null = no override, always serve the generated version. */
+  brochureUrl: text("brochure_url"),
 });
 
 /** Central-DB-only routing pointer: the public /pay/:token page has no session, so it can't
