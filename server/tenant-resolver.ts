@@ -106,6 +106,14 @@ export async function tenantResolverMiddleware(
           (req as any).tenantId = tenantId;
           return next();
         }
+        // The host explicitly names a tenant subdomain (e.g. a mistyped/shortened
+        // guess, or one not yet DNS-commissioned) that doesn't match any real
+        // tenant slug. Do NOT fall through to the session fallback below — the
+        // session cookie is shared across every *.{BASE_DOMAIN} subdomain (see
+        // auth.ts), so falling back here would silently render whichever tenant
+        // the browser happens to still be logged into under this unrelated
+        // subdomain, which is exactly the "wrong tenant" bug this guards against.
+        return next();
       }
     }
 
@@ -116,9 +124,16 @@ export async function tenantResolverMiddleware(
         (req as any).tenantId = tenantId;
         return next();
       }
+      // Same reasoning as the subdomain case above: an unrecognized custom
+      // domain must not fall back to whatever tenant the shared session cookie
+      // currently belongs to.
+      return next();
     }
 
-    // 5. Authenticated session fallback (existing sessions before domain routing)
+    // 5. Authenticated session fallback — reachable only for the bare base
+    // domain (host === BASE_DOMAIN or www.BASE_DOMAIN), e.g. the Google OAuth
+    // callback landing on the main domain needs to recover the tenant that was
+    // set in session during login on a tenant subdomain.
     const user = (req as any).user;
     if (user?.organizationId) {
       (req as any).tenantId = user.organizationId;

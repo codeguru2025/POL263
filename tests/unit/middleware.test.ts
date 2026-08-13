@@ -24,7 +24,7 @@ vi.mock("../../server/storage", () => ({
 vi.mock("@shared/control-plane-schema", () => ({ tenants: {} }));
 
 import { storage } from "../../server/storage";
-import { requireAuth, requirePermission } from "../../server/auth";
+import { requireAuth, requirePermission, applyPlatformOwnerTenantOverride } from "../../server/auth";
 
 function mockReq(overrides: Record<string, any> = {}) {
   const user = overrides.user;
@@ -133,5 +133,40 @@ describe("requirePermission middleware", () => {
     const next = vi.fn();
     await (requirePermission("read:policy", "write:policy") as any)(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+});
+
+const PLATFORM_OWNER_EMAIL = "ausiziba@gmail.com";
+
+describe("applyPlatformOwnerTenantOverride", () => {
+  it("scopes the owner to the tenant resolved from the request's subdomain, overriding a stale session.activeTenantId", () => {
+    const req = mockReq({
+      user: { id: "owner", email: PLATFORM_OWNER_EMAIL, organizationId: "org-stale" },
+      session: { activeTenantId: "org-ifalakhe" },
+      tenantId: "org-kings-and-queens",
+    });
+    applyPlatformOwnerTenantOverride(req as any);
+    expect((req.user as any).organizationId).toBe("org-kings-and-queens");
+    expect((req.session as any).activeTenantId).toBe("org-kings-and-queens");
+    expect((req.user as any).isPlatformOwner).toBe(true);
+  });
+
+  it("falls back to session.activeTenantId when there is no subdomain-resolved tenant (bare base domain / controlpanel host)", () => {
+    const req = mockReq({
+      user: { id: "owner", email: PLATFORM_OWNER_EMAIL, organizationId: "org-stale" },
+      session: { activeTenantId: "org-ifalakhe" },
+    });
+    applyPlatformOwnerTenantOverride(req as any);
+    expect((req.user as any).organizationId).toBe("org-ifalakhe");
+  });
+
+  it("does not touch organizationId for a non-owner user, regardless of the request's subdomain", () => {
+    const req = mockReq({
+      user: { id: "staff1", email: "staff@falakhe.example", organizationId: "org-falakhe" },
+      tenantId: "org-kings-and-queens",
+    });
+    applyPlatformOwnerTenantOverride(req as any);
+    expect((req.user as any).organizationId).toBe("org-falakhe");
+    expect((req.user as any).isPlatformOwner).toBeUndefined();
   });
 });

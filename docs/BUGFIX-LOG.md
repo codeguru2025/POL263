@@ -10,6 +10,61 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-13 — Platform owner visiting a tenant's real subdomain saw a different, stale tenant
+
+Augustus (platform owner) clicked a tenant's subdomain — the real, correctly-provisioned one
+from DigitalOcean's domain list, not a typo — and landed on a *different* tenant's dashboard:
+visiting `kings-and-queens-funeral-assurance.pol263.com` showed IFALAKHE, visiting
+`ifalakhe-funeral-services.pol263.com` showed FALAKHE.
+
+**Root cause (the actual one — see "first pass" below for a real but secondary finding along
+the way):** `tenantResolverMiddleware` (`server/tenant-resolver.ts`) correctly resolves
+`req.tenantId` from the Host header on every request — that part was never broken. But the
+platform owner's actual visible tenant is NOT `req.tenantId`; it's `req.user.organizationId`,
+which route-helpers.ts and every data route read directly. For the owner specifically,
+`server/auth.ts`'s "platform-owner tenant override" middleware (registered after the resolver,
+inside `setupAuth`) unconditionally set `user.organizationId = session.activeTenantId` — the
+tenant last picked from the in-app "switch tenant" dropdown — completely ignoring `req.tenantId`.
+Because the session cookie is deliberately shared across every `*.pol263.com` subdomain (so the
+Google OAuth callback on the bare domain can recover it), `activeTenantId` stays sticky no matter
+which tenant's subdomain the owner actually navigates to next — the URL bar said one tenant, the
+session said another, and the session always won, with zero visual indication (branding, org
+name — everything quietly reflected the wrong tenant).
+
+**Fix:** `server/auth.ts` — extracted the override into `applyPlatformOwnerTenantOverride(req)`.
+It now prefers `req.tenantId` (the Host-header-resolved tenant) when present, and writes it back
+into `session.activeTenantId` so the two stay in sync; it only falls back to the old
+`session.activeTenantId` behavior when there's no subdomain-resolved tenant at all (bare base
+domain, `controlpanel` admin host). Non-owner users are untouched — their `organizationId` was
+always their own account's org regardless of subdomain, which is correct and unrelated to this bug.
+
+**First pass (secondary, defense-in-depth fix kept in the same commit):** `tenant-resolver.ts`
+itself also had a step-5 fallback that used `req.user.organizationId` whenever subdomain/custom-
+domain lookup failed to match — this looked at first like the culprit (an unrecognized subdomain
+guess falling back to the session tenant), and is a real latent bug, but turned out to be dead
+code at runtime: `tenantResolverMiddleware` is registered *before* the session/passport
+middleware in `server/index.ts` (by design — see the comment there — so subdomain resolution is
+available on login endpoints), so `req.user` is always `undefined` when that fallback runs today.
+Fixed anyway (subdomain/custom-domain branches now `return next()` on a failed lookup instead of
+falling through) since it's one middleware-ordering change away from becoming live and silently
+reintroducing this exact class of bug.
+
+**Verified:** `tests/unit/tenant-resolver.test.ts` (5 cases) and new cases in
+`tests/unit/middleware.test.ts` for `applyPlatformOwnerTenantOverride` — subdomain-resolved
+tenant overrides a stale `activeTenantId`, falls back correctly when there's no subdomain tenant,
+and non-owner users are never touched. Full suite (339 tests) passes.
+
+**Lesson for next time:** when multiple pieces of code all claim to answer "what tenant is this
+request for" (`req.tenantId` from the resolver, `req.user.organizationId` from the session,
+`session.activeTenantId` from an explicit in-app switcher), trace which one the *actual data
+routes* read (`route-helpers.ts` reads `user.organizationId`, not `req.tenantId`) before assuming
+the resolver itself is the bug — the resolver can be completely correct while a downstream
+consumer ignores it. Also: a "fallback for legitimate case X" is easy to write broader than X —
+check whether the *specific reason* an earlier step failed still deserves the fallback, especially
+when a shared-across-hosts session cookie is in the mix.
+
+---
+
 ## 2026-08-12 — Mortuary/funeral-day fee payments never counted as income
 
 Augustus noticed a mortuary fee paid that day didn't show up in the daily report's income total.

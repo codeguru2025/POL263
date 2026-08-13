@@ -70,6 +70,42 @@ function isPlatformOwnerEmail(email?: string | null) {
   return email.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
 }
 
+/**
+ * For the platform owner only: scopes req.user.organizationId to the current tenant.
+ *
+ * The owner's session cookie is shared across every tenant subdomain (see the cookie `domain`
+ * setting in setupAuth below), so session.activeTenantId — set once via the in-app "switch
+ * tenant" dropdown — otherwise stays sticky no matter which tenant's actual subdomain the owner
+ * navigates to next. That silently showed tenant A's dashboard while the URL bar read tenant B's
+ * real, correctly-provisioned subdomain (reported 2026-08-13: visiting
+ * kings-and-queens-funeral-assurance.pol263.com showed IFALAKHE, visiting
+ * ifalakhe-funeral-services.pol263.com showed FALAKHE — both were just whatever tenant had last
+ * been switched to, not the tenant named in the URL). A tenant resolved from the request's own
+ * Host header (req.tenantId, set by tenantResolverMiddleware which runs before this) is a much
+ * stronger, more current signal than a stale session value, so it wins here — and is written back
+ * into the session so the UI's "current tenant" indicator and any other code reading
+ * activeTenantId directly stay in sync with it too. Falls back to session.activeTenantId (e.g. on
+ * the bare base domain or the controlpanel admin host, where no tenant subdomain is present).
+ * No-op for non-owner users — their organizationId is always their own account's org, regardless
+ * of which subdomain they're on.
+ */
+export function applyPlatformOwnerTenantOverride(req: Request): void {
+  const user = req.user as any;
+  if (!user || !isPlatformOwnerEmail(user.email)) return;
+
+  const subdomainTenantId = (req as any).tenantId as string | undefined;
+  if (subdomainTenantId) {
+    user.organizationId = subdomainTenantId;
+    (req.session as any).activeTenantId = subdomainTenantId;
+  } else {
+    const activeTenantId = (req.session as any)?.activeTenantId;
+    if (activeTenantId) {
+      user.organizationId = activeTenantId;
+    }
+  }
+  user.isPlatformOwner = true;
+}
+
 // Enforces tenant suspension (set via the platform-owner console) at session-resolution time,
 // which runs on every authenticated request — see the isActive===false check a few lines below
 // this is modeled on. Cached (same 5-min TTL pattern as tenant-resolver.ts) so a suspend/reactivate
@@ -216,18 +252,7 @@ export function setupAuth(app: Express) {
   // Platform-owner tenant override:
   // If platform owner has selected a tenant (session.activeTenantId), treat that as current org scope.
   app.use((req: Request, _res: Response, next: NextFunction) => {
-    const user = req.user as any;
-    if (!user) return next();
-
-    const isOwner = isPlatformOwnerEmail(user.email);
-    if (isOwner) {
-      const activeTenantId = (req.session as any)?.activeTenantId;
-      if (activeTenantId) {
-        user.organizationId = activeTenantId;
-      }
-      user.isPlatformOwner = true;
-    }
-
+    applyPlatformOwnerTenantOverride(req);
     next();
   });
 
