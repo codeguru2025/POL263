@@ -4141,6 +4141,12 @@ export class DatabaseStorage implements IStorage {
       .where(status ? and(eq(inboundEmails.organizationId, orgId), eq(inboundEmails.status, status)) : eq(inboundEmails.organizationId, orgId))
       .orderBy(desc(inboundEmails.receivedAt));
   }
+  async getInboundEmail(id: string, orgId: string): Promise<InboundEmail | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(inboundEmails)
+      .where(and(eq(inboundEmails.id, id), eq(inboundEmails.organizationId, orgId)));
+    return row;
+  }
   async updateInboundEmail(id: string, orgId: string, data: {
     status?: string; linkedNote?: string | null; reviewedBy?: string | null; reviewedAt?: Date | null;
   }): Promise<InboundEmail | undefined> {

@@ -1000,6 +1000,8 @@ function InboxTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<string>("unread");
+  const [viewingEmail, setViewingEmail] = useState<any | null>(null);
+  const [replyText, setReplyText] = useState("");
 
   const { data: emails, isLoading, isError, error } = useQuery<any[]>({
     queryKey: ["/api/inbound-emails", statusFilter],
@@ -1017,12 +1019,26 @@ function InboxTab() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const replyMutation = useMutation({
+    mutationFn: async ({ id, body }: { id: string; body: string }) => {
+      const res = await apiRequest("POST", `/api/inbound-emails/${id}/reply`, { body });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Reply sent" });
+      setViewingEmail(null);
+      setReplyText("");
+      queryClient.invalidateQueries({ queryKey: ["/api/inbound-emails"] });
+    },
+    onError: (e: any) => toast({ title: "Reply failed", description: e.message, variant: "destructive" }),
+  });
+
   const notEnabled = isError && String((error as any)?.message || "").includes("isn't included in your current plan");
 
   return (
     <CardSection
       title="Inbound Email"
-      description="Mail received at your organisation's inbound address, for manual staff triage. Nothing here is auto-converted into a claim or feedback ticket."
+      description="Mail received at your organisation's inbound address. View a message and reply directly — replies are sent from your organisation's own email address."
       icon={Globe}
     >
       <div className="p-6 space-y-4">
@@ -1064,6 +1080,9 @@ function InboxTab() {
                         <TableCell className="text-sm">{e.subject || "(no subject)"}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{new Date(e.receivedAt).toLocaleString()}</TableCell>
                         <TableCell className="text-right space-x-2">
+                          <Button size="sm" variant="outline" onClick={() => { setViewingEmail(e); setReplyText(""); }}>
+                            View
+                          </Button>
                           {statusFilter !== "reviewed" && (
                             <Button size="sm" variant="outline" onClick={() => updateMutation.mutate({ id: e.id, status: "reviewed" })}>
                               Mark reviewed
@@ -1084,6 +1103,47 @@ function InboxTab() {
           </>
         )}
       </div>
+
+      <Dialog open={!!viewingEmail} onOpenChange={(open) => { if (!open) { setViewingEmail(null); setReplyText(""); } }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{viewingEmail?.subject || "(no subject)"}</DialogTitle>
+            <DialogDescription>
+              From {viewingEmail?.fromAddress} · {viewingEmail ? new Date(viewingEmail.receivedAt).toLocaleString() : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-64 overflow-y-auto rounded-md border border-border/70 bg-muted/30 p-3 text-sm whitespace-pre-wrap">
+            {viewingEmail?.bodyText?.trim() || "(No text content — this message may only contain HTML or attachments not shown here.)"}
+          </div>
+          {viewingEmail?.linkedNote && (
+            <div className="max-h-32 overflow-y-auto rounded-md border border-border/70 p-3 text-xs text-muted-foreground whitespace-pre-wrap">
+              {viewingEmail.linkedNote}
+            </div>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="inbound-reply">Reply</Label>
+            <Textarea
+              id="inbound-reply"
+              rows={5}
+              placeholder="Type your reply…"
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setViewingEmail(null); setReplyText(""); }}>
+              Close
+            </Button>
+            <Button
+              disabled={!replyText.trim() || replyMutation.isPending}
+              onClick={() => viewingEmail && replyMutation.mutate({ id: viewingEmail.id, body: replyText.trim() })}
+            >
+              {replyMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Send reply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </CardSection>
   );
 }

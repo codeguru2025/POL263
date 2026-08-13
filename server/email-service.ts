@@ -30,6 +30,10 @@ export interface SendEmailOptions {
   text: string;
   html: string;
   fromName?: string;
+  /** Overrides the default EMAIL_FROM address — e.g. a tenant's own mail.{slug}.pol263.com
+   *  address (server/email-domain-provisioning.ts) so a reply comes from the same domain the
+   *  original message arrived at, instead of the shared platform address. */
+  from?: string;
   attachments?: { filename: string; content: Buffer; contentType?: string }[];
 }
 
@@ -66,7 +70,7 @@ export async function sendEmail(opts: SendEmailOptions): Promise<{ ok: boolean; 
     return { ok: false, message: "SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT and EMAIL_FROM in your environment variables." };
   }
 
-  const from = process.env.EMAIL_FROM || process.env.SMTP_USER;
+  const from = opts.from || process.env.EMAIL_FROM || process.env.SMTP_USER;
 
   try {
     await transporter.sendMail({

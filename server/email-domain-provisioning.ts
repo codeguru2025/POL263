@@ -223,3 +223,11 @@ export async function resolveTenantBySubdomain(subdomain: string): Promise<{ ten
     .from(tenantEmailDomains).where(eq(tenantEmailDomains.subdomain, subdomain)).limit(1);
   return row ?? null;
 }
+
+/** Looks up a tenant's own email domain (from-address) — used when replying to inbound mail so
+ *  the reply comes from the tenant's own domain instead of the shared platform address. */
+export async function getTenantEmailDomain(orgId: string): Promise<{ subdomain: string; fromAddress: string | null } | null> {
+  const [row] = await cpDb.select({ subdomain: tenantEmailDomains.subdomain, fromAddress: tenantEmailDomains.fromAddress })
+    .from(tenantEmailDomains).where(eq(tenantEmailDomains.tenantId, orgId)).limit(1);
+  return row ?? null;
+}

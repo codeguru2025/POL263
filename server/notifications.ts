@@ -346,14 +346,27 @@ export async function dispatchNotification(
         const renderedBody = renderTemplate(defaults.body, ctx);
         await notifyClient(orgId, clientId, renderedSubject, renderedBody, "in_app", ctx.policyId);
 
-        // "activation" and "claim_status_change" are new event types with no pre-existing
-        // per-org template to opt into yet, so also email by default where we have an
-        // address — unlike the older event types, there's no established "in-app only
-        // until an admin configures a channel" behavior here to preserve.
-        if (emailAllowed && (eventType === "activation" || eventType === "claim_status_change" || eventType === "kyc_status_change")) {
+        // Every event type emails by default when no per-org template has been configured for
+        // it yet — a tenant shouldn't have to hand-build a template for payment/lapse/activation
+        // events just to get email out the door. Previously this only applied to "activation",
+        // "claim_status_change" and "kyc_status_change"; an admin who *does* want a different
+        // channel (or no email) for a given event can still override it by configuring their own
+        // template — this default-email path only runs when templates.length === 0 above, so it
+        // never overrides an explicit admin choice.
+        if (emailAllowed) {
           try {
             const client = await storage.getClient(clientId, orgId);
             if (client?.email) {
+              const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
+              await storage.createNotificationLog(orgId, {
+                recipientType: "client",
+                recipientId: clientId,
+                channel: "email",
+                subject: renderedSubject,
+                body: renderedBody,
+                policyId: ctx.policyId ?? null,
+                status: "sent",
+              });
               await sendEmail({
                 to: client.email,
                 fromName: ctx.orgName,
@@ -364,6 +377,7 @@ export async function dispatchNotification(
                 // rendered text before wrapping in HTML (after escaping, not before, so the
                 // \n -> <br/> tag we insert here isn't itself escaped).
                 html: `<p>${escapeHtml(renderedBody).replace(/\n/g, "<br/>")}</p>`,
+                attachments,
               });
             }
           } catch (err) {

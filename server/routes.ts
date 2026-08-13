@@ -44,7 +44,8 @@ import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes"
 import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule, hasModule } from "./module-gate";
-import { sendEmail } from "./email-service";
+import { sendEmail, escapeHtml } from "./email-service";
+import { getTenantEmailDomain } from "./email-domain-provisioning";
 import { tenantSubscriptions, billingPlans, tenantInvoices } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
@@ -2696,6 +2697,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       reviewedAt: status ? new Date() : undefined,
     });
     if (!updated) return res.status(404).json({ message: "Not found" });
+    return res.json(updated);
+  });
+
+  app.post("/api/inbound-emails/:id/reply", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+    const user = req.user as any;
+    const bodyText = typeof req.body.body === "string" ? req.body.body.trim() : "";
+    if (!bodyText) return res.status(400).json({ message: "body is required" });
+
+    const inboundEmail = await storage.getInboundEmail(req.params.id as string, user.organizationId);
+    if (!inboundEmail) return res.status(404).json({ message: "Not found" });
+
+    // Reply from the tenant's own mail.{slug} domain (server/email-domain-provisioning.ts) so
+    // the sender sees a consistent address to reply back to, instead of the shared platform
+    // address — the whole point of provisioning a per-tenant domain is defeated if replies still
+    // go out from a generic address.
+    const emailDomain = await getTenantEmailDomain(user.organizationId);
+    if (!emailDomain?.fromAddress) {
+      return res.status(400).json({ message: "Email sending isn't set up for your organisation yet — ask your platform contact to enable it." });
+    }
+
+    const org = await storage.getOrganization(user.organizationId);
+    const subject = inboundEmail.subject
+      ? (/^re:/i.test(inboundEmail.subject) ? inboundEmail.subject : `Re: ${inboundEmail.subject}`)
+      : "Re: your message";
+
+    const result = await sendEmail({
+      to: inboundEmail.fromAddress,
+      from: emailDomain.fromAddress,
+      fromName: org?.name,
+      subject,
+      text: bodyText,
+      html: `<p>${escapeHtml(bodyText).replace(/\n/g, "<br/>")}</p>`,
+    });
+    if (!result.ok) return res.status(502).json({ message: result.message });
+
+    const reviewedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const replyNote = `Replied ${new Date().toISOString()}:\n${bodyText}`;
+    const updated = await storage.updateInboundEmail(req.params.id as string, user.organizationId, {
+      status: "reviewed",
+      linkedNote: inboundEmail.linkedNote ? `${inboundEmail.linkedNote}\n\n---\n${replyNote}` : replyNote,
+      reviewedBy,
+      reviewedAt: new Date(),
+    });
+    await auditLog(req, "REPLY_INBOUND_EMAIL", "InboundEmail", req.params.id as string, null, { to: inboundEmail.fromAddress, subject });
     return res.json(updated);
   });
 
