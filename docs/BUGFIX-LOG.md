@@ -10,6 +10,69 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-13 — Tenant email domain provisioning created dead DNS records (2 bugs) and couldn't support both sending and receiving on one hostname
+
+Testing an upgraded Resend plan by provisioning Kings and Queens Funeral Assurance's email
+domain (`server/email-domain-provisioning.ts`, first real exercise of this code — the
+`tenant_email_domains` table was empty for every tenant before this) surfaced three separate
+problems, two of them real bugs and one an architectural constraint.
+
+**Bug 1 — DNS record names got the subdomain doubled.** The code assumed Resend's
+`record.name` for a subdomain email domain (e.g. `kings-and-queens-funeral-assurance.pol263.com`)
+is relative to *the domain being verified*, so it concatenated the subdomain prefix onto it.
+Empirically, Resend actually returns `record.name` already relative to the *registrable root
+domain* (`pol263.com`) — confirmed by the "Receiving" MX record coming back named
+`kings-and-queens-funeral-assurance` (the full subdomain label), not `@` (which is what it
+would be if relative to the domain being verified). The old code turned that into
+`kings-and-queens-funeral-assurance.kings-and-queens-funeral-assurance` — a dead record that
+could never verify. Same bug class as the 2026-08-04 incident already documented below for
+`do-app-domains.ts`'s `relativeRecordName`, just reintroduced in the sibling file. Fixed by
+`zoneRelativeNameForResendRecord()`, which passes `rec.name` through as-is (with a sanity check
+that throws instead of silently creating a wrong record if a name ever doesn't look like it
+belongs to the subdomain).
+
+**Bug 2 — MX record values needed a trailing dot.** DigitalOcean's DNS Records API 422s
+hostname-valued records (`MX`, `CNAME`, `NS`) with "Data needs to end with a dot (.)" unless the
+value is written as a fully-qualified name with a trailing dot; TXT record data is arbitrary
+text and must *not* get one. The code passed Resend's raw value straight through. Fixed:
+`HOSTNAME_VALUE_RECORD_TYPES` now appends the trailing dot only for the record types that need it.
+
+**Architectural constraint — same hostname can't be both the tenant's web subdomain and its
+email-receiving domain.** Even with both bugs fixed, one record still failed: Resend's inbound
+"Receiving" capability requires an MX record at the bare domain apex, but `{slug}.pol263.com` is
+already a CNAME (the tenant's own web app, provisioned by `do-app-domains.ts`) — DNS forbids any
+other record type coexisting with a CNAME at the same name. This isn't fixable in code; it's a
+DNS rule. Resolved by switching the email domain to a dedicated `mail.{slug}.pol263.com`
+subdomain (distinct hostname, no CNAME on it), the same pattern other ESPs (Mailgun, Postmark)
+push customers toward for exactly this reason. Also made `provisionTenantEmailDomain` retire a
+stale Resend domain resource (best-effort delete) and re-provision fresh if the tenant's stored
+`subdomain` doesn't match the currently-computed one, so a future scheme change doesn't silently
+resume the wrong domain — and made per-record DNS creation idempotent (checks the zone's existing
+records before POSTing) so a retry after a partial failure doesn't pile up duplicates. Also
+stopped marking `receivingEnabled: true` on a partial failure — it was doing so unconditionally,
+which both misrepresented tenant state and (via the "already provisioned" early-return) blocked
+any retry from reaching the code again.
+
+**Verified:** `tests/unit/email-domain-provisioning.test.ts` (5 cases) for the record-naming
+fix. Manually verified end-to-end against production: deleted the two dead
+double-subdomain-name records the pre-fix code created, deleted the wrong-scheme Resend domain
+resource, re-ran provisioning under `mail.kings-and-queens-funeral-assurance.pol263.com` — all 4
+required DNS records (DKIM TXT, sending MX, sending SPF TXT, receiving MX) created correctly on
+the first attempt, `recordFailures: 0`. Cleaned up the 3 orphaned DNS records left over from the
+earlier wrong-scheme attempt. Confirmed via DigitalOcean's and Resend's APIs directly (not just
+application logs) that the final DNS zone and Resend domain state match. Full suite (344 tests)
+passes.
+
+**Lesson for next time:** when integrating with a third-party API that returns "record names to
+create in your DNS," don't assume which base they're relative to — verify empirically against
+one real record before writing the concatenation logic, the same discipline already documented
+below for `do-app-domains.ts`. And when a tenant's web subdomain and any *other* per-tenant
+subdomain-based feature (email, in this case) might need DNS records of their own, check for
+CNAME/MX exclusivity conflicts before assuming they can share a hostname — they usually can't
+once the second feature needs anything other than TXT/A records.
+
+---
+
 ## 2026-08-13 — Platform owner visiting a tenant's real subdomain saw a different, stale tenant
 
 Augustus (platform owner) clicked a tenant's subdomain — the real, correctly-provisioned one
