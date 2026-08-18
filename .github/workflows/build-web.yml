@@ -30,7 +30,7 @@ jobs:
       - name: Generate lockfile on Linux
         run: npm install --package-lock-only --ignore-scripts
       - name: Upload lockfile
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-lock-linux
           path: package-lock.json
@@ -72,7 +72,7 @@ jobs:
           VITE_API_BASE: ${{ vars.VITE_API_BASE || '' }}
 
       - name: Upload web build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-build
           path: |
