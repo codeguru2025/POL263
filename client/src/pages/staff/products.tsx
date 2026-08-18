@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CurrencySelect } from "@/components/currency-select";
 import { formatAmount } from "@shared/validation";
+import { MEASUREMENT_APPROACHES, MEASUREMENT_APPROACH_LABELS } from "@shared/product-types";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -110,6 +111,7 @@ type ProductVersion = {
   additionalMemberRate85PlusZig: string | null;
   reinstatementRequiresArrears: boolean | null;
   reinstatementNewWaitingPeriod: boolean | null;
+  measurementApproach: string | null;
   isActive: boolean;
 };
 
@@ -901,6 +903,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                       <TableHead>Age Range</TableHead>
                       <TableHead>Commission</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>IFRS 17</TableHead>
                       <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -930,6 +933,13 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                             : "—"}
                         </TableCell>
                         <TableCell><Badge variant={v.isActive ? "default" : "secondary"} className={v.isActive ? "bg-emerald-500/15 text-emerald-700 border-emerald-200" : ""}>{v.isActive ? "Active" : "Inactive"}</Badge></TableCell>
+                        <TableCell>
+                          {v.measurementApproach ? (
+                            <Badge variant="outline" className="text-[10px] uppercase" data-testid={`badge-measurement-approach-${v.id}`}>{v.measurementApproach}</Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground" data-testid={`badge-measurement-approach-${v.id}`}>Unclassified</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit version" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
@@ -1425,6 +1435,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
   const [ageBandRate85PlusUsd, setAgeBandRate85PlusUsd] = useState("");
   const [ageBandRate85PlusZar, setAgeBandRate85PlusZar] = useState("");
   const [ageBandRate85PlusZig, setAgeBandRate85PlusZig] = useState("");
+  const [measurementApproach, setMeasurementApproach] = useState<string>("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1487,6 +1498,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || undefined,
       additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || undefined,
       additionalMemberRate85PlusZig: ageBandRate85PlusZig.trim() || undefined,
+      measurementApproach: measurementApproach || undefined,
     });
   };
 
@@ -1500,6 +1512,18 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
             <Label htmlFor="effective-from">Effective From *</Label>
             <Input id="effective-from" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} required data-testid="input-version-effective-from" className={cn(fieldErrors.effectiveFrom && "border-destructive")} />
             <FieldError message={fieldErrors.effectiveFrom} />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="measurement-approach">IFRS 17 measurement approach</Label>
+            <Select value={measurementApproach || "unclassified"} onValueChange={(v) => setMeasurementApproach(v === "unclassified" ? "" : v)}>
+              <SelectTrigger id="measurement-approach" data-testid="select-version-measurement-approach"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unclassified">Unclassified</SelectItem>
+                {MEASUREMENT_APPROACHES.map((m) => <SelectItem key={m} value={m}>{MEASUREMENT_APPROACH_LABELS[m]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Set by your auditor/actuary, not inferred. Only "PAA"-classified versions are picked up by the earned-revenue/insurance contract summary report under Reports → Finance → Actuarial.</p>
           </div>
 
           <Separator />
@@ -1838,6 +1862,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   const [ageBandRate85PlusZig, setAgeBandRate85PlusZig] = useState(version.additionalMemberRate85PlusZig || "");
   const [reinstatementRequiresArrears, setReinstatementRequiresArrears] = useState(version.reinstatementRequiresArrears ?? true);
   const [reinstatementNewWaitingPeriod, setReinstatementNewWaitingPeriod] = useState(version.reinstatementNewWaitingPeriod ?? true);
+  const [measurementApproach, setMeasurementApproach] = useState<string>(version.measurementApproach || "");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -1901,6 +1926,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       additionalMemberRate85PlusUsd: ageBandRate85PlusUsd.trim() || null,
       additionalMemberRate85PlusZar: ageBandRate85PlusZar.trim() || null,
       additionalMemberRate85PlusZig: ageBandRate85PlusZig.trim() || null,
+      measurementApproach: measurementApproach || null,
     });
   };
 
@@ -1920,6 +1946,18 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
               <Checkbox id="edit-version-active" checked={isActive} onCheckedChange={(v) => setIsActive(v === true)} data-testid="checkbox-edit-version-active" />
               <Label htmlFor="edit-version-active" className="text-sm font-normal cursor-pointer">Active</Label>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="measurement-approach-2">IFRS 17 measurement approach</Label>
+            <Select value={measurementApproach || "unclassified"} onValueChange={(v) => setMeasurementApproach(v === "unclassified" ? "" : v)}>
+              <SelectTrigger id="measurement-approach-2" data-testid="select-edit-version-measurement-approach"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unclassified">Unclassified</SelectItem>
+                {MEASUREMENT_APPROACHES.map((m) => <SelectItem key={m} value={m}>{MEASUREMENT_APPROACH_LABELS[m]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Set by your auditor/actuary, not inferred. Only "PAA"-classified versions are picked up by the earned-revenue/insurance contract summary report under Reports → Finance → Actuarial.</p>
           </div>
 
           <Separator />

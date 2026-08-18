@@ -39,7 +39,8 @@ export type ReportDatasetId =
   | "agentPortfolio"
   | "branches"
   | "products"
-  | "users";
+  | "users"
+  | "insuranceContractSummary";
 
 export const SECTION_META: Record<ReportSectionId, { label: string; icon: LucideIcon }> = {
   policies: { label: "Policies", icon: FolderOpen },
@@ -151,6 +152,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   expenditures: ["expenditures"],
   cashups: ["cashups"],
   platform: ["platformReceivables"],
+  actuarial: ["insuranceContractSummary"],
   "agent-portfolio": ["agentPortfolio"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],

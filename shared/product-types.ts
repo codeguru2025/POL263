@@ -49,3 +49,19 @@ export function resolveBenefitTrigger(benefitTrigger: BenefitTrigger | null | un
 export function resolveInsuredEntityType(insuredEntityType: InsuredEntityType | null | undefined): InsuredEntityType {
   return insuredEntityType ?? "person_household";
 }
+
+/**
+ * IFRS 17 measurement-model classification for a product version (productVersions.measurementApproach).
+ * Unlike benefitTrigger/insuredEntityType above, null here is NOT an alias for one of these four —
+ * it means "not yet classified by the tenant's auditor," a distinct, legitimate state that
+ * server/insurance-revenue.ts must exclude from its PAA calculation rather than default away.
+ */
+export const MEASUREMENT_APPROACHES = ["paa", "gmm", "vfa", "out_of_scope"] as const;
+export type MeasurementApproach = (typeof MEASUREMENT_APPROACHES)[number];
+
+export const MEASUREMENT_APPROACH_LABELS: Record<MeasurementApproach, string> = {
+  paa: "Premium Allocation Approach (PAA)",
+  gmm: "General Measurement Model (GMM)",
+  vfa: "Variable Fee Approach (VFA)",
+  out_of_scope: "Out of IFRS 17 scope",
+};

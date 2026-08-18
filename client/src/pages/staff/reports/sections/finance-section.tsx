@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText } from "lucide-react";
+import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield } from "lucide-react";
 import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
@@ -246,6 +246,16 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       return res.json();
     },
     enabled: need("balanceSheet"),
+  });
+  const { data: insuranceContractSummary, isLoading: loadingInsuranceContractSummary } = useQuery<any>({
+    queryKey: ["reports", "insurance-contract-summary", runKey, ...fk],
+    queryFn: async () => {
+      const asOf = `asOf=${filters.toDate || new Date().toISOString().slice(0, 10)}`;
+      const res = await fetch(getApiBase() + "/api/reports/insurance-contract-summary" + (q ? `${q}&${asOf}` : `?${asOf}`), { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: need("insuranceContractSummary"),
   });
   const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
@@ -631,6 +641,59 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
           description="Clean exports for an external actuary's SFCR/ORSA prep — insured-lives exposure by product and age band, balance sheet, plus premium/payment and claims history."
         >
           <div className="p-4 space-y-3">
+            <div className="border rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm">Insurance contract summary (IFRS 17 — PAA, indicative)</p>
+                  <p className="text-xs text-muted-foreground">Earned revenue and liability for remaining coverage, computed only for product versions classified "PAA" — see Classification coverage below for what's excluded.</p>
+                </div>
+                <ExportButton reportType="insurance-contract-summary" filters={filters} />
+              </div>
+              {loadingInsuranceContractSummary ? (
+                <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin" /></div>
+              ) : !insuranceContractSummary ? (
+                <p className="text-xs text-muted-foreground">No data for the selected period.</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <KpiStatCard
+                      label="Insurance revenue (earned)"
+                      value={
+                        <span className="tabular-nums" data-testid="text-insurance-revenue-earned">
+                          {Object.entries(insuranceContractSummary.insuranceRevenue.earned).map(([c, amt]: [string, any]) => `${c} ${amt.toFixed(2)}`).join(" · ") || "—"}
+                        </span>
+                      }
+                      icon={TrendingUp}
+                    />
+                    <KpiStatCard
+                      label="Liability for remaining coverage (unearned premium)"
+                      value={
+                        <span className="tabular-nums" data-testid="text-liability-remaining-coverage">
+                          {Object.entries(insuranceContractSummary.liabilityForRemainingCoverage.unearnedPremium).map(([c, amt]: [string, any]) => `${c} ${amt.toFixed(2)}`).join(" · ") || "—"}
+                        </span>
+                      }
+                      icon={DollarSign}
+                    />
+                    <KpiStatCard
+                      label="Liability for incurred claims"
+                      value={
+                        <span className="tabular-nums" data-testid="text-liability-incurred-claims">
+                          {Object.entries(insuranceContractSummary.liabilityForIncurredClaims.total).map(([c, amt]: [string, any]) => `${c} ${amt.toFixed(2)}`).join(" · ") || "—"}
+                        </span>
+                      }
+                      icon={Shield}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground italic">{insuranceContractSummary.liabilityForIncurredClaims.note}</p>
+                  <p className="text-xs text-muted-foreground" data-testid="text-classification-coverage">
+                    {insuranceContractSummary.classification.paaPolicyCount} active polic{insuranceContractSummary.classification.paaPolicyCount === 1 ? "y" : "ies"} on PAA-classified products included.
+                    {insuranceContractSummary.classification.excludedActivePolicyCount > 0
+                      ? ` ${insuranceContractSummary.classification.excludedActivePolicyCount} excluded (unclassified or GMM/VFA) — classify products under Products to include them.`
+                      : ""}
+                  </p>
+                </>
+              )}
+            </div>
             <div className="flex items-center justify-between border rounded-lg p-3">
               <div>
                 <p className="font-medium text-sm">Insured-lives exposure</p>

@@ -796,6 +796,16 @@ export const productVersions = pgTable(
      */
     annualGrowthRatePercent: numeric("annual_growth_rate_percent"),
     maturityTermMonths: integer("maturity_term_months"),
+    /**
+     * IFRS 17 measurement-model classification: 'paa' | 'gmm' | 'vfa' | 'out_of_scope', or null
+     * (unclassified — the default for every product version today). Set explicitly by the
+     * tenant's own auditor/actuary via the product-version form, never inferred by the system.
+     * Only 'paa'-classified versions are picked up by server/insurance-revenue.ts's earned-
+     * premium/liability-for-remaining-coverage calculation; everything else (including null) is
+     * excluded from that report and counted separately so it's never silently mismeasured.
+     * Null is fully inert until that feature reads it.
+     */
+    measurementApproach: text("measurement_approach"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

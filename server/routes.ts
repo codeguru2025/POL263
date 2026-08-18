@@ -21,6 +21,7 @@ import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock } from "./advisory-lock";
 import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
+import { buildInsuranceContractSummary } from "./insurance-revenue";
 import { buildDailyReport } from "./daily-report";
 import { buildExecutiveReport } from "./executive-report";
 import { enhanceNote, generateInsights } from "./ai-service";
@@ -12787,6 +12788,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await buildBalanceSheet(user.organizationId, { asOf, branchId }));
   });
 
+  // Insurance contract summary (IFRS 17, PAA) — additive alongside the cash-basis statements
+  // above. See server/insurance-revenue.ts for why: earned revenue + liability for remaining
+  // coverage, computed only for product versions explicitly classified measurementApproach='paa'.
+  app.get("/api/reports/insurance-contract-summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = defaultStatementRange();
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : todayInHarare();
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    return res.json(await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId }));
+  });
+
   // ── Balance sheet manual entries CRUD ──
   app.get("/api/balance-sheet-entries", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
@@ -13662,6 +13676,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
             return [e.section, e.subsection || "", e.label, e.amount, e.currency || "USD", ...currencyAmounts(e.amount, e.currency), e.asOfDate || ""];
           });
+          break;
+        }
+        case "insurance-contract-summary": {
+          const defRange = (() => {
+            const to = todayInHarare();
+            const from = `${to.slice(0, 7)}-01`;
+            return { from, to };
+          })();
+          const from = reportFilters.fromDate || defRange.from;
+          const to = reportFilters.toDate || defRange.to;
+          const asOf = todayInHarare();
+          const summary = await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId: reportFilters.branchId });
+          headers = ["Metric", "Currency", "Amount", "Period / As Of", "Note"];
+          rows = [
+            ...Object.entries(summary.insuranceRevenue.earned).map(([c, amt]) =>
+              ["Insurance Revenue (Earned, PAA)", c, amt, `${from} to ${to}`, ""]),
+            ...Object.entries(summary.liabilityForRemainingCoverage.unearnedPremium).map(([c, amt]) =>
+              ["Liability for Remaining Coverage (Unearned Premium)", c, amt, `As of ${asOf}`, ""]),
+            ...Object.entries(summary.liabilityForIncurredClaims.total).map(([c, amt]) =>
+              ["Liability for Incurred Claims", c, amt, `As of ${asOf}`, summary.liabilityForIncurredClaims.note]),
+            ["Classification Coverage", "", summary.classification.paaPolicyCount, `As of ${asOf}`,
+              `${summary.classification.excludedActivePolicyCount} active polic${summary.classification.excludedActivePolicyCount === 1 ? "y" : "ies"} on non-PAA-classified product versions excluded (${JSON.stringify(summary.classification.excludedByApproach)})`],
+          ];
           break;
         }
         default:
