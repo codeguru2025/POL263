@@ -12,6 +12,7 @@ interface AuthUser {
   isActive: boolean;
   referralCode: string | null;
   isPlatformOwner?: boolean;
+  mfaEnabled?: boolean;
   phone?: string | null;
   bio?: string | null;
   whatsapp?: string | null;

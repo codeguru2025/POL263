@@ -11,6 +11,7 @@ import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
 import { AppChrome } from "@/components/layout/app-chrome";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 
 interface ClaimResponse {
   clientId: string;
@@ -80,8 +81,9 @@ export default function ClientClaim() {
       toast({ title: "Passwords don't match", description: "Please ensure both passwords are identical.", variant: "destructive" });
       return;
     }
-    if (newPassword.length < 8) {
-      toast({ title: "Password too short", description: "Password must be at least 8 characters.", variant: "destructive" });
+    const passwordPolicyError = validatePasswordPolicy(newPassword);
+    if (passwordPolicyError) {
+      toast({ title: "Password too weak", description: passwordPolicyError, variant: "destructive" });
       return;
     }
     if (!securityQuestionId || !securityAnswer) {
@@ -159,10 +161,10 @@ export default function ClientClaim() {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   required
-                  minLength={8}
+                  minLength={MIN_PASSWORD_LENGTH}
                   data-testid="input-new-password"
                 />
-                <p className="text-xs text-muted-foreground">Minimum 8 characters</p>
+                <p className="text-xs text-muted-foreground">Minimum {MIN_PASSWORD_LENGTH} characters, with a letter and a number</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm Password</Label>

@@ -6,17 +6,25 @@ import { commissionLedgerEntries } from "@shared/schema";
 import { notifyUser } from "./user-notifications";
 import { resolveOrSyncTenantUserId } from "./tenant-db";
 import { currencyField } from "@shared/premium-currency";
+import type { OrgDataDb } from "./tenant-db";
 
 export { currencyField };
 
-export function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string) {
+/**
+ * `tx` lets a caller already inside withOrgTransaction pass its transaction handle so this audit
+ * write commits/rolls back atomically with the mutation it records — pass it for financially or
+ * compliance-critical writes; omit it for the common case (audit write outside a transaction).
+ * One short retry before giving up: transient failures (a momentary connection blip) are the
+ * more recoverable case swallowing immediately would otherwise miss.
+ */
+export async function auditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any, orgIdOverride?: string, tx?: OrgDataDb) {
   const user = req.user as any;
   const organizationId = orgIdOverride || user?.organizationId;
   if (!organizationId) {
     structuredLog("warn", "auditLog skipped — no organizationId", { action, entityType, entityId, userId: user?.id });
-    return Promise.resolve(undefined as any);
+    return undefined;
   }
-  return storage.createAuditLog({
+  const log = {
     organizationId,
     actorId: user?.id,
     actorEmail: user?.email,
@@ -27,9 +35,19 @@ export function auditLog(req: any, action: string, entityType: string, entityId:
     after,
     requestId: req.requestId,
     ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
-  }).catch((err: any) => {
-    structuredLog("error", "auditLog write failed", { error: err?.message, action, entityType, entityId });
-  });
+  };
+  try {
+    return await storage.createAuditLog(log, tx);
+  } catch (err: any) {
+    if (tx) throw err; // inside a transaction, let the caller's rollback handle it — no retry
+    await new Promise((r) => setTimeout(r, 150));
+    try {
+      return await storage.createAuditLog(log);
+    } catch (retryErr: any) {
+      structuredLog("error", "auditLog write failed (after retry)", { error: retryErr?.message, action, entityType, entityId });
+      return undefined;
+    }
+  }
 }
 
 export function safeError(err: any): string {

@@ -60,7 +60,7 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding, tenantDatabases as cpTenantDatabases } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
-import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount } from "../shared/validation";
+import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount, validatePasswordPolicy } from "../shared/validation";
 import { computeServiceCharge } from "../shared/pricing";
 import { checkAvailability } from "./scheduling-availability";
 import {
@@ -1787,8 +1787,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       delete orgData.isWhitelabeled;
       delete orgData.databaseUrl;
     }
-    if (adminEmail && (!adminPassword || String(adminPassword).length < 8)) {
-      return res.status(400).json({ message: "When providing an admin email, a password of min 8 chars is also required." });
+    if (adminEmail) {
+      const adminPasswordPolicyError = validatePasswordPolicy(adminPassword);
+      if (adminPasswordPolicyError) {
+        return res.status(400).json({ message: `When providing an admin email, a valid password is also required: ${adminPasswordPolicyError}` });
+      }
     }
 
     if (adminEmail) {
@@ -1967,12 +1970,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const roles = roleIds && Array.isArray(roleIds) ? await storage.getRolesByIds(roleIds, currentUser.organizationId) : [];
     const hasAgentRole = roles.some((r) => r?.name === "agent");
-    if (hasAgentRole && (!password || String(password).length < 8)) {
-      return res.status(400).json({ message: "Agents require a password of at least 8 characters" });
+    const passwordPolicyError = password ? validatePasswordPolicy(String(password)) : null;
+    if (hasAgentRole && (!password || passwordPolicyError)) {
+      return res.status(400).json({ message: passwordPolicyError ? `Agents require a password: ${passwordPolicyError}` : "Agents require a password" });
     }
 
     let passwordHash: string | undefined;
-    if (password && String(password).length >= 8) {
+    if (password && !passwordPolicyError) {
       passwordHash = await argon2.hash(String(password), { type: argon2.argon2id });
     }
 
@@ -2041,7 +2045,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (displayName !== undefined) updates.displayName = displayName;
     if (isActive !== undefined) updates.isActive = isActive;
     if (branchId !== undefined) updates.branchId = branchId;
-    if (password !== undefined && String(password).length >= 8) {
+    if (password !== undefined && password && !validatePasswordPolicy(String(password))) {
       updates.passwordHash = await argon2.hash(String(password), { type: argon2.argon2id });
     }
     if (phone !== undefined) updates.phone = phone || null;
@@ -2268,8 +2272,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const before = (await storage.getReminders(effectiveUserId, user.organizationId)).find((r) => r.id === req.params.id) ?? null;
       const updated = await storage.updateReminder(req.params.id as string, req.body, effectiveUserId, user.organizationId);
       if (!updated) return res.status(404).json({ message: "Not found" });
+      await auditLog(req, "UPDATE_REMINDER", "Reminder", req.params.id as string, before, updated);
       return res.json(updated);
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -2280,7 +2286,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const before = (await storage.getReminders(effectiveUserId, user.organizationId)).find((r) => r.id === req.params.id) ?? null;
       await storage.deleteReminder(req.params.id as string, effectiveUserId, user.organizationId);
+      await auditLog(req, "DELETE_REMINDER", "Reminder", req.params.id as string, before, null);
       return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -4484,6 +4492,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
 
+    await auditLog(req, "SYNC_POLICY_MEMBERS", "Policy", policy.id, { existingMembers }, { added, existingMembers });
     return res.json({ synced: added, total: existingMembers.length + added + (existingClientIds.has(policy.clientId) ? 0 : 1) });
   });
 
@@ -5639,6 +5648,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           results.push({ id: clearedReceipt.id, policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
         }
       }
+      await auditLog(req, "CREATE_GROUP_RECEIPT", "PaymentReceiptGroup", groupRef, null, { groupId, results, amountNum, isBackdated }, undefined, txDb);
     });
     if (!isBackdated) {
       // Platform fee on each cleared group receipt (not on pending approvals). Awaited (not a
@@ -6020,6 +6030,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
     const user = req.user as any;
     const result = await runApplyCreditBalances(user.organizationId, user.id);
+    await auditLog(req, "APPLY_CREDIT_BALANCES", "Policy", undefined, null, result);
     return res.json(result);
   });
 
@@ -7139,15 +7150,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const k of ["name", "role", "phone", "email", "isActive"]) {
       if (req.body[k] !== undefined) patch[k] = req.body[k];
     }
+    const before = (await storage.getParlourPersonnel(user.organizationId)).find((p: any) => p.id === id) ?? null;
     const updated = await storage.updateParlourPersonnel(id, user.organizationId, patch);
     if (!updated) return res.status(404).json({ message: "Personnel not found" });
-    await auditLog(req, "UPDATE_PARLOUR_PERSONNEL", "ParlourPersonnel", id, null, updated);
+    await auditLog(req, "UPDATE_PARLOUR_PERSONNEL", "ParlourPersonnel", id, before, updated);
     return res.json(updated);
   });
 
   app.delete("/api/parlour-personnel/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    await storage.deleteParlourPersonnel(String(req.params.id), user.organizationId);
+    const id = String(req.params.id);
+    const before = (await storage.getParlourPersonnel(user.organizationId)).find((p: any) => p.id === id) ?? null;
+    await storage.deleteParlourPersonnel(id, user.organizationId);
+    await auditLog(req, "DELETE_PARLOUR_PERSONNEL", "ParlourPersonnel", id, before, null);
     return res.json({ success: true });
   });
 
@@ -10928,8 +10943,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     agentId: string | null,
     effectiveBranchId: string | null,
   ): Promise<void> {
-    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary } = req.body;
+    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt } = req.body;
     const nationalIdNorm = normalizeNationalId(nationalId)!;
+    // Best-effort — a missing/malformed value just means consent wasn't recorded, not a
+    // registration failure (older clients calling this endpoint, e.g. agent-app, won't send it).
+    const consentedAtDate = typeof rawConsentedAt === "string" && !isNaN(Date.parse(rawConsentedAt)) ? new Date(rawConsentedAt) : null;
     const normalizedPaymentMethod = normalizePaymentMethodInput(rawPaymentMethod);
     const pv = await storage.getProductVersion(productVersionId, orgId);
     if (!pv) { res.status(400).json({ message: "Invalid product version" }); return; }
@@ -10948,6 +10966,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
       if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
       if (nationalIdTrim) updates.nationalId = nationalIdTrim;
+      if (!(client as any).consentedAt && consentedAtDate) updates.consentedAt = consentedAtDate;
       if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       if (agentId && !(client as any).agentId) updates.agentId = agentId;
       if (Object.keys(updates).length > 0) {
@@ -10969,6 +10988,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationCode,
         isEnrolled: false,
         agentId: agentId || null,
+        consentedAt: consentedAtDate,
       }));
     }
 
@@ -12408,13 +12428,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const parsed = insertTermsSchema.parse({ ...req.body, organizationId: user.organizationId });
     const created = await storage.createTerms(parsed);
+    await auditLog(req, "CREATE_TERMS", "Terms", created.id, null, created);
     return res.status(201).json(created);
   });
 
   app.patch("/api/terms/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateTerms(req.params.id as string, req.body, user.organizationId);
+    const termsId = req.params.id as string;
+    const before = (await storage.getTermsByOrg(user.organizationId)).find((t: any) => t.id === termsId) ?? null;
+    const updated = await storage.updateTerms(termsId, req.body, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Not found" });
+    await auditLog(req, "UPDATE_TERMS", "Terms", termsId, before, updated);
     return res.json(updated);
   });
 
@@ -12456,7 +12480,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/billing/invoices/:id/pay", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const orgId = (req.user as any).organizationId as string;
     const invoiceId = req.params.id as string;
-    const [invoice] = await cpDb.select({ id: tenantInvoices.id, paymentToken: tenantInvoices.paymentToken }).from(tenantInvoices)
+    const [invoice] = await cpDb.select({ id: tenantInvoices.id, paymentToken: tenantInvoices.paymentToken, status: tenantInvoices.status, paynowStatus: tenantInvoices.paynowStatus }).from(tenantInvoices)
       .where(and(eq(tenantInvoices.id, invoiceId), eq(tenantInvoices.tenantId, orgId))).limit(1);
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
@@ -12470,6 +12494,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       returnUrl: `${base}/staff/billing?paid=1`,
     });
     if (!result.ok) return res.status(400).json({ message: result.error || "Payment initiation failed" });
+    await auditLog(req, "PAY_TENANT_INVOICE", "TenantInvoice", invoiceId, { status: invoice.status, paynowStatus: invoice.paynowStatus }, { paynowStatus: "pending", redirectUrl: result.redirectUrl });
     return res.json({ redirectUrl: result.redirectUrl });
   });
 
@@ -13856,6 +13881,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { db } = await import("./db");
       await (db as any).execute(sql`ALTER TABLE terms_and_conditions ADD COLUMN IF NOT EXISTS product_version_id UUID REFERENCES product_versions(id)`);
       await (db as any).execute(sql`CREATE INDEX IF NOT EXISTS tc_pv_idx ON terms_and_conditions(product_version_id)`);
+      await auditLog(req, "RUN_MIGRATION_TC_PV", "Schema", "terms_and_conditions", null, { column: "product_version_id" });
       return res.json({ success: true, message: "Migration complete: product_version_id column added to terms_and_conditions" });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -13876,6 +13902,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { seedPermissions, seedOrgRoles } = await import("./seed");
       const permMap = await seedPermissions();
       await seedOrgRoles(user.organizationId, permMap);
+      await auditLog(req, "SYNC_PERMISSIONS", "Role", user.organizationId, null, { message: "Permissions and roles synchronized" });
       return res.json({ success: true, message: "Permissions and roles synchronized" });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });

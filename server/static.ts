@@ -34,7 +34,7 @@ export function serveStatic(app: Express) {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate");
     // Re-resolve in case cwd or __dirname differs at request time (e.g. Windows)
     const filePath = fs.existsSync(indexPath) ? indexPath : path.resolve(process.cwd(), "dist", "public", "index.html");
-    res.sendFile(filePath, (err: NodeJS.ErrnoException | null) => {
+    res.sendFile(filePath, (err?: NodeJS.ErrnoException) => {
       if (err) {
         if (err.code === "ENOENT" || (err as any).status === 404) {
           res.status(404).send("Not found");

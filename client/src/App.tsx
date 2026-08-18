@@ -48,6 +48,7 @@ function retryLazy<T>(
   });
 }
 const StaffLogin = lazy(() => retryLazy(() => import("@/pages/staff/login")));
+const StaffMfaVerify = lazy(() => retryLazy(() => import("@/pages/staff/mfa-verify")));
 const AgentLogin = lazy(() => retryLazy(() => import("@/pages/agent/login")));
 const AgentDownload = lazy(() => retryLazy(() => import("@/pages/agent/download")));
 const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
@@ -189,6 +190,7 @@ function Router() {
       <Route path="/" component={Home} />
       
       <SafeRoute path="/staff/login" component={StaffLogin} />
+      <SafeRoute path="/staff/mfa-verify" component={StaffMfaVerify} />
       <SafeRoute path="/agent/login" component={AgentLogin} />
       <SafeRoute path="/agent/download" component={AgentDownload} />
       <SafeRoute path="/staff" component={StaffDashboard} />

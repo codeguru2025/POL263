@@ -1259,10 +1259,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(auditLogs.timestamp)).limit(limit).offset(offset);
     return { rows, total };
   }
-  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+  /** `tx` lets a caller already inside withOrgTransaction pass its transaction handle so the
+   *  audit write commits/rolls back atomically with the mutation it records, instead of being a
+   *  separate connection that could succeed or fail independently. Omit it for the common case
+   *  (a standalone audit write outside any transaction). */
+  async createAuditLog(log: InsertAuditLog, tx?: OrgDataDb): Promise<AuditLog> {
     const orgId = log.organizationId;
     if (!orgId) throw new Error("createAuditLog: organizationId is required");
-    const tdb = await getDbForOrg(orgId);
+    const tdb = tx ?? await getDbForOrg(orgId);
     try {
       const [created] = await tdb.insert(auditLogs).values(log).returning();
       return created;

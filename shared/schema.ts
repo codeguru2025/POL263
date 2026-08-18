@@ -218,6 +218,17 @@ export const users = pgTable(
      *  been located; an unrecognized login email has no row to lock. */
     failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
     lockedUntil: timestamp("locked_until"),
+    /**
+     * TOTP MFA (server/auth.ts POST /api/auth/mfa/*), opt-in — false/null for every user until
+     * they enroll themselves via Settings; nothing forces enrollment. mfaSecret is the base32
+     * TOTP seed, set unconfirmed at /enroll and only trusted once /confirm verifies the first
+     * code and flips mfaEnabled true. mfaBackupCodes are argon2-hashed one-time codes generated
+     * at confirm time, each nulled out (not removed from the array — keeps the count/order
+     * visible) after use.
+     */
+    mfaEnabled: boolean("mfa_enabled").default(false).notNull(),
+    mfaSecret: text("mfa_secret"),
+    mfaBackupCodes: jsonb("mfa_backup_codes").$type<(string | null)[]>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("users_org_idx").on(t.organizationId)]
@@ -368,7 +379,9 @@ export const clients = pgTable(
     title: text("title"),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
+    /** PII: government-issued identifier, classified per docs — data-retention-policy.tsx §2/§3. */
     nationalId: text("national_id"),
+    /** PII: classified per docs — data-retention-policy.tsx §2/§3. */
     dateOfBirth: date("date_of_birth"),
     gender: text("gender"),
     maritalStatus: text("marital_status"),
@@ -396,6 +409,12 @@ export const clients = pgTable(
     notificationTone: text("notification_tone").default("default"),
     /** Whether to send push notifications to registered devices */
     pushEnabled: boolean("push_enabled").default(false).notNull(),
+    /**
+     * When this client (or the staff member registering them on their behalf) acknowledged the
+     * data-retention/privacy policy at registration. Null for records created before this field
+     * existed and for anywhere consent isn't yet captured — never backfilled/inferred.
+     */
+    consentedAt: timestamp("consented_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -612,7 +631,9 @@ export const dependents = pgTable(
     memberNumber: text("member_number"),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
+    /** PII: government-issued identifier, classified per docs — data-retention-policy.tsx §2/§3. */
     nationalId: text("national_id"),
+    /** PII: classified per docs — data-retention-policy.tsx §2/§3. */
     dateOfBirth: date("date_of_birth"),
     gender: text("gender"),
     relationship: text("relationship").notNull(),

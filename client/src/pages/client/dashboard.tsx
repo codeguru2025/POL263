@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 import { apiRequest, getApiBase, apiFetch } from "@/lib/queryClient";
 import ClientLayout from "@/components/layout/client-layout";
 import { PageHeader, PageShell, CardSection } from "@/components/ds";
@@ -134,7 +135,7 @@ function ClientChangePassword() {
           />
         </div>
         <div>
-          <Label className="text-sm" htmlFor="new-password">New password (min 8 characters)</Label>
+          <Label className="text-sm" htmlFor="new-password">New password (min {MIN_PASSWORD_LENGTH} characters, with a letter and a number)</Label>
           <Input id="new-password"
             type="password"
             autoComplete="new-password"
@@ -159,7 +160,7 @@ function ClientChangePassword() {
           onClick={() => changeMutation.mutate({ currentPassword, newPassword })}
           disabled={
             !currentPassword ||
-            newPassword.length < 8 ||
+            !!validatePasswordPolicy(newPassword) ||
             newPassword !== confirmPassword ||
             changeMutation.isPending
           }

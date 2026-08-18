@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -340,7 +341,7 @@ export default function StaffUsers() {
                 </div>
                 {newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && (
                   <div className="space-y-2">
-                    <Label htmlFor="new-user-password">Agent password (min 8 characters)</Label>
+                    <Label htmlFor="new-user-password">Agent password (min {MIN_PASSWORD_LENGTH} characters, with a letter and a number)</Label>
                     <Input id="new-user-password" type="password" placeholder="••••••••" value={newUser.password} onChange={e => setNewUser(p => ({ ...p, password: e.target.value }))} data-testid="input-agent-password" />
                   </div>
                 )}
@@ -399,7 +400,7 @@ export default function StaffUsers() {
               </div>
               <DialogFooter className="px-6 pb-6 pt-4 shrink-0 border-t">
                 <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
-                <Button onClick={() => createMutation.mutate(newUser)} disabled={!newUser.email || createMutation.isPending || (newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && newUser.password.length < 8)} data-testid="button-submit-create-user">
+                <Button onClick={() => createMutation.mutate(newUser)} disabled={!newUser.email || createMutation.isPending || (newUser.roleIds.some(rid => roles.find((r: any) => r.id === rid)?.name === "agent") && !!validatePasswordPolicy(newUser.password))} data-testid="button-submit-create-user">
                   {createMutation.isPending ? "Creating..." : "Create User"}
                 </Button>
               </DialogFooter>
@@ -483,7 +484,7 @@ export default function StaffUsers() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="new-password-optional-min-8-characters">New password (optional, min 8 characters)</Label>
+                  <Label htmlFor="new-password-optional-min-8-characters">New password (optional, min {MIN_PASSWORD_LENGTH} characters, with a letter and a number)</Label>
                   <Input id="new-password-optional-min-8-characters" type="password" placeholder="Leave blank to keep current" value={editingUser.newPassword || ""} onChange={e => setEditingUser((p: any) => ({ ...p, newPassword: e.target.value }))} data-testid="input-edit-agent-password" disabled={!canEditUsers} className={!canEditUsers ? "bg-muted" : undefined} />
                 </div>
                 {branches.length > 0 && (
@@ -707,7 +708,7 @@ export default function StaffUsers() {
                 <Input
                   id="new-pw"
                   type="password"
-                  placeholder="Min. 8 characters"
+                  placeholder={`Min. ${MIN_PASSWORD_LENGTH} characters, with a letter and a number`}
                   value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
                   data-testid="input-reset-password"
@@ -727,15 +728,15 @@ export default function StaffUsers() {
               {newPassword && confirmPassword && newPassword !== confirmPassword && (
                 <p className="text-sm text-destructive">Passwords do not match.</p>
               )}
-              {newPassword && newPassword.length > 0 && newPassword.length < 8 && (
-                <p className="text-sm text-destructive">Password must be at least 8 characters.</p>
+              {newPassword && validatePasswordPolicy(newPassword) && (
+                <p className="text-sm text-destructive">{validatePasswordPolicy(newPassword)}</p>
               )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setResetTarget(null)}>Cancel</Button>
               <Button
                 onClick={() => resetPasswordMutation.mutate({ userId: resetTarget.id, password: newPassword })}
-                disabled={resetPasswordMutation.isPending || newPassword.length < 8 || newPassword !== confirmPassword}
+                disabled={resetPasswordMutation.isPending || !!validatePasswordPolicy(newPassword) || newPassword !== confirmPassword}
                 data-testid="button-confirm-reset-password"
               >
                 {resetPasswordMutation.isPending ? "Resetting..." : "Reset password"}

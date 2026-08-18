@@ -22,12 +22,25 @@ export default function AgentLogin() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
 
   useEffect(() => {
     if (isAuthenticated) {
       setLocation("/staff");
     }
   }, [isAuthenticated, setLocation]);
+
+  const completeLoginRedirect = (data: { redirect?: string }) => {
+    const base = getApiBase();
+    if (data.redirect) {
+      const path = typeof data.redirect === "string" && data.redirect.startsWith("/") ? data.redirect : "/staff";
+      const homeWithReturn = base ? `${base.replace(/\/$/, "")}/?returnTo=${encodeURIComponent(path)}` : `/?returnTo=${encodeURIComponent(path)}`;
+      window.location.href = homeWithReturn;
+    } else {
+      setLocation("/staff");
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,13 +72,41 @@ export default function AgentLogin() {
         }
         return;
       }
-      if (data.redirect) {
-        const path = typeof data.redirect === "string" && data.redirect.startsWith("/") ? data.redirect : "/staff";
-        const homeWithReturn = base ? `${base.replace(/\/$/, "")}/?returnTo=${encodeURIComponent(path)}` : `/?returnTo=${encodeURIComponent(path)}`;
-        window.location.href = homeWithReturn;
-      } else {
-        setLocation("/staff");
+      if (data.mfaRequired) {
+        setMfaRequired(true);
+        return;
       }
+      completeLoginRedirect(data);
+    } catch {
+      setError("Connection error. Please check your internet and try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfaCode.trim()) return;
+    setError("");
+    setSubmitting(true);
+    try {
+      const base = getApiBase();
+      const csrf = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)?.[1];
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (csrf) headers["X-XSRF-TOKEN"] = decodeURIComponent(csrf);
+      const res = await fetch(`${base}/api/agent-auth/mfa-verify`, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ code: mfaCode.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.message || "Invalid code. Please try again.");
+        if (res.status === 401) setMfaRequired(false); // challenge expired — start over
+        return;
+      }
+      completeLoginRedirect(data);
     } catch {
       setError("Connection error. Please check your internet and try again.");
     } finally {
@@ -92,49 +133,83 @@ export default function AgentLogin() {
             {isWhitelabeled ? `${displayName} — Agent Login` : "Agent Login"}
           </CardTitle>
           <CardDescription className="text-base mt-2">
-            Sign in with the email and password set by your administrator. Agents cannot use Google sign-in.
+            {mfaRequired
+              ? "Enter the code from your authenticator app, or one of your backup codes."
+              : "Sign in with the email and password set by your administrator. Agents cannot use Google sign-in."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-agent-login-error">
-                {error}
-              </p>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="agent-email">Email</Label>
-              <Input
-                id="agent-email"
-                type="email"
-                autoComplete="email"
-                placeholder="you@example.com"
-                className="h-11"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={submitting}
-                data-testid="input-agent-email"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="agent-password">Password</Label>
-              <Input
-                id="agent-password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="h-11"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                disabled={submitting}
-                data-testid="input-agent-password"
-              />
-            </div>
-            <Button type="submit" className="w-full h-11 touch-target sm:h-10" disabled={submitting} data-testid="button-agent-login">
-              {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Sign in
-            </Button>
-          </form>
+          {mfaRequired ? (
+            <form onSubmit={handleMfaSubmit} className="space-y-4">
+              {error && (
+                <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-agent-mfa-error">
+                  {error}
+                </p>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="agent-mfa-code">Authentication code</Label>
+                <Input
+                  id="agent-mfa-code"
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                  className="h-11 text-center text-lg tracking-widest"
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  disabled={submitting}
+                  data-testid="input-agent-mfa-code"
+                />
+              </div>
+              <Button type="submit" className="w-full h-11 touch-target sm:h-10" disabled={submitting || !mfaCode.trim()} data-testid="button-agent-mfa-verify">
+                {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Verify
+              </Button>
+              <Button type="button" variant="link" className="w-full text-xs text-muted-foreground" onClick={() => { setMfaRequired(false); setMfaCode(""); setError(""); }}>
+                Back to login
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {error && (
+                <p className="text-sm text-destructive bg-destructive/10 p-3 rounded text-center" data-testid="text-agent-login-error">
+                  {error}
+                </p>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="agent-email">Email</Label>
+                <Input
+                  id="agent-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  className="h-11"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={submitting}
+                  data-testid="input-agent-email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="agent-password">Password</Label>
+                <Input
+                  id="agent-password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  className="h-11"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={submitting}
+                  data-testid="input-agent-password"
+                />
+              </div>
+              <Button type="submit" className="w-full h-11 touch-target sm:h-10" disabled={submitting} data-testid="button-agent-login">
+                {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Sign in
+              </Button>
+            </form>
+          )}
 
           <div className="text-center pt-2 border-t">
             <p className="text-xs text-muted-foreground mb-1">Don&apos;t have the app yet?</p>

@@ -1,6 +1,7 @@
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, KpiStatCard, EmptyState } from "@/components/ds";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -664,9 +665,12 @@ export default function StaffDashboard() {
   });
   const handleCreateTenant = () => {
     if (!newTenant.name.trim()) return;
-    if (newTenant.adminPassword && newTenant.adminPassword.length < 8) {
-      toast({ title: "Validation error", description: "Admin password must be at least 8 characters", variant: "destructive" });
-      return;
+    if (newTenant.adminPassword) {
+      const adminPasswordError = validatePasswordPolicy(newTenant.adminPassword);
+      if (adminPasswordError) {
+        toast({ title: "Validation error", description: adminPasswordError, variant: "destructive" });
+        return;
+      }
     }
     createTenantMutation.mutate(newTenant);
   };
@@ -1066,13 +1070,13 @@ export default function StaffDashboard() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="tenant-admin-password">Password (min 8 chars)</Label>
+                    <Label htmlFor="tenant-admin-password">Password (min {MIN_PASSWORD_LENGTH} chars, with a letter and a number)</Label>
                     <Input
                       id="tenant-admin-password"
                       type="password"
                       value={newTenant.adminPassword}
                       onChange={(e) => setNewTenant((p) => ({ ...p, adminPassword: e.target.value }))}
-                      placeholder="Minimum 8 characters"
+                      placeholder={`Minimum ${MIN_PASSWORD_LENGTH} characters`}
                       data-testid="input-admin-password"
                     />
                   </div>

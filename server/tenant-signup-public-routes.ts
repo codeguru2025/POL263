@@ -16,6 +16,7 @@ import { storage } from "./storage";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { createPendingSignup, initiatePendingSignupPaynow, pollPendingSignupStatus, handleSignupPaynowResult } from "./tenant-signup-service";
 import { structuredLog } from "./logger";
+import { validatePasswordPolicy } from "@shared/validation";
 
 function publicSignupPayPageUrl(token: string): string {
   const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
@@ -46,7 +47,8 @@ export function registerTenantSignupPublicRoutes(app: Express): void {
 
     if (!businessName || typeof businessName !== "string") return res.status(400).json({ message: "businessName is required" });
     if (!adminEmail || typeof adminEmail !== "string") return res.status(400).json({ message: "adminEmail is required" });
-    if (!adminPassword || String(adminPassword).length < 8) return res.status(400).json({ message: "A password of min 8 chars is required" });
+    const adminPasswordPolicyError = validatePasswordPolicy(adminPassword);
+    if (adminPasswordPolicyError) return res.status(400).json({ message: adminPasswordPolicyError });
     if (!planId || typeof planId !== "string") return res.status(400).json({ message: "planId is required" });
     const cycle = billingCycle === "annual" ? "annual" : "monthly";
 

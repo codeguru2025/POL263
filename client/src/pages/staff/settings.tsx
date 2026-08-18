@@ -3,6 +3,7 @@ import { useSearch, useLocation, Link } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -36,6 +37,7 @@ import {
   Trash2,
   KeyRound,
   Shield,
+  ShieldCheck,
   FileText,
   Globe,
   Video,
@@ -271,6 +273,55 @@ export default function StaffSettings() {
       setChangePasswordConfirm("");
     },
   });
+
+  const [mfaDialogOpen, setMfaDialogOpen] = useState(false);
+  const [mfaStep, setMfaStep] = useState<"qr" | "backup-codes">("qr");
+  const [mfaEnrollData, setMfaEnrollData] = useState<{ qrDataUrl: string; secret: string } | null>(null);
+  const [mfaConfirmCode, setMfaConfirmCode] = useState("");
+  const [mfaBackupCodes, setMfaBackupCodes] = useState<string[]>([]);
+  const [mfaDisableDialogOpen, setMfaDisableDialogOpen] = useState(false);
+  const [mfaDisablePassword, setMfaDisablePassword] = useState("");
+
+  const enrollMfaMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/auth/mfa/enroll", {});
+      return res.json();
+    },
+    onSuccess: (data) => setMfaEnrollData(data),
+  });
+
+  const confirmMfaMutation = useMutation({
+    mutationFn: async (code: string) => {
+      const res = await apiRequest("POST", "/api/auth/mfa/confirm", { code });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setMfaBackupCodes(data.backupCodes || []);
+      setMfaStep("backup-codes");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    },
+  });
+
+  const disableMfaMutation = useMutation({
+    mutationFn: async (password: string) => {
+      const res = await apiRequest("POST", "/api/auth/mfa/disable", { password });
+      return res.json();
+    },
+    onSuccess: () => {
+      setMfaDisableDialogOpen(false);
+      setMfaDisablePassword("");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    },
+  });
+
+  const openMfaEnrollDialog = () => {
+    setMfaStep("qr");
+    setMfaEnrollData(null);
+    setMfaConfirmCode("");
+    setMfaBackupCodes([]);
+    setMfaDialogOpen(true);
+    enrollMfaMutation.mutate();
+  };
 
   const openNewTermDialog = () => {
     setEditingTermId(null);
@@ -727,7 +778,7 @@ export default function StaffSettings() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="newPassword">New password (min 8 characters)</Label>
+                  <Label htmlFor="newPassword">New password (min {MIN_PASSWORD_LENGTH} characters, with a letter and a number)</Label>
                   <Input
                     id="newPassword"
                     type="password"
@@ -779,7 +830,7 @@ export default function StaffSettings() {
                   }
                   disabled={
                     !changePasswordCurrent ||
-                    changePasswordNew.length < 8 ||
+                    !!validatePasswordPolicy(changePasswordNew) ||
                     changePasswordNew !== changePasswordConfirm ||
                     changePasswordMutation.isPending
                   }
@@ -789,6 +840,132 @@ export default function StaffSettings() {
                 </Button>
               </div>
             </CardSection>
+
+            <CardSection
+              title="Two-factor authentication"
+              description="Add a second step to sign-in with an authenticator app (Google Authenticator, Authy, 1Password, etc). Opt-in — nothing changes until you enable it."
+              icon={ShieldCheck}
+              className="max-w-2xl mt-6"
+              contentClassName="max-w-md"
+            >
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm text-muted-foreground">
+                  {user?.mfaEnabled
+                    ? "Two-factor authentication is enabled on your account."
+                    : "Two-factor authentication is not enabled."}
+                </p>
+                {user?.mfaEnabled ? (
+                  <Button variant="outline" onClick={() => setMfaDisableDialogOpen(true)} data-testid="button-disable-mfa">
+                    Disable
+                  </Button>
+                ) : (
+                  <Button onClick={openMfaEnrollDialog} data-testid="button-enable-mfa">
+                    Enable
+                  </Button>
+                )}
+              </div>
+            </CardSection>
+
+            <Dialog open={mfaDialogOpen} onOpenChange={(open) => { setMfaDialogOpen(open); if (!open) queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] }); }}>
+              <DialogContent className="max-w-md">
+                {mfaStep === "qr" ? (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>Scan this QR code</DialogTitle>
+                      <DialogDescription>
+                        Scan with your authenticator app, then enter the 6-digit code it shows to confirm.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      {enrollMfaMutation.isPending ? (
+                        <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+                      ) : mfaEnrollData ? (
+                        <>
+                          <div className="flex justify-center">
+                            <img src={mfaEnrollData.qrDataUrl} alt="MFA enrollment QR code" className="h-48 w-48 rounded-lg border" />
+                          </div>
+                          <p className="text-xs text-center text-muted-foreground font-mono break-all">{mfaEnrollData.secret}</p>
+                          <div className="grid gap-2">
+                            <Label htmlFor="mfa-confirm-code">Confirmation code</Label>
+                            <Input
+                              id="mfa-confirm-code"
+                              inputMode="numeric"
+                              autoComplete="one-time-code"
+                              placeholder="123456"
+                              className="text-center text-lg tracking-widest"
+                              value={mfaConfirmCode}
+                              onChange={(e) => setMfaConfirmCode(e.target.value)}
+                              data-testid="input-mfa-confirm-code"
+                            />
+                          </div>
+                          {confirmMfaMutation.isError && (
+                            <p className="text-sm text-destructive">Invalid code — try again.</p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-sm text-destructive">Could not start enrollment. Close and try again.</p>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setMfaDialogOpen(false)}>Cancel</Button>
+                      <Button
+                        onClick={() => confirmMfaMutation.mutate(mfaConfirmCode)}
+                        disabled={!mfaConfirmCode.trim() || confirmMfaMutation.isPending}
+                        data-testid="button-confirm-mfa"
+                      >
+                        {confirmMfaMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Confirm
+                      </Button>
+                    </DialogFooter>
+                  </>
+                ) : (
+                  <>
+                    <DialogHeader>
+                      <DialogTitle>Save your backup codes</DialogTitle>
+                      <DialogDescription>
+                        Each code works once, if you ever lose access to your authenticator app. Store them somewhere safe — they won't be shown again.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid grid-cols-2 gap-2 font-mono text-sm bg-muted/40 rounded-lg p-4">
+                      {mfaBackupCodes.map((c) => <div key={c} data-testid="text-mfa-backup-code">{c}</div>)}
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={() => setMfaDialogOpen(false)} data-testid="button-mfa-done">Done</Button>
+                    </DialogFooter>
+                  </>
+                )}
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={mfaDisableDialogOpen} onOpenChange={setMfaDisableDialogOpen}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Disable two-factor authentication</DialogTitle>
+                  <DialogDescription>Confirm your current password to disable MFA.</DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-2">
+                  <Label htmlFor="mfa-disable-password">Current password</Label>
+                  <Input
+                    id="mfa-disable-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={mfaDisablePassword}
+                    onChange={(e) => setMfaDisablePassword(e.target.value)}
+                    data-testid="input-mfa-disable-password"
+                  />
+                  {disableMfaMutation.isError && (
+                    <p className="text-sm text-destructive">Incorrect password.</p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setMfaDisableDialogOpen(false)}>Cancel</Button>
+                  <Button variant="destructive" onClick={() => disableMfaMutation.mutate(mfaDisablePassword)} disabled={disableMfaMutation.isPending} data-testid="button-confirm-disable-mfa">
+                    {disableMfaMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Disable
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <div className="mt-6">
               <FeatureFlagsCard />

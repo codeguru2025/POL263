@@ -64,18 +64,18 @@ import { structuredLog } from "./logger";
 import { getDbForOrg } from "./tenant-db";
 import { sql } from "drizzle-orm";
 
-interface FullSyncTableDef { table: string; primaryKey: string }
+export interface FullSyncTableDef { table: string; primaryKey: string }
 
 /** Tables that are app-internal bookkeeping, not data worth mirroring. */
 const SYNC_EXCLUDE_TABLES = new Set(["schema_migrations"]);
 
 let backupTimer: ReturnType<typeof setTimeout> | null = null;
 
-function getSupabaseUrl(): string | null {
+export function getSupabaseUrl(): string | null {
   return process.env.SUPABASE_BACKUP_URL || process.env.SUPABASE_BACKUP_DIRECT_URL || null;
 }
 
-async function getBackupPool(): Promise<pg.Pool | null> {
+export async function getBackupPool(): Promise<pg.Pool | null> {
   const url = getSupabaseUrl();
   if (!url) return null;
   const pool = new pg.Pool({
@@ -161,7 +161,7 @@ async function getConflictKeyCols(db: any, table: string): Promise<string> {
  * Tables with neither a primary key nor a unique index are skipped (upsertRows needs one) and
  * logged — this should be rare; every table synced today has one or the other.
  */
-async function discoverSyncTables(db: any, label: string): Promise<FullSyncTableDef[]> {
+export async function discoverSyncTables(db: any, label: string): Promise<FullSyncTableDef[]> {
   const tableRows = extractRows(await db.execute(sql.raw(
     `SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name`
   )));

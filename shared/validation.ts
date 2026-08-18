@@ -90,3 +90,22 @@ export function toDecimalNumber(v: unknown): number {
   const n = parseFloat(String(v ?? "0"));
   return Number.isFinite(n) ? n : 0;
 }
+
+export const MIN_PASSWORD_LENGTH = 12;
+
+/**
+ * Password policy applied to every set/change/reset path (staff, agent, client): a length floor
+ * plus a minimal complexity requirement (at least one letter and one digit) to rule out the
+ * weakest common choices, without a breach-list check (would need an outbound third-party call).
+ * Returns null when valid, or a user-facing message when not — callers just check truthiness.
+ */
+export function validatePasswordPolicy(password: string | null | undefined): string | null {
+  const pw = password ?? "";
+  if (pw.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  }
+  if (!/[A-Za-z]/.test(pw) || !/[0-9]/.test(pw)) {
+    return "Password must include at least one letter and one number";
+  }
+  return null;
+}

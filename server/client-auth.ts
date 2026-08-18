@@ -1,4 +1,13 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** Set by requireClientAuth() below — the authenticated client portal session, mirroring req.user for staff. */
+      client?: { id: string; organizationId: string };
+    }
+  }
+}
 import { differenceInCalendarMonths } from "date-fns";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
@@ -12,6 +21,7 @@ import { withOrgTransaction } from "./tenant-db";
 import { sql } from "drizzle-orm";
 import { sendEmail } from "./email-service";
 import { hasModule } from "./module-gate";
+import { validatePasswordPolicy } from "@shared/validation";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -98,6 +108,40 @@ function clientCanAccessPaymentIntent(session: any, intent: { clientId: string }
   return false;
 }
 
+// 45 min of inactivity ends the session even within the cookie's own longer lifetime — same
+// idea as requireAuth's idle check on the staff side (server/auth.ts), applied here since client
+// auth has no shared middleware of its own to hang it off until now.
+const CLIENT_IDLE_TIMEOUT_MS = 45 * 60 * 1000;
+
+/**
+ * Central session-existence gate for the client portal, replacing the `(req.session as
+ * any)?.clientId` check every route used to repeat inline (see docs/BUGFIX-LOG.md-style audit
+ * findings — that pattern meant a future route could forget the check and fail open silently).
+ * Attaches a normalized `req.client`, mirroring `req.user` on the staff side. Does NOT replace
+ * the per-resource ownership checks each handler still does (e.g. `policy.clientId !==
+ * req.client.id`) — only the "is there a session" boilerplate.
+ * `/api/client-auth/me` and `/api/client-auth/tenant` intentionally do not use this — they have
+ * looser, route-specific session requirements (me tolerates a missing org via cross-org lookup;
+ * tenant only needs the org, not a client).
+ */
+function requireClientAuth(req: Request, res: Response, next: NextFunction) {
+  const session = req.session as any;
+  const clientId = session?.clientId;
+  const clientOrgId = session?.clientOrgId;
+  if (!clientId || !clientOrgId) {
+    return res.status(401).json({ message: "Not authenticated" });
+  }
+  const now = Date.now();
+  if (session.clientLastActivityAt && now - session.clientLastActivityAt > CLIENT_IDLE_TIMEOUT_MS) {
+    return req.session.destroy(() => {
+      res.status(401).json({ message: "Session expired due to inactivity" });
+    });
+  }
+  session.clientLastActivityAt = now;
+  req.client = { id: clientId, organizationId: clientOrgId };
+  next();
+}
+
 export function setupClientAuth(app: Express) {
   app.post("/api/client-auth/claim", async (req: Request, res: Response) => {
     const { activationCode } = req.body;
@@ -146,8 +190,9 @@ export function setupClientAuth(app: Express) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    const enrollPasswordError = validatePasswordPolicy(password);
+    if (enrollPasswordError) {
+      return res.status(400).json({ message: enrollPasswordError });
     }
 
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -330,12 +375,9 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.get("/api/client-auth/policies", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
+  app.get("/api/client-auth/policies", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
 
     async function enrichWithBalance(policies: any[], orgId: string) {
       const enriched = [];
@@ -399,10 +441,9 @@ export function setupClientAuth(app: Express) {
   });
 
   /** Look up another client to pay for their policy. Supports phone, policy number, and national ID lookup. */
-  app.get("/api/client-auth/lookup-by-phone", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/lookup-by-phone", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
 
     const searchType = typeof req.query.type === "string" ? req.query.type : "phone";
     const q = typeof req.query.q === "string" ? req.query.q.trim()
@@ -452,13 +493,9 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.get("/api/client-auth/policies/:id/payments", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/policies/:id/payments", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) {
       return res.status(403).json({ message: "Access denied" });
@@ -466,13 +503,9 @@ export function setupClientAuth(app: Express) {
     return res.json(await storage.getPaymentsByPolicy(policy.id, clientOrgId));
   });
 
-  app.get("/api/client-auth/policies/:id/members", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
-    if (!clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/policies/:id/members", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) {
       return res.status(403).json({ message: "Access denied" });
@@ -480,10 +513,9 @@ export function setupClientAuth(app: Express) {
     return res.json(await storage.getPolicyMembers(policy.id, clientOrgId));
   });
 
-  app.get("/api/client-auth/policies/:id/document", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/policies/:id/document", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
     const attachment =
@@ -494,18 +526,16 @@ export function setupClientAuth(app: Express) {
     await streamPolicyDocumentToResponse(policy.id, clientOrgId, res, { attachment });
   });
 
-  app.get("/api/client-auth/claims", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/claims", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const list = await storage.getClaimsByClient(clientId, clientOrgId);
     return res.json(list);
   });
 
-  app.post("/api/client-auth/claims", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/claims", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { policyId, claimType, deceasedName, deceasedRelationship, dateOfDeath, causeOfDeath } = req.body;
     if (!policyId || !claimType) return res.status(400).json({ message: "Policy and claim type are required" });
     const policy = await storage.getPolicy(policyId, clientOrgId);
@@ -545,18 +575,16 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.get("/api/client-auth/feedback", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/feedback", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const list = await storage.getFeedbackByClient(clientId, clientOrgId);
     return res.json(list);
   });
 
-  app.post("/api/client-auth/feedback", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/feedback", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { type, subject, message } = req.body;
     if (!type || !subject || !message) return res.status(400).json({ message: "Type, subject, and message are required" });
     if (type !== "complaint" && type !== "feedback") return res.status(400).json({ message: "Type must be complaint or feedback" });
@@ -582,6 +610,10 @@ export function setupClientAuth(app: Express) {
     const policyNumber = normalizePolicyNumber(req.body.policyNumber);
     if (!policyNumber || !securityAnswer || !newPassword) {
       return constantTimeResponse(res, 400, { message: "All fields are required" });
+    }
+    const resetPasswordError = validatePasswordPolicy(newPassword);
+    if (resetPasswordError) {
+      return constantTimeResponse(res, 400, { message: resetPasswordError });
     }
 
     try {
@@ -638,18 +670,16 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.post("/api/client-auth/change-password", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) {
-      return res.status(401).json({ message: "Not authenticated" });
-    }
+  app.post("/api/client-auth/change-password", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ message: "Current password and new password are required" });
     }
-    if (String(newPassword).length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    const changePasswordError = validatePasswordPolicy(newPassword);
+    if (changePasswordError) {
+      return res.status(400).json({ message: changePasswordError });
     }
     const client = await storage.getClient(clientId, clientOrgId);
     if (!client || !client.passwordHash) {
@@ -664,10 +694,9 @@ export function setupClientAuth(app: Express) {
     return res.json({ message: "Password updated" });
   });
 
-  app.get("/api/client-auth/credit-balance", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/credit-balance", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policies = await storage.getPoliciesByClient(clientId, clientOrgId);
     const balances = await Promise.all(
       policies.map(async (p) => {
@@ -697,10 +726,9 @@ export function setupClientAuth(app: Express) {
   });
 
   // ─── Client payment intents (Paynow) ────────────────────────
-  app.post("/api/client-auth/payment-intents", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/payment-intents", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { policyId, amount, purpose, idempotencyKey, payForClientId } = req.body;
     if (!policyId || amount == null || !idempotencyKey) {
       return res.status(400).json({ message: "policyId, amount, and idempotencyKey are required" });
@@ -746,10 +774,9 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.post("/api/client-auth/payment-intents/:id/initiate", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/payment-intents/:id/initiate", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
@@ -784,10 +811,9 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.post("/api/client-auth/payment-intents/:id/otp", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/payment-intents/:id/otp", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
@@ -810,10 +836,9 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.get("/api/client-auth/payment-intents/:id/status", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/payment-intents/:id/status", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const intentId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     try {
       const intent = await storage.getPaymentIntentById(intentId, clientOrgId);
@@ -830,26 +855,23 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.get("/api/client-auth/payment-intents", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/payment-intents", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const intents = await storage.getPaymentIntentsByClient(clientId, clientOrgId);
     return res.json(intents);
   });
 
-  app.get("/api/client-auth/receipts", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/receipts", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const receipts = await storage.getPaymentReceiptsByClient(clientId, clientOrgId);
     return res.json(receipts);
   });
 
-  app.get("/api/client-auth/receipts/:id/download", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/receipts/:id/download", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const receiptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const receipt = await storage.getPaymentReceiptById(receiptId, clientOrgId);
     if (!receipt || receipt.clientId !== clientId) return res.status(404).json({ message: "Not found" });
@@ -876,50 +898,44 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.get("/api/client-auth/notifications", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/notifications", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const logs = await storage.getClientNotifications(clientId, clientOrgId, 50);
     return res.json(logs);
   });
 
-  app.get("/api/client-auth/notifications/unread-count", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/notifications/unread-count", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const count = await storage.getUnreadNotificationCount(clientId, clientOrgId);
     return res.json({ count });
   });
 
-  app.patch("/api/client-auth/notifications/:id/read", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.patch("/api/client-auth/notifications/:id/read", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     await storage.markNotificationRead(req.params.id as string, clientId, clientOrgId);
     return res.json({ success: true });
   });
 
-  app.patch("/api/client-auth/notifications/mark-all-read", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.patch("/api/client-auth/notifications/mark-all-read", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     await storage.markAllNotificationsRead(clientId, clientOrgId);
     return res.json({ success: true });
   });
 
-  app.get("/api/client-auth/credit-notes", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/credit-notes", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const notes = await storage.getCreditNotesByClient(clientId, clientOrgId);
     return res.json(notes);
   });
 
-  app.get("/api/client-auth/settings", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/settings", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const client = await storage.getClient(clientId, clientOrgId);
     if (!client) return res.status(401).json({ message: "Not authenticated" });
     return res.json({
@@ -928,10 +944,9 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.patch("/api/client-auth/settings", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.patch("/api/client-auth/settings", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { notificationTone, pushEnabled } = req.body || {};
     const updates: Record<string, unknown> = {};
     if (notificationTone !== undefined && ["default", "silent", "high"].includes(notificationTone)) {
@@ -947,10 +962,9 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.post("/api/client-auth/register-device", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/register-device", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { token, platform } = req.body || {};
     if (!token || typeof token !== "string" || !token.trim()) {
       return res.status(400).json({ message: "token is required" });
@@ -960,10 +974,9 @@ export function setupClientAuth(app: Express) {
     return res.status(204).send();
   });
 
-  app.delete("/api/client-auth/register-device", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.delete("/api/client-auth/register-device", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { token } = req.body || {};
     if (!token || typeof token !== "string" || !token.trim()) {
       return res.status(400).json({ message: "token is required" });
@@ -973,18 +986,16 @@ export function setupClientAuth(app: Express) {
   });
 
   // ─── Group executive auto-recognition ────────────────────
-  app.get("/api/client-auth/my-groups", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/my-groups", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const groups = await storage.getGroupsWhereClientIsExecutive(clientOrgId, clientId);
     return res.json(groups);
   });
 
-  app.get("/api/client-auth/group/:groupId/policies", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/group/:groupId/policies", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const groups = await storage.getGroupsWhereClientIsExecutive(clientOrgId, clientId);
     const group = groups.find(g => g.id === req.params.groupId);
     if (!group) return res.status(403).json({ message: "You are not an executive of this group" });
@@ -1003,10 +1014,9 @@ export function setupClientAuth(app: Express) {
     return res.json(enriched);
   });
 
-  app.post("/api/client-auth/group-receipt", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/group-receipt", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { groupId, policyIds, totalAmount, currency } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || !totalAmount) {
       return res.status(400).json({ message: "groupId, policyIds, and totalAmount required" });
@@ -1039,18 +1049,16 @@ export function setupClientAuth(app: Express) {
   });
 
   // ─── Dependents (client self-service) ─────────────────────
-  app.get("/api/client-auth/dependents", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/dependents", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const deps = await storage.getDependentsByClient(clientId, clientOrgId);
     return res.json(deps);
   });
 
-  app.post("/api/client-auth/dependents", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.post("/api/client-auth/dependents", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const { firstName, lastName, relationship, dateOfBirth, nationalId, gender } = req.body || {};
     if (!firstName || !lastName || !relationship) {
       return res.status(400).json({ message: "First name, last name, and relationship are required" });
@@ -1073,10 +1081,9 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.delete("/api/client-auth/dependents/:id", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.delete("/api/client-auth/dependents/:id", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!id) return res.status(400).json({ message: "Dependent id required" });
     const deps = await storage.getDependentsByClient(clientId, clientOrgId);
@@ -1087,19 +1094,17 @@ export function setupClientAuth(app: Express) {
   });
 
   // ─── Client uploaded documents (ID, proof of residence, etc.) ──────────
-  app.get("/api/client-auth/my-documents", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/my-documents", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const docs = await storage.getClientDocuments(clientId, clientOrgId);
     return res.json(docs);
   });
 
   // ─── Beneficiary per policy (client self-service) ──────────
-  app.get("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/client-auth/policies/:id/beneficiary", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
     if (!policy.beneficiaryFirstName) return res.json(null);
@@ -1113,10 +1118,9 @@ export function setupClientAuth(app: Express) {
     });
   });
 
-  app.put("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.put("/api/client-auth/policies/:id/beneficiary", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
 
@@ -1151,10 +1155,9 @@ export function setupClientAuth(app: Express) {
     return res.json({ message: "Beneficiary set" });
   });
 
-  app.delete("/api/client-auth/policies/:id/beneficiary", async (req: Request, res: Response) => {
-    const clientId = (req.session as any)?.clientId;
-    const clientOrgId = (req.session as any)?.clientOrgId;
-    if (!clientId || !clientOrgId) return res.status(401).json({ message: "Not authenticated" });
+  app.delete("/api/client-auth/policies/:id/beneficiary", requireClientAuth, async (req: Request, res: Response) => {
+    const clientId = req.client!.id;
+    const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
     await storage.updatePolicy(policy.id, {

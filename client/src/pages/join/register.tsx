@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { isValidNationalId } from "@shared/validation";
 import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star, Clock } from "lucide-react";
@@ -80,6 +81,7 @@ export default function JoinRegisterPage() {
     firstName: "", lastName: "", relationship: "", nationalId: "", phone: "", fromDependentIndex: null,
   });
   const [showBenForm, setShowBenForm] = useState(false);
+  const [agreedToPolicy, setAgreedToPolicy] = useState(false);
 
   useEffect(() => {
     if (!refCode && !orgCode) {
@@ -202,6 +204,7 @@ export default function JoinRegisterPage() {
     if (!form.nationalId.trim()) missing.push("National ID");
     else if (!isValidNationalId(form.nationalId)) missing.push("Valid national ID (e.g. 08833089H38)");
     if (!form.gender.trim()) missing.push("Gender");
+    if (!agreedToPolicy) missing.push("Agreement to the data retention & privacy policy");
     if (missing.length > 0) {
       toast({ title: "Missing fields", description: `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required.`, variant: "destructive" });
       return;
@@ -220,6 +223,7 @@ export default function JoinRegisterPage() {
         branchId: form.branchId || undefined,
         premiumAmount: form.premiumAmount ? String(form.premiumAmount) : undefined,
         currency: form.premiumCurrency || undefined,
+        consentedAt: new Date().toISOString(),
       };
       const payload: Record<string, unknown> = isWalkIn
         ? { orgId: options.orgId, ...commonFields }
@@ -699,12 +703,28 @@ export default function JoinRegisterPage() {
                 </select>
               </div>
             )}
+
+            <div className="flex items-start gap-2 pt-1">
+              <Checkbox
+                id="agree-to-policy"
+                checked={agreedToPolicy}
+                onCheckedChange={(v) => setAgreedToPolicy(v === true)}
+                data-testid="checkbox-agree-to-policy"
+              />
+              <Label htmlFor="agree-to-policy" className="cursor-pointer text-sm font-normal text-muted-foreground leading-snug">
+                I agree to the{" "}
+                <a href="/legal/data-retention-policy" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground">
+                  Data Retention &amp; Privacy Policy
+                </a>
+                , including how my details and any dependants' details will be used and stored.
+              </Label>
+            </div>
           </CardContent>
           <CardFooter className="flex gap-2">
             <Button type="button" variant="outline" onClick={() => setLocation("/join" + (refCode ? `?ref=${refCode}` : ""))}>
               Back
             </Button>
-            <Button type="submit" disabled={submitLoading} className="gap-2" data-testid="btn-save-registration">
+            <Button type="submit" disabled={submitLoading || !agreedToPolicy} className="gap-2" data-testid="btn-save-registration">
               {submitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Save & get policy number
             </Button>

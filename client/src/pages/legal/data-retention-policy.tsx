@@ -129,7 +129,38 @@ export default function DataRetentionPolicyPage() {
             </p>
           </Clause>
 
-          <Clause num="6" title="Review">
+          <Clause num="6" title="Sub-processors">
+            <p>
+              POL263 uses a small set of third-party services to run the platform. None of them receive more data than
+              their role requires, and none are permitted to use it for anything beyond that role.
+            </p>
+            <div className="overflow-x-auto not-prose">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="text-left">
+                    <th className="font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground font-semibold border-b py-2 pr-3">Sub-processor</th>
+                    <th className="font-mono text-[0.68rem] uppercase tracking-wide text-muted-foreground font-semibold border-b py-2">Role</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ["PayNow", "Processes premium payments. Card and PIN entry happen on PayNow's own systems, never POL263's."],
+                    ["Google", "Optional sign-in (OAuth) for staff and clients who choose it."],
+                    ["DigitalOcean", "Hosts the application and stores uploaded documents (KYC copies, signatures)."],
+                    ["Resend", "Delivers transactional email — receipts, notifications, password resets."],
+                    ["Anthropic", "Optional AI-assisted note summaries and insights for staff, only where a tenant has this enabled."],
+                  ].map(([label, purpose]) => (
+                    <tr key={label} className="border-b align-top last:border-b-0">
+                      <td className="py-2 pr-3 font-medium whitespace-nowrap">{label}</td>
+                      <td className="py-2">{purpose}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Clause>
+
+          <Clause num="7" title="Review">
             <p>Review this policy annually, and whenever Zimbabwe's data-protection regulatory landscape changes materially.</p>
           </Clause>
 

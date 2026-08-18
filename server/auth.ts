@@ -5,6 +5,8 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import argon2 from "argon2";
 import crypto from "crypto";
+import { generateSecret as generateTotpSecret, generateURI as generateTotpURI, verify as verifyTotp } from "otplib";
+import QRCode from "qrcode";
 import { eq } from "drizzle-orm";
 import { pool } from "./db";
 import { storage } from "./storage";
@@ -15,6 +17,8 @@ import { PLATFORM_OWNER_EMAIL } from "./constants";
 import { isAgentScoped } from "@shared/roles";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants } from "@shared/control-plane-schema";
+import { validatePasswordPolicy } from "@shared/validation";
+import { auditLog } from "./route-helpers";
 
 const PgSession = connectPgSimple(session);
 
@@ -138,6 +142,272 @@ async function isTenantAccessAllowed(orgId: string): Promise<boolean> {
 
 function baseUrlFromEnv() {
   return (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+}
+
+/**
+ * Finishes a staff Google-OAuth login: req.login + the session-fixation regenerate/restore
+ * dance, then the full tenant/platform-owner/mobile redirect decision tree — unchanged from what
+ * this used to be inline in the /api/auth/google/callback handler. Factored out so the MFA
+ * verify step (POST /api/auth/mfa/verify-login) can run the exact same completion logic after a
+ * successful code, without duplicating ~130 lines of redirect logic. `asJson` swaps the response
+ * mechanism only: the original GET callback still does a browser redirect; the JSON-based verify
+ * endpoint gets `{ redirectUrl }` back instead, since a fetch() response can't navigate the page
+ * itself — reads authReturnTo/authTenantId/isMobileAuth from req.session exactly as before, which
+ * still works from the verify-login request because that session (and those fields, written
+ * during the original OAuth callback) persists across the MFA-challenge round trip.
+ */
+async function completeGoogleLogin(req: Request, res: Response, next: NextFunction, user: any, opts: { asJson?: boolean } = {}) {
+  const finish = (url: string) => (opts.asJson ? res.json({ redirectUrl: url }) : res.redirect(url));
+  req.login(user, async (loginErr) => {
+    if (loginErr) return next(loginErr);
+
+    // Capture session state before regeneration, then regenerate to prevent session fixation.
+    const sessionAny = req.session as any;
+    const returnTo = sessionAny?.authReturnTo as string | undefined;
+    const authTenantIdPre = sessionAny?.authTenantId as string | undefined;
+    const isMobileAuth = sessionAny?.isMobileAuth as boolean | undefined;
+    const passportData = sessionAny.passport;
+    try {
+      await new Promise<void>((resolve, reject) =>
+        req.session.regenerate((e) => (e ? reject(e) : resolve()))
+      );
+      const newSess = req.session as any;
+      newSess.passport = passportData;
+      await new Promise<void>((resolve, reject) =>
+        req.session.save((e) => (e ? reject(e) : resolve()))
+      );
+    } catch (e) {
+      return next(e as Error);
+    }
+
+    // Mobile OAuth: generate a one-time token and deep-link back into the app.
+    // The WebView can't use the external-browser session cookie, so it exchanges
+    // this token for a fresh session via POST /api/auth/mobile-exchange.
+    if (isMobileAuth) {
+      const token = crypto.randomBytes(32).toString("hex");
+      mobileAuthTokens.set(token, {
+        userId: user.id,
+        orgId: user.organizationId || undefined,
+        expiresAt: Date.now() + 5 * 60_000,
+      });
+      return finish(`pol263://auth/callback?token=${token}`);
+    }
+
+    // Redirect to home with returnTo so the client can redirect after auth is ready (avoids error page on first load).
+    const pathFromReturnTo = returnTo
+      ? (returnTo.startsWith("http") ? new URL(returnTo).pathname : returnTo)
+      : null;
+    if (pathFromReturnTo) {
+      const baseUrl = baseUrlFromEnv();
+      const host = req.get("host");
+      const proto =
+        (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
+        (req as any).protocol ||
+        "http";
+      const origin = baseUrl || (host ? `${proto}://${host}` : "");
+      const homeWithReturn = origin
+        ? `${origin}/?returnTo=${encodeURIComponent(pathFromReturnTo)}`
+        : `/?returnTo=${encodeURIComponent(pathFromReturnTo)}`;
+      return finish(homeWithReturn);
+    }
+
+    const baseUrl = baseUrlFromEnv();
+    const staffPath = "/staff";
+
+    const loggedInUser = req.user as any;
+
+    // If the login was initiated from a tenant subdomain (authTenantId saved
+    // by /api/auth/google), activate that tenant so the platform owner lands
+    // on that tenant's dashboard rather than the control plane.
+    const authTenantId = authTenantIdPre;
+    if (authTenantId) {
+      (req.session as any).activeTenantId = authTenantId;
+      const homeWithReturn = baseUrl
+        ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
+        : `/?returnTo=${encodeURIComponent(staffPath)}`;
+      return finish(homeWithReturn);
+    }
+
+    // ✅ If platform owner logged in but has no tenant selected/created yet, send them to tenant setup/selection.
+    if (loggedInUser?.isPlatformOwner && !loggedInUser?.organizationId) {
+      const tenantSetupPath = "/staff/tenants";
+      const homeWithReturn = baseUrl
+        ? `${baseUrl}/?returnTo=${encodeURIComponent(tenantSetupPath)}`
+        : `/?returnTo=${encodeURIComponent(tenantSetupPath)}`;
+      return finish(homeWithReturn);
+    }
+
+    // If the platform owner logged in NOT via a tenant subdomain (authTenantId unset,
+    // handled above) and isn't already on the dedicated control-plane subdomain, send
+    // them there. Mirrors the regular-staff → tenant-subdomain redirect just below, but
+    // for the platform owner — keeps pol263.com from serving the platform console too.
+    if (loggedInUser?.isPlatformOwner && baseUrl) {
+      const mainHost = new URL(baseUrl).hostname;
+      const adminSub = (process.env.PLATFORM_ADMIN_SUBDOMAIN || "controlpanel").toLowerCase();
+      const currentHost = req.get("host")?.split(":")[0]?.toLowerCase();
+      if (currentHost !== `${adminSub}.${mainHost}`) {
+        const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
+        return finish(`${proto}://${adminSub}.${mainHost}/?returnTo=${encodeURIComponent(staffPath)}`);
+      }
+    }
+
+    // If a regular staff member logged in from the main domain (no authTenantId
+    // means they didn't come via a tenant subdomain), redirect them to their
+    // tenant's subdomain. This prevents pol263.com from serving tenant dashboards
+    // and ensures staff always land on their branded subdomain.
+    if (!loggedInUser?.isPlatformOwner && loggedInUser?.organizationId && baseUrl) {
+      try {
+        const mainHost = new URL(baseUrl).hostname; // e.g. "pol263.com"
+        const [tenantRow] = await cpDb
+          .select({ slug: cpTenants.slug })
+          .from(cpTenants)
+          .where(eq(cpTenants.id, loggedInUser.organizationId))
+          .limit(1);
+        if (tenantRow?.slug) {
+          const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
+          const tenantOrigin = `${proto}://${tenantRow.slug}.${mainHost}`;
+          return finish(`${tenantOrigin}/?returnTo=${encodeURIComponent(staffPath)}`);
+        }
+      } catch {
+        // Control plane unreachable — fall through to default redirect below.
+      }
+    }
+
+    const homeWithReturn = baseUrl
+      ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
+      : (() => {
+          const host = req.get("host");
+          const proto =
+            (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
+            (req as any).protocol ||
+            "http";
+          const sameOrigin = host ? `${proto}://${host}` : "";
+          return sameOrigin ? `${sameOrigin}/?returnTo=${encodeURIComponent(staffPath)}` : `/?returnTo=${encodeURIComponent(staffPath)}`;
+        })();
+    return finish(homeWithReturn);
+  });
+}
+
+/**
+ * Staff/agent has a password (or Google identity) verified but is enrolled in MFA — stash a
+ * short-lived pending marker in the session instead of completing req.login, and send them to
+ * the code-entry step. Mirrors requireClientAuth's session shape convention on the client side.
+ */
+function beginStaffMfaChallenge(req: Request, res: Response, next: NextFunction, user: any, respond: (challenge: true) => void) {
+  const sessionAny = req.session as any;
+  sessionAny.pendingMfaUserId = user.id;
+  sessionAny.pendingMfaOrgId = user.organizationId || null;
+  sessionAny.pendingMfaExpiresAt = Date.now() + 5 * 60_000;
+  sessionAny.pendingMfaFailedAttempts = 0;
+  sessionAny.save((err: Error | null) => {
+    if (err) return next(err);
+    respond(true);
+  });
+}
+
+/** Finishes an agent password login — req.login + session-fixation regenerate, same shape as
+ *  completeGoogleLogin but for the JSON-based agent login API rather than a browser redirect
+ *  flow. Factored out so POST /api/agent-auth/mfa-verify can call it after a successful code. */
+async function completeAgentLogin(req: Request, res: Response, user: any): Promise<void> {
+  return new Promise<void>((resolveOuter) => {
+    req.login(user, async (err) => {
+      if (err) {
+        res.status(500).json({ message: "Login failed" });
+        return resolveOuter();
+      }
+      // Regenerate session ID to prevent session fixation.
+      const passportData = (req.session as any).passport;
+      try {
+        await new Promise<void>((resolve, reject) =>
+          req.session.regenerate((e) => (e ? reject(e) : resolve()))
+        );
+        (req.session as any).passport = passportData;
+        await new Promise<void>((resolve, reject) =>
+          req.session.save((e) => (e ? reject(e) : resolve()))
+        );
+      } catch {
+        res.status(500).json({ message: "Login failed" });
+        return resolveOuter();
+      }
+      structuredLog("info", "Agent login successful", { userId: user.id, email: user.email });
+      res.json({ user: sanitizeUser(user), redirect: "/staff" });
+      resolveOuter();
+    });
+  });
+}
+
+function generateBackupCodes(count = 8): string[] {
+  const codes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const raw = crypto.randomBytes(5).toString("hex").toUpperCase(); // 10 hex chars
+    codes.push(`${raw.slice(0, 5)}-${raw.slice(5)}`);
+  }
+  return codes;
+}
+
+const MFA_PENDING_MAX_ATTEMPTS = 5;
+
+/** Re-derives the user a pending MFA challenge (see beginStaffMfaChallenge) is for, from the
+ *  session marker rather than req.user — the user isn't logged in yet at this point. Mirrors
+ *  the mobile-exchange token-resolution pattern (tenant DB first, then the shared registry). */
+async function resolvePendingMfaUser(req: Request): Promise<any | null> {
+  const sessionAny = req.session as any;
+  const userId = sessionAny?.pendingMfaUserId as string | undefined;
+  const expiresAt = sessionAny?.pendingMfaExpiresAt as number | undefined;
+  if (!userId || !expiresAt || Date.now() > expiresAt) return null;
+  const orgId = sessionAny?.pendingMfaOrgId as string | undefined;
+  return storage.getUser(userId, orgId || undefined);
+}
+
+/**
+ * Checks a submitted code (TOTP or a backup code) against the pending-MFA user's session marker,
+ * writes the appropriate response and returns null on any failure (expired challenge, too many
+ * bad attempts, wrong code) or the resolved user on success — clearing the pending marker either
+ * way it succeeds so it can't be replayed. A matched backup code is nulled out (single-use) in
+ * the same call.
+ */
+async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | null> {
+  const sessionAny = req.session as any;
+  const user = await resolvePendingMfaUser(req);
+  if (!user) {
+    res.status(401).json({ message: "MFA challenge expired — please log in again" });
+    return null;
+  }
+  const attempts = (sessionAny.pendingMfaFailedAttempts as number) || 0;
+  if (attempts >= MFA_PENDING_MAX_ATTEMPTS) {
+    delete sessionAny.pendingMfaUserId;
+    delete sessionAny.pendingMfaOrgId;
+    delete sessionAny.pendingMfaExpiresAt;
+    delete sessionAny.pendingMfaFailedAttempts;
+    res.status(429).json({ message: "Too many failed attempts — please log in again" });
+    return null;
+  }
+  const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+  let ok = !!code && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: code })).valid;
+  if (!ok && code && Array.isArray(user.mfaBackupCodes)) {
+    const codes: (string | null)[] = user.mfaBackupCodes;
+    for (let i = 0; i < codes.length; i++) {
+      const hash = codes[i];
+      if (!hash) continue;
+      if (await argon2.verify(hash, code)) {
+        ok = true;
+        const updated = [...codes];
+        updated[i] = null; // single-use
+        await storage.updateUser(user.id, { mfaBackupCodes: updated } as any);
+        break;
+      }
+    }
+  }
+  if (!ok) {
+    sessionAny.pendingMfaFailedAttempts = attempts + 1;
+    res.status(400).json({ message: "Invalid code" });
+    return null;
+  }
+  delete sessionAny.pendingMfaUserId;
+  delete sessionAny.pendingMfaOrgId;
+  delete sessionAny.pendingMfaExpiresAt;
+  delete sessionAny.pendingMfaFailedAttempts;
+  return user;
 }
 
 export function setupAuth(app: Express) {
@@ -438,134 +708,15 @@ export function setupAuth(app: Express) {
           return res.redirect(redirectUrl);
         }
 
-        req.login(user, async (loginErr) => {
-          if (loginErr) return next(loginErr);
-
-          // Capture session state before regeneration, then regenerate to prevent session fixation.
-          const sessionAny = req.session as any;
-          const returnTo = sessionAny?.authReturnTo as string | undefined;
-          const authTenantIdPre = sessionAny?.authTenantId as string | undefined;
-          const isMobileAuth = sessionAny?.isMobileAuth as boolean | undefined;
-          const passportData = sessionAny.passport;
-          try {
-            await new Promise<void>((resolve, reject) =>
-              req.session.regenerate((e) => (e ? reject(e) : resolve()))
-            );
-            const newSess = req.session as any;
-            newSess.passport = passportData;
-            await new Promise<void>((resolve, reject) =>
-              req.session.save((e) => (e ? reject(e) : resolve()))
-            );
-          } catch (e) {
-            return next(e as Error);
-          }
-
-          // Mobile OAuth: generate a one-time token and deep-link back into the app.
-          // The WebView can't use the external-browser session cookie, so it exchanges
-          // this token for a fresh session via POST /api/auth/mobile-exchange.
-          if (isMobileAuth) {
-            const token = crypto.randomBytes(32).toString("hex");
-            mobileAuthTokens.set(token, {
-              userId: user.id,
-              orgId: user.organizationId || undefined,
-              expiresAt: Date.now() + 5 * 60_000,
-            });
-            return res.redirect(`pol263://auth/callback?token=${token}`);
-          }
-
-          // Redirect to home with returnTo so the client can redirect after auth is ready (avoids error page on first load).
-          const pathFromReturnTo = returnTo
-            ? (returnTo.startsWith("http") ? new URL(returnTo).pathname : returnTo)
-            : null;
-          if (pathFromReturnTo) {
+        if (user.mfaEnabled) {
+          return beginStaffMfaChallenge(req, res, next, user, () => {
             const baseUrl = baseUrlFromEnv();
-            const host = req.get("host");
-            const proto =
-              (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
-              (req as any).protocol ||
-              "http";
-            const origin = baseUrl || (host ? `${proto}://${host}` : "");
-            const homeWithReturn = origin
-              ? `${origin}/?returnTo=${encodeURIComponent(pathFromReturnTo)}`
-              : `/?returnTo=${encodeURIComponent(pathFromReturnTo)}`;
-            return res.redirect(homeWithReturn);
-          }
+            const challengePath = "/staff/mfa-verify";
+            return res.redirect(baseUrl ? `${baseUrl}${challengePath}` : challengePath);
+          });
+        }
 
-          const baseUrl = baseUrlFromEnv();
-          const staffPath = "/staff";
-
-          const loggedInUser = req.user as any;
-
-          // If the login was initiated from a tenant subdomain (authTenantId saved
-          // by /api/auth/google), activate that tenant so the platform owner lands
-          // on that tenant's dashboard rather than the control plane.
-          const authTenantId = authTenantIdPre;
-          if (authTenantId) {
-            (req.session as any).activeTenantId = authTenantId;
-            const homeWithReturn = baseUrl
-              ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
-              : `/?returnTo=${encodeURIComponent(staffPath)}`;
-            return res.redirect(homeWithReturn);
-          }
-
-          // ✅ If platform owner logged in but has no tenant selected/created yet, send them to tenant setup/selection.
-          if (loggedInUser?.isPlatformOwner && !loggedInUser?.organizationId) {
-            const tenantSetupPath = "/staff/tenants";
-            const homeWithReturn = baseUrl
-              ? `${baseUrl}/?returnTo=${encodeURIComponent(tenantSetupPath)}`
-              : `/?returnTo=${encodeURIComponent(tenantSetupPath)}`;
-            return res.redirect(homeWithReturn);
-          }
-
-          // If the platform owner logged in NOT via a tenant subdomain (authTenantId unset,
-          // handled above) and isn't already on the dedicated control-plane subdomain, send
-          // them there. Mirrors the regular-staff → tenant-subdomain redirect just below, but
-          // for the platform owner — keeps pol263.com from serving the platform console too.
-          if (loggedInUser?.isPlatformOwner && baseUrl) {
-            const mainHost = new URL(baseUrl).hostname;
-            const adminSub = (process.env.PLATFORM_ADMIN_SUBDOMAIN || "controlpanel").toLowerCase();
-            const currentHost = req.get("host")?.split(":")[0]?.toLowerCase();
-            if (currentHost !== `${adminSub}.${mainHost}`) {
-              const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
-              return res.redirect(`${proto}://${adminSub}.${mainHost}/?returnTo=${encodeURIComponent(staffPath)}`);
-            }
-          }
-
-          // If a regular staff member logged in from the main domain (no authTenantId
-          // means they didn't come via a tenant subdomain), redirect them to their
-          // tenant's subdomain. This prevents pol263.com from serving tenant dashboards
-          // and ensures staff always land on their branded subdomain.
-          if (!loggedInUser?.isPlatformOwner && loggedInUser?.organizationId && baseUrl) {
-            try {
-              const mainHost = new URL(baseUrl).hostname; // e.g. "pol263.com"
-              const [tenantRow] = await cpDb
-                .select({ slug: cpTenants.slug })
-                .from(cpTenants)
-                .where(eq(cpTenants.id, loggedInUser.organizationId))
-                .limit(1);
-              if (tenantRow?.slug) {
-                const proto = (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() || "https";
-                const tenantOrigin = `${proto}://${tenantRow.slug}.${mainHost}`;
-                return res.redirect(`${tenantOrigin}/?returnTo=${encodeURIComponent(staffPath)}`);
-              }
-            } catch {
-              // Control plane unreachable — fall through to default redirect below.
-            }
-          }
-
-          const homeWithReturn = baseUrl
-            ? `${baseUrl}/?returnTo=${encodeURIComponent(staffPath)}`
-            : (() => {
-                const host = req.get("host");
-                const proto =
-                  (req.get("x-forwarded-proto") as string)?.split(",")[0]?.trim() ||
-                  (req as any).protocol ||
-                  "http";
-                const sameOrigin = host ? `${proto}://${host}` : "";
-                return sameOrigin ? `${sameOrigin}/?returnTo=${encodeURIComponent(staffPath)}` : `/?returnTo=${encodeURIComponent(staffPath)}`;
-              })();
-          return res.redirect(homeWithReturn);
-        });
+        return completeGoogleLogin(req, res, next, user);
       })(req, res, next);
     });
   } else {
@@ -607,6 +758,61 @@ export function setupAuth(app: Express) {
       if (err) return next(err);
       res.json({ ok: true });
     });
+  });
+
+  // ─── TOTP MFA (opt-in) ──────────────────────────────────────
+  // Enroll/confirm/disable are self-service (requireAuth only, always operate on req.user —
+  // mirrors change-password above, not gated behind write:user). verify-login/mfa-verify are
+  // public: they complete a *pending* login (see beginStaffMfaChallenge) via the short-lived
+  // session marker, since the user isn't logged in yet when they're called.
+  app.post("/api/auth/mfa/enroll", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const secret = generateTotpSecret();
+    await storage.updateUser(user.id, { mfaSecret: secret } as any);
+    const otpauthUrl = generateTotpURI({ issuer: "POL263", label: user.email, secret });
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
+    return res.json({ secret, otpauthUrl, qrDataUrl });
+  });
+
+  app.post("/api/auth/mfa/confirm", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    if (!user.mfaSecret) {
+      return res.status(400).json({ message: "Start enrollment first" });
+    }
+    if (!code || !(await verifyTotp({ secret: user.mfaSecret, token: code })).valid) {
+      return res.status(400).json({ message: "Invalid code" });
+    }
+    const backupCodes = generateBackupCodes();
+    const hashedCodes = await Promise.all(backupCodes.map((c) => argon2.hash(c, { type: argon2.argon2id })));
+    await storage.updateUser(user.id, { mfaEnabled: true, mfaBackupCodes: hashedCodes } as any);
+    await auditLog(req, "ENABLE_MFA", "User", user.id, { mfaEnabled: false }, { mfaEnabled: true });
+    return res.json({ backupCodes });
+  });
+
+  app.post("/api/auth/mfa/disable", requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any;
+    const { password } = req.body;
+    if (user.passwordHash) {
+      if (!password || !(await argon2.verify(user.passwordHash, password))) {
+        return res.status(400).json({ message: "Current password is required to disable MFA" });
+      }
+    }
+    await storage.updateUser(user.id, { mfaEnabled: false, mfaSecret: null, mfaBackupCodes: null } as any);
+    await auditLog(req, "DISABLE_MFA", "User", user.id, { mfaEnabled: true }, { mfaEnabled: false });
+    return res.json({ message: "MFA disabled" });
+  });
+
+  app.post("/api/auth/mfa/verify-login", async (req: Request, res: Response, next: NextFunction) => {
+    const user = await verifyPendingMfaCode(req, res);
+    if (!user) return;
+    return completeGoogleLogin(req, res, next, user, { asJson: true });
+  });
+
+  app.post("/api/agent-auth/mfa-verify", async (req: Request, res: Response) => {
+    const user = await verifyPendingMfaCode(req, res);
+    if (!user) return;
+    return completeAgentLogin(req, res, user);
   });
 
   const demoLoginEnabled =
@@ -666,7 +872,7 @@ export function setupAuth(app: Express) {
     );
   }
 
-  app.post("/api/agent-auth/login", async (req: Request, res: Response) => {
+  app.post("/api/agent-auth/login", async (req: Request, res: Response, next: NextFunction) => {
     const { email, password, orgId } = req.body;
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -762,26 +968,12 @@ export function setupAuth(app: Express) {
       }
 
       await clearAgentLoginFailures(user.id);
-      req.login(user, async (err) => {
-        if (err) {
-          return res.status(500).json({ message: "Login failed" });
-        }
-        // Regenerate session ID to prevent session fixation.
-        const passportData = (req.session as any).passport;
-        try {
-          await new Promise<void>((resolve, reject) =>
-            req.session.regenerate((e) => (e ? reject(e) : resolve()))
-          );
-          (req.session as any).passport = passportData;
-          await new Promise<void>((resolve, reject) =>
-            req.session.save((e) => (e ? reject(e) : resolve()))
-          );
-        } catch {
-          return res.status(500).json({ message: "Login failed" });
-        }
-        structuredLog("info", "Agent login successful", { userId: user.id, email: user.email });
-        return res.json({ user: sanitizeUser(user), redirect: "/staff" });
-      });
+
+      if (user.mfaEnabled) {
+        return beginStaffMfaChallenge(req, res, next, user, () => res.json({ mfaRequired: true }));
+      }
+
+      return completeAgentLogin(req, res, user);
     } catch (err) {
       const errMsg = (err as Error).message || String(err);
       structuredLog("error", "Agent login error", { error: errMsg, stack: (err as Error).stack?.split("\n")[0] });
@@ -809,8 +1001,9 @@ export function setupAuth(app: Express) {
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ message: "Current password and new password are required" });
     }
-    if (String(newPassword).length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    const policyError = validatePasswordPolicy(newPassword);
+    if (policyError) {
+      return res.status(400).json({ message: policyError });
     }
     const fullUser = await storage.getUser(user.id);
     if (!fullUser || !fullUser.passwordHash) {
@@ -858,8 +1051,9 @@ export function setupAuth(app: Express) {
   app.post("/api/users/:id/reset-password", requireAuth, requireTenantScope, async (req: Request, res: Response) => {
     const admin = req.user as any;
     const { newPassword } = req.body;
-    if (!newPassword || String(newPassword).length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters" });
+    const policyError = validatePasswordPolicy(newPassword);
+    if (policyError) {
+      return res.status(400).json({ message: policyError });
     }
     const target = await storage.getUser(req.params.id as string);
     if (!target || target.organizationId !== admin.organizationId) {
@@ -933,6 +1127,7 @@ function sanitizeUser(user: any) {
     isActive: user.isActive,
     referralCode: user.referralCode,
     isPlatformOwner: user.isPlatformOwner || false,
+    mfaEnabled: user.mfaEnabled || false,
     phone: user.phone ?? null,
     bio: user.bio ?? null,
     whatsapp: user.whatsapp ?? null,
@@ -950,10 +1145,23 @@ function getEffectiveOrgId(req: Request, user: any): string | null {
   return (user?.organizationId ?? null) as string | null;
 }
 
+// 45 min of inactivity ends the session even within its longer absolute cookie lifetime (see
+// setupAuth's session config above) — mirrors the equivalent check in requireClientAuth
+// (server/client-auth.ts) for the client portal.
+const STAFF_IDLE_TIMEOUT_MS = 45 * 60 * 1000;
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.isAuthenticated() || !req.user) {
     return res.status(401).json({ message: "Authentication required" });
   }
+  const session = req.session as any;
+  const now = Date.now();
+  if (session.lastActivityAt && now - session.lastActivityAt > STAFF_IDLE_TIMEOUT_MS) {
+    return req.session.destroy(() => {
+      res.status(401).json({ message: "Session expired due to inactivity" });
+    });
+  }
+  session.lastActivityAt = now;
   next();
 }
 

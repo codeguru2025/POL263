@@ -8,6 +8,7 @@ import { KeyRound, Loader2 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
 import { AppChrome } from "@/components/layout/app-chrome";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 
 export default function ClientResetPassword() {
   const [policyNumber, setPolicyNumber] = useState("");
@@ -34,7 +35,7 @@ export default function ClientResetPassword() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword.length < 8 || newPassword !== confirmPassword) return;
+    if (validatePasswordPolicy(newPassword) || newPassword !== confirmPassword) return;
     resetMutation.mutate({
       policyNumber: policyNumber.trim(),
       securityAnswer: securityAnswer.trim(),
@@ -98,7 +99,7 @@ export default function ClientResetPassword() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="newPassword">New password (min 8 characters)</Label>
+                <Label htmlFor="newPassword">New password (min {MIN_PASSWORD_LENGTH} characters, with a letter and a number)</Label>
                 <Input
                   id="newPassword"
                   type="password"

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, CheckCircle2, Receipt, Check, ArrowLeft, Copy, Clock, Building2, Sparkles, Rocket } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -145,7 +146,7 @@ export default function TenantSignup() {
 
   const step1Valid = businessName.trim().length > 0;
   const step2Valid = !!planId;
-  const step3Valid = adminDisplayName.trim().length > 0 && /\S+@\S+\.\S+/.test(adminEmail) && adminPassword.length >= 8 && adminPassword === adminPasswordConfirm;
+  const step3Valid = adminDisplayName.trim().length > 0 && /\S+@\S+\.\S+/.test(adminEmail) && !validatePasswordPolicy(adminPassword) && adminPassword === adminPasswordConfirm;
 
   const signupHeroSteps = [
     { icon: Building2, label: "Tell us about your business" },
@@ -368,7 +369,7 @@ export default function TenantSignup() {
               <div className="space-y-2">
                 <Label htmlFor="ts-admin-password">Password</Label>
                 <Input id="ts-admin-password" type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
-                <p className="text-xs text-gray-500">At least 8 characters.</p>
+                <p className="text-xs text-gray-500">At least {MIN_PASSWORD_LENGTH} characters, with a letter and a number.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ts-admin-password-confirm">Confirm password</Label>

@@ -11,6 +11,8 @@ import {
   toUpperTrim,
   parsePositiveAmount,
   MAX_TRANSACTION_AMOUNT,
+  validatePasswordPolicy,
+  MIN_PASSWORD_LENGTH,
 } from "@shared/validation";
 
 describe("Currency validation", () => {
@@ -164,5 +166,30 @@ describe("toUpperTrim", () => {
   it("returns null for null/undefined", () => {
     expect(toUpperTrim(null)).toBeNull();
     expect(toUpperTrim(undefined)).toBeNull();
+  });
+});
+
+describe("validatePasswordPolicy", () => {
+  it("accepts a password meeting length + letter + number", () => {
+    expect(validatePasswordPolicy("correcthorse1")).toBeNull();
+    expect(validatePasswordPolicy("a".repeat(11) + "1")).toBeNull();
+  });
+
+  it(`rejects passwords shorter than ${MIN_PASSWORD_LENGTH} characters`, () => {
+    expect(validatePasswordPolicy("short1")).toMatch(new RegExp(`${MIN_PASSWORD_LENGTH} characters`));
+    expect(validatePasswordPolicy("")).toMatch(new RegExp(`${MIN_PASSWORD_LENGTH} characters`));
+    expect(validatePasswordPolicy(null)).toMatch(new RegExp(`${MIN_PASSWORD_LENGTH} characters`));
+    expect(validatePasswordPolicy(undefined)).toMatch(new RegExp(`${MIN_PASSWORD_LENGTH} characters`));
+  });
+
+  it("rejects long passwords missing a letter or a number", () => {
+    expect(validatePasswordPolicy("123456789012")).toMatch(/letter and one number/);
+    expect(validatePasswordPolicy("abcdefghijkl")).toMatch(/letter and one number/);
+  });
+
+  it(`accepts exactly ${MIN_PASSWORD_LENGTH} characters at the boundary`, () => {
+    const boundary = "a".repeat(MIN_PASSWORD_LENGTH - 1) + "1";
+    expect(boundary.length).toBe(MIN_PASSWORD_LENGTH);
+    expect(validatePasswordPolicy(boundary)).toBeNull();
   });
 });
