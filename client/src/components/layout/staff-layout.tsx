@@ -326,17 +326,17 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/clients", label: isAgent ? "My Clients" : "Clients", icon: Users, permission: "read:client" },
             { href: "/staff/feedback", label: "Client Feedback", icon: MessageSquare, permission: "read:client", agentHidden: true },
-            { href: "/staff/groups", label: "Schemes (Employer / Society)", icon: Layers, permissions: ["write:policy"], agentHidden: true },
-            { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true },
-            { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true },
-            { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true },
+            { href: "/staff/groups", label: "Schemes (Employer / Society)", icon: Layers, permissions: ["write:policy"], agentHidden: true, capabilityModule: "funeral_ops" },
+            { href: "/staff/admin/society", label: "Society Admin", icon: Building2, agentHidden: true, capabilityModule: "funeral_ops" },
+            { href: "/staff/admin/tombstones", label: "Tombstones Admin", icon: Milestone, agentHidden: true, capabilityModule: "funeral_ops" },
+            { href: "/staff/transactions/tombstone", label: "Tombstone Transactions", icon: Milestone, agentHidden: true, capabilityModule: "funeral_ops" },
           ]),
         },
         {
           title: "Policies",
           items: filterNav([
             { href: "/staff/policies", label: "Policies", icon: FileStack, permission: "read:policy" },
-            { href: "/staff/admin/member-cards", label: "Member Cards", icon: CreditCard, permission: "manage:settings", agentHidden: true },
+            { href: "/staff/admin/member-cards", label: "Member Cards", icon: CreditCard, permission: "manage:settings", agentHidden: true, capabilityModule: "funeral_ops" },
             { href: "/staff/tools/print-policy-cards", label: "Print Policy Cards", icon: Printer },
           ]),
         },

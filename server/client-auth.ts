@@ -632,10 +632,21 @@ export function setupClientAuth(app: Express) {
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 
+      if (client.lockedUntil && new Date(client.lockedUntil) > new Date()) {
+        return constantTimeResponse(res, 429, { message: "Account temporarily locked. Try again later." });
+      }
+
       const normalizedAnswer = securityAnswer.trim().toLowerCase();
       const answerOk = await verifySecret(normalizedAnswer, client.securityAnswerHash);
 
       if (!answerOk) {
+        const attempts = (client.failedLoginAttempts || 0) + 1;
+        const updateData: any = { failedLoginAttempts: attempts };
+        if (attempts >= LOCKOUT_THRESHOLD) {
+          updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+        }
+        await storage.updateClient(client.id, updateData, client.organizationId);
+        structuredLog("warn", "CLIENT_RESET_PASSWORD_FAILED", { clientId: client.id, ip: req.ip, attempt: attempts, locked: attempts >= LOCKOUT_THRESHOLD });
         return constantTimeResponse(res, 400, { message: "Invalid request" });
       }
 

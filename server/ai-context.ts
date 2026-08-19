@@ -13,7 +13,7 @@
  */
 import { storage } from "./storage";
 import { buildDailyReport } from "./daily-report";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 import { buildExecutiveSummary, defaultExecutiveSummaryRange } from "./financial-statements";
 import { buildExecutiveReport } from "./executive-report";
 
@@ -59,13 +59,13 @@ export async function buildNoteEnhanceContext(orgId: string, date: string): Prom
 }
 
 export async function buildDashboardContext(orgId: string) {
-  const range = defaultExecutiveSummaryRange();
+  const range = await defaultExecutiveSummaryRange(orgId);
   const summary = await buildExecutiveSummary(orgId, range);
   return { datasetLabel: `Executive summary (${range.from} to ${range.to})`, dataJson: summary };
 }
 
 export async function buildFinanceContext(orgId: string) {
-  const range = defaultExecutiveSummaryRange();
+  const range = await defaultExecutiveSummaryRange(orgId);
   const summary = await buildExecutiveSummary(orgId, range);
   return { datasetLabel: `Finance summary (${range.from} to ${range.to})`, dataJson: summary };
 }
@@ -171,7 +171,7 @@ export async function buildAiInsightContext(
 ): Promise<{ datasetLabel: string; dataJson: unknown }> {
   switch (surface) {
     case "daily_report":
-      return buildDailyReportContext(orgId, date || todayInHarare());
+      return buildDailyReportContext(orgId, date || await todayForOrg(orgId));
     case "dashboard":
       return buildDashboardContext(orgId);
     case "finance":
@@ -181,7 +181,7 @@ export async function buildAiInsightContext(
     case "claims":
       return buildClaimsContext(orgId);
     case "executive_report": {
-      const r = range ?? defaultExecutiveSummaryRange();
+      const r = range ?? await defaultExecutiveSummaryRange(orgId);
       return buildExecutiveReportContext(orgId, r.from, r.to, range?.branchId);
     }
   }

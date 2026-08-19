@@ -3,7 +3,7 @@ import { useSearch, useLocation, Link } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
-import { validatePasswordPolicy, MIN_PASSWORD_LENGTH } from "@shared/validation";
+import { validatePasswordPolicy, MIN_PASSWORD_LENGTH, NATIONAL_ID_FORMATS, NATIONAL_ID_FORMAT_KEYS, DEFAULT_NATIONAL_ID_FORMAT, SUPPORTED_CURRENCIES, CURRENCY_CONFIG, DEFAULT_ENABLED_CURRENCIES, normalizeEnabledCurrencies, type NationalIdFormatKey, type SupportedCurrency } from "@shared/validation";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FeatureFlagsCard } from "@/components/feature-flags-card";
 import {
   Check,
@@ -41,6 +42,7 @@ import {
   FileText,
   Globe,
   Video,
+  Coins,
 } from "lucide-react";
 import type { CountryFlagSettings } from "@/components/country-flag-fields";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
@@ -62,7 +64,7 @@ export default function StaffSettings() {
   const [, setLocation] = useLocation();
   const canManageSettings = permissions.includes("manage:settings");
   const tabParam = typeof window !== "undefined" ? new URLSearchParams(search).get("tab") : null;
-  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag", "agentContent", "inbox"];
+  const validTabs = ["terms", "rbac", "adverts", "account", "countryFlag", "agentContent", "inbox", "general"];
   const defaultTab = tabParam && validTabs.includes(tabParam) ? tabParam : "account";
   const [activeTab, setActiveTab] = useState(defaultTab);
 
@@ -131,6 +133,78 @@ export default function StaffSettings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/country-flag-settings"] });
       toast({ title: "Country flag settings saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Organization timezone ────────────────────────────────────
+  // Bounded to plausible target markets, not the full IANA tz database — see server/date-utils.ts.
+  const TIMEZONE_OPTIONS = [
+    { value: "Africa/Harare", label: "Harare, Lusaka (CAT, UTC+2)" },
+    { value: "Africa/Johannesburg", label: "Johannesburg, Maseru, Mbabane (SAST, UTC+2)" },
+    { value: "Africa/Gaborone", label: "Gaborone (CAT, UTC+2)" },
+    { value: "Africa/Windhoek", label: "Windhoek (CAT, UTC+2)" },
+    { value: "Africa/Nairobi", label: "Nairobi, Dar es Salaam, Kampala (EAT, UTC+3)" },
+    { value: "Africa/Lagos", label: "Lagos, Kinshasa (WAT, UTC+1)" },
+    { value: "Africa/Cairo", label: "Cairo (EET, UTC+2)" },
+    { value: "Africa/Accra", label: "Accra, Abidjan (GMT, UTC+0)" },
+    { value: "Europe/London", label: "London (GMT/BST)" },
+    { value: "UTC", label: "UTC" },
+  ];
+  const { data: orgSettings } = useQuery<{ timezone?: string; nationalIdFormat?: NationalIdFormatKey; enabledCurrencies?: string[] }>({
+    queryKey: ["/api/organizations", effectiveOrgId],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/organizations/${effectiveOrgId}`);
+      return res.json();
+    },
+    enabled: !isControlPlaneMode && canManageSettings && !!effectiveOrgId,
+  });
+  const [orgTimezone, setOrgTimezone] = useState("Africa/Harare");
+  useEffect(() => {
+    if (orgSettings?.timezone) setOrgTimezone(orgSettings.timezone);
+  }, [orgSettings]);
+  const saveTimezoneMutation = useMutation({
+    mutationFn: async () => apiRequest("PATCH", `/api/organizations/${effectiveOrgId}`, { timezone: orgTimezone }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", effectiveOrgId] });
+      toast({ title: "Timezone saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Organization national ID format ──────────────────────────
+  // Curated catalog (shared/validation.ts NATIONAL_ID_FORMATS) an org picks from, rather than a
+  // free-text regex an admin could author — avoids ReDoS/correctness risk from untrusted patterns.
+  const [orgNationalIdFormat, setOrgNationalIdFormat] = useState<NationalIdFormatKey>(DEFAULT_NATIONAL_ID_FORMAT);
+  useEffect(() => {
+    if (orgSettings?.nationalIdFormat) setOrgNationalIdFormat(orgSettings.nationalIdFormat);
+  }, [orgSettings]);
+  const saveNationalIdFormatMutation = useMutation({
+    mutationFn: async () => apiRequest("PATCH", `/api/organizations/${effectiveOrgId}`, { nationalIdFormat: orgNationalIdFormat }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", effectiveOrgId] });
+      toast({ title: "National ID format saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Organization enabled currencies ──────────────────────────
+  // Multi-select subset of the platform-wide catalog (shared/validation.ts CURRENCY_CATALOG) this
+  // org has turned on — unlike timezone/nationalIdFormat above, an org picks MULTIPLE entries here,
+  // so this uses the same clickable-Badge multi-select pattern as productTypes/distributionChannels
+  // in client/src/pages/public/tenant-signup.tsx rather than a single-select <Select>.
+  const [orgEnabledCurrencies, setOrgEnabledCurrencies] = useState<string[]>(DEFAULT_ENABLED_CURRENCIES);
+  useEffect(() => {
+    if (orgSettings?.enabledCurrencies) setOrgEnabledCurrencies(normalizeEnabledCurrencies(orgSettings.enabledCurrencies));
+  }, [orgSettings]);
+  const toggleEnabledCurrency = (code: string) => {
+    setOrgEnabledCurrencies((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+  };
+  const saveEnabledCurrenciesMutation = useMutation({
+    mutationFn: async () => apiRequest("PATCH", `/api/organizations/${effectiveOrgId}`, { enabledCurrencies: orgEnabledCurrencies }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/organizations", effectiveOrgId] });
+      toast({ title: "Enabled currencies saved" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -462,6 +536,7 @@ export default function StaffSettings() {
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList>
             <TabsTrigger value="account">Account</TabsTrigger>
+            {!isControlPlaneMode && canManageSettings && <TabsTrigger value="general">General</TabsTrigger>}
             {!isControlPlaneMode && <TabsTrigger value="terms">Terms</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="adverts">Receipt Adverts</TabsTrigger>}
             {!isControlPlaneMode && canManageSettings && <TabsTrigger value="countryFlag">Country Flag</TabsTrigger>}
@@ -586,6 +661,95 @@ export default function StaffSettings() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
+            </TabsContent>
+          )}
+
+          {/* General */}
+          {!isControlPlaneMode && canManageSettings && (
+            <TabsContent value="general" className="mt-6">
+              <CardSection
+                title="Timezone"
+                description="Drives this organization's 'today' — grace/lapse deadlines, notification timing, and default report dates. Defaults to Africa/Harare; change it if your organization operates elsewhere."
+                icon={Globe}
+              >
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label htmlFor="org-timezone">Organization timezone</Label>
+                    <Select value={orgTimezone} onValueChange={setOrgTimezone}>
+                      <SelectTrigger id="org-timezone"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {TIMEZONE_OPTIONS.map((tz) => (
+                          <SelectItem key={tz.value} value={tz.value}>{tz.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button onClick={() => saveTimezoneMutation.mutate()} disabled={saveTimezoneMutation.isPending}>
+                    {saveTimezoneMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </CardSection>
+              <CardSection
+                title="National ID Format"
+                description="The national ID shape enforced on client, dependent, and beneficiary records. Defaults to Zimbabwe's format; pick 'No format enforcement' if your organization operates elsewhere and just needs a free-text identifier."
+                icon={FileText}
+                className="mt-6"
+              >
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label htmlFor="org-national-id-format">National ID format</Label>
+                    <Select value={orgNationalIdFormat} onValueChange={(v) => setOrgNationalIdFormat(v as NationalIdFormatKey)}>
+                      <SelectTrigger id="org-national-id-format"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {NATIONAL_ID_FORMAT_KEYS.map((key) => (
+                          <SelectItem key={key} value={key}>{NATIONAL_ID_FORMATS[key].label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button onClick={() => saveNationalIdFormatMutation.mutate()} disabled={saveNationalIdFormatMutation.isPending}>
+                    {saveNationalIdFormatMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </CardSection>
+              <CardSection
+                title="Enabled Currencies"
+                description="Which currencies show up in every currency picker across the app (policies, payments, product pricing, reports). Defaults to USD, ZAR and ZIG; at least one must stay enabled."
+                icon={Coins}
+                className="mt-6"
+              >
+                <div className="space-y-4 max-w-md">
+                  <div className="flex flex-wrap gap-2">
+                    {SUPPORTED_CURRENCIES.map((code) => {
+                      const selected = orgEnabledCurrencies.includes(code);
+                      return (
+                        <Badge
+                          key={code}
+                          variant={selected ? "default" : "outline"}
+                          className={`cursor-pointer select-none ${selected ? "" : "opacity-60 hover:opacity-100"}`}
+                          onClick={() => toggleEnabledCurrency(code)}
+                          data-testid={`badge-currency-${code}`}
+                        >
+                          {selected ? <Check className="mr-1 h-3 w-3" /> : null}
+                          {code} ({CURRENCY_CONFIG[code as SupportedCurrency].symbol})
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                  {orgEnabledCurrencies.length === 0 && (
+                    <p className="text-xs text-destructive">At least one currency must remain enabled.</p>
+                  )}
+                  <Button
+                    onClick={() => saveEnabledCurrenciesMutation.mutate()}
+                    disabled={saveEnabledCurrenciesMutation.isPending || orgEnabledCurrencies.length === 0}
+                  >
+                    {saveEnabledCurrenciesMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </CardSection>
             </TabsContent>
           )}
 

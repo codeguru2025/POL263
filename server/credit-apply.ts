@@ -11,11 +11,11 @@ import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from ".
 import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { paymentTransactions, paymentReceipts, policyCreditBalances, users } from "@shared/schema";
 import { sql, eq, and } from "drizzle-orm";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 
 export async function runApplyCreditBalances(orgId: string, actorUserId: string | null = null): Promise<{ applied: number; errors: string[] }> {
   const rows = await storage.getPolicyCreditBalancesWithPositiveBalance(orgId);
-  const today = todayInHarare();
+  const today = await todayForOrg(orgId);
   const errors: string[] = [];
   let applied = 0;
 
@@ -56,7 +56,7 @@ export async function applyCreditBalanceToPolicy(
 
   const currency = policy.currency || "USD";
   const amount = premium.toFixed(2);
-  const today = todayInHarare();
+  const today = await todayForOrg(orgId);
 
   let receiptNumberForNotify: string | undefined;
 

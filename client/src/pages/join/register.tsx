@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { getApiBase, getCsrfToken } from "@/lib/queryClient";
-import { isValidNationalId } from "@shared/validation";
+import { isValidNationalId, nationalIdFormatHint, DEFAULT_NATIONAL_ID_FORMAT, type NationalIdFormatKey } from "@shared/validation";
 import { UserPlus, CheckCircle2, Loader2, ArrowRight, Plus, Trash2, Users, Star, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { AppChrome } from "@/components/layout/app-chrome";
@@ -40,6 +40,7 @@ interface RegistrationOptions {
   isWalkIn?: boolean;
   products: ProductWithVersions[];
   branches: { id: string; name: string }[];
+  nationalIdFormat?: NationalIdFormatKey;
 }
 
 export default function JoinRegisterPage() {
@@ -201,8 +202,9 @@ export default function JoinRegisterPage() {
     if (!form.productVersionId) missing.push("Product");
     if (!form.phone.trim()) missing.push("Phone");
     if (!form.dateOfBirth) missing.push("Date of birth");
+    const nationalIdFormat = options.nationalIdFormat ?? DEFAULT_NATIONAL_ID_FORMAT;
     if (!form.nationalId.trim()) missing.push("National ID");
-    else if (!isValidNationalId(form.nationalId)) missing.push("Valid national ID (e.g. 08833089H38)");
+    else if (!isValidNationalId(form.nationalId, nationalIdFormat)) missing.push(`National ID that ${nationalIdFormatHint(nationalIdFormat)}`);
     if (!form.gender.trim()) missing.push("Gender");
     if (!agreedToPolicy) missing.push("Agreement to the data retention & privacy policy");
     if (missing.length > 0) {

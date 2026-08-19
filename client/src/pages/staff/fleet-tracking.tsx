@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useBranding } from "@/hooks/use-branding";
 import { Car, MapPin, Gauge, Loader2, LogOut } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -68,13 +69,15 @@ function useVehiclePingStream(assignmentId: string | null, intervalMs = 30_000) 
 function MyVehiclePanel() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const { branding } = useBranding(user?.organizationId);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
 
   const { data: mine, isLoading } = useQuery<any>({ queryKey: ["/api/fleet/checkouts/mine"] });
   const { data: available = [] } = useQuery<any[]>({ queryKey: ["/api/fleet/available"], enabled: !mine });
   const { data: myAttendance = [] } = useQuery<any[]>({ queryKey: ["/api/attendance/my"], enabled: !mine });
-  // Africa/Harare is UTC+2 — matches the server's definition of "today" (see date-utils.ts).
-  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Harare", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  // Matches the server's per-org definition of "today" (see date-utils.ts).
+  const todayStr = new Intl.DateTimeFormat("en-CA", { timeZone: branding.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const todayLog = myAttendance.find((l: any) => l.date === todayStr);
   const isClockedIn = !!todayLog?.clockInAt && !todayLog?.clockOutAt;
 

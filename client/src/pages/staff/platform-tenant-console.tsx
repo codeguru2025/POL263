@@ -50,7 +50,7 @@ interface TenantConfig {
     logoUrl: string | null; signatureUrl: string | null; primaryColor: string | null;
     footerText: string | null; address: string | null; phone: string | null; email: string | null;
     website: string | null; policyNumberPrefix: string | null; policyNumberPadding: number | null;
-    isWhitelabeled: boolean;
+    isWhitelabeled: boolean; timezone: string | null;
   };
   payments: {
     integrationId: string; authEmail: string; returnUrl: string; resultUrl: string;

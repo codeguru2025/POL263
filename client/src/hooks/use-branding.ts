@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
+import { DEFAULT_NATIONAL_ID_FORMAT, DEFAULT_ENABLED_CURRENCIES, type NationalIdFormatKey } from "@shared/validation";
 
 export interface PlatformBranding {
   name: string;
@@ -11,6 +12,17 @@ export interface PlatformBranding {
   email?: string;
   website?: string;
   isWhitelabeled: boolean;
+  /** IANA timezone this org's dates/times are computed in (server: organizations.timezone).
+   *  Defaults to "Africa/Harare" for orgs that haven't set one. */
+  timezone: string;
+  /** Which national-ID shape (shared/validation.ts NATIONAL_ID_FORMATS catalog key) this org
+   *  enforces on client/dependent/beneficiary national ID fields (server: organizations.
+   *  nationalIdFormat). Defaults to "zimbabwe" for orgs that haven't set one. */
+  nationalIdFormat: NationalIdFormatKey;
+  /** Which currencies (shared/validation.ts CURRENCY_CATALOG keys) this org has enabled (server:
+   *  organizations.enabledCurrencies) — every currency-picker in the app should filter to this
+   *  list. Defaults to ["USD","ZAR","ZIG"] for orgs that haven't customized it. */
+  enabledCurrencies: string[];
 }
 
 const FALLBACK: PlatformBranding = {
@@ -18,6 +30,9 @@ const FALLBACK: PlatformBranding = {
   logoUrl: getDefaultLogoUrl(),
   primaryColor: "#0d9488",
   isWhitelabeled: false,
+  timezone: "Africa/Harare",
+  nationalIdFormat: DEFAULT_NATIONAL_ID_FORMAT,
+  enabledCurrencies: DEFAULT_ENABLED_CURRENCIES,
 };
 
 function isStockOrEmptyLogoUrl(url: string | null | undefined): boolean {

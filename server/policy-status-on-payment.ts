@@ -4,9 +4,10 @@
  * Ensures policy moves: inactive → active (with inception/effective), grace → active, lapsed → active.
  */
 
-import { eq, sql } from "drizzle-orm";
-import { policies, policyStatusHistory, productVersions } from "@shared/schema";
+import { eq, sql, and } from "drizzle-orm";
+import { policies, policyStatusHistory, productVersions, paymentTransactions, policyCreditBalances } from "@shared/schema";
 import type { Policy } from "@shared/schema";
+import { computePolicyOutstanding } from "./policy-outstanding";
 
 // ─── Cycle helpers ───────────────────────────────────────────
 
@@ -136,7 +137,7 @@ export async function advancePolicyCycle(
  * @returns true if policy was updated, false if no change (e.g. already active)
  */
 export async function applyPolicyStatusForClearedPayment(
-  db: { update(table: any): any; insert(table: any): any },
+  db: { select(fields?: any): any; update(table: any): any; insert(table: any): any },
   policyId: string,
   policy: Policy | null,
   today: string,
@@ -196,12 +197,42 @@ export async function applyPolicyStatusForClearedPayment(
       const [pv] = await (db as any).select({
         waitingPeriodDays: productVersions.waitingPeriodDays,
         reinstatementNewWaitingPeriod: productVersions.reinstatementNewWaitingPeriod,
+        reinstatementRequiresArrears: productVersions.reinstatementRequiresArrears,
       }).from(productVersions).where(eq(productVersions.id, policy.productVersionId)).limit(1);
       if (pv && pv.reinstatementNewWaitingPeriod !== false) {
         const waitingPeriodDays = pv.waitingPeriodDays ?? 90;
         const d = new Date(today + "T00:00:00");
         d.setDate(d.getDate() + waitingPeriodDays);
         newWaitingPeriodEndDate = d.toISOString().split("T")[0];
+      }
+
+      // "Reinstatement requires arrears cleared" — configurable per product version, defaults to
+      // true. Same class of bug as reinstatementNewWaitingPeriod above: a schema column with a
+      // full admin UI and zero server code reading it, so a lapsed policy always reinstated on
+      // any cleared payment (even a partial one covering only the current cycle) regardless of
+      // this setting. Uses the same "single source of truth" arrears formula as the policy
+      // detail/report views (computePolicyOutstanding) so this agrees with what staff/clients
+      // already see as the outstanding balance, rather than inventing a second arrears
+      // definition. The payment that triggered this call has already been inserted into
+      // payment_transactions by the caller (see this function's doc comment), so totalPaid here
+      // already reflects it.
+      if (pv && pv.reinstatementRequiresArrears !== false) {
+        const paidRows = await (db as any).select({ amount: paymentTransactions.amount })
+          .from(paymentTransactions)
+          .where(and(eq(paymentTransactions.policyId, policyId), eq(paymentTransactions.status, "cleared")));
+        const totalPaid = paidRows.reduce((sum: number, r: any) => sum + (parseFloat(String(r.amount)) || 0), 0);
+        const [creditRow] = await (db as any).select({ balance: policyCreditBalances.balance })
+          .from(policyCreditBalances)
+          .where(and(eq(policyCreditBalances.organizationId, policy.organizationId), eq(policyCreditBalances.policyId, policyId)));
+        const walletBalance = parseFloat(String(creditRow?.balance ?? "0")) || 0;
+        const { outstanding } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
+        if (outstanding > 0.01) {
+          // Arrears remain outstanding — this payment isn't enough to reinstate cover yet.
+          // Leave status/graceEndDate untouched (the caller's advancePolicyCycle call already
+          // recorded the payment against the policy's cycle/wallet); a later payment that
+          // finally clears the balance will pass this check and reinstate then.
+          return false;
+        }
       }
     }
 

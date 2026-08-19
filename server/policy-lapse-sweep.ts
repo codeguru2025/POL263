@@ -16,7 +16,7 @@ import { and, eq, isNotNull, lt } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { policies, policyStatusHistory, productVersions } from "@shared/schema";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
 import { recordClawback } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
@@ -70,8 +70,7 @@ export async function runPolicyLapseSweep(trigger: "scheduler" | "manual" = "sch
 async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: string): Promise<PolicyLapseSweepResult> {
   const result: PolicyLapseSweepResult = { orgsScanned: 0, movedToGrace: 0, movedToLapsed: 0, errors: [] };
   const startedAt = Date.now();
-  const today = todayInHarare();
-  structuredLog("info", "Policy lapse sweep starting", { trigger, today, orgIdFilter });
+  structuredLog("info", "Policy lapse sweep starting", { trigger, orgIdFilter });
 
   const orgs = orgIdFilter
     ? (await storage.getOrganization(orgIdFilter) ? [{ id: orgIdFilter }] : [])
@@ -79,6 +78,9 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
   for (const org of orgs) {
     result.orgsScanned++;
     try {
+      // Each tenant's "today" is computed per-org, inside the loop — not once for the whole
+      // sweep run — since tenants can be configured in different timezones (organizations.timezone).
+      const today = await todayForOrg(org.id);
       const tdb = await getDbForOrg(org.id);
 
       // ── Active policies whose due date has passed with no payment ──────────

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { eq, and, asc, desc, sql, count, sum, max, gte, lte, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
@@ -9,7 +9,7 @@ import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
@@ -484,6 +484,10 @@ export interface IStorage {
   getPaymentIntentsByOrg(orgId: string, limit?: number, agentId?: string): Promise<(PaymentIntent & { policyNumber: string | null })[]>;
   getPaymentIntentsByClient(clientId: string, orgId: string): Promise<PaymentIntent[]>;
   getPaymentIntentsByPolicy(policyId: string, orgId: string): Promise<PaymentIntent[]>;
+  /** Intents still "created" (never resolved paid/failed) older than the cutoff — the webhook
+   *  may have been delayed/dropped and the client never re-polled from the UI, so these need an
+   *  operator-side sweep to give them a chance to resolve. */
+  getStalePendingPaymentIntents(orgId: string, olderThan: Date): Promise<PaymentIntent[]>;
   createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent>;
   updatePaymentIntent(id: string, data: Partial<InsertPaymentIntent>, orgId: string): Promise<PaymentIntent | undefined>;
   /** Creates the tenant-DB payment_links row AND the central token->org routing pointer. */
@@ -560,6 +564,7 @@ export interface IStorage {
   getNotificationTemplates(orgId: string): Promise<NotificationTemplate[]>;
   createNotificationTemplate(tmpl: InsertNotificationTemplate): Promise<NotificationTemplate>;
   createNotificationLog(orgId: string, data: { recipientType: string; recipientId: string | null; channel: string; subject?: string | null; body?: string | null; templateId?: string | null; policyId?: string | null; status?: string }): Promise<NotificationLog>;
+  updateNotificationLogStatus(orgId: string, id: string, status: string, failureReason?: string): Promise<void>;
   getLeadsByOrg(orgId: string, limit?: number, offset?: number): Promise<Lead[]>;
   getLeadsByAgent(agentId: string, orgId: string): Promise<Lead[]>;
   getLead(id: string, orgId: string): Promise<Lead | undefined>;
@@ -724,6 +729,7 @@ export interface IStorage {
   updatePettyCashFloat(id: string, orgId: string, data: Partial<PettyCashFloat>): Promise<PettyCashFloat | undefined>;
   getPettyCashTransactions(orgId: string, filters?: { floatId?: string; fromDate?: string; toDate?: string }): Promise<PettyCashTransaction[]>;
   postPettyCashTransaction(data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }>;
+  postPettyCashTransactionInTx(tx: OrgDataDb, data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }>;
   getTombstoneCatalogItems(orgId: string, activeOnly?: boolean): Promise<TombstoneCatalogItem[]>;
   getTombstoneCatalogItem(id: string, orgId: string): Promise<TombstoneCatalogItem | undefined>;
   createTombstoneCatalogItem(data: InsertTombstoneCatalogItem): Promise<TombstoneCatalogItem>;
@@ -735,6 +741,7 @@ export interface IStorage {
   updateTombstoneOrder(id: string, orgId: string, data: Partial<TombstoneOrder>): Promise<TombstoneOrder | undefined>;
   getTombstoneOrderPayments(orgId: string, orderId: string): Promise<TombstoneOrderPayment[]>;
   recordTombstoneOrderPayment(data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }>;
+  recordTombstoneOrderPaymentInTx(tx: OrgDataDb, data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }>;
   getActuarialExposureSummary(orgId: string): Promise<{ productName: string; ageBand: string; memberCount: number }[]>;
   getBalanceSheetEntries(orgId: string, filters?: { section?: string; asOfDate?: string }): Promise<BalanceSheetEntry[]>;
   getBalanceSheetEntry(id: string, orgId: string): Promise<BalanceSheetEntry | undefined>;
@@ -2303,7 +2310,7 @@ export class DatabaseStorage implements IStorage {
           }
         : undefined;
     const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds, receiptOpts);
-    const today = todayInHarare();
+    const today = await todayForOrg(organizationId);
     return rows.map((r) => {
       const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
       const dueDate = r.currentCycleEnd ?? null;
@@ -3302,6 +3309,12 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(paymentIntents).where(and(eq(paymentIntents.organizationId, orgId), eq(paymentIntents.policyId, policyId)))
       .orderBy(desc(paymentIntents.createdAt));
   }
+  async getStalePendingPaymentIntents(orgId: string, olderThan: Date): Promise<PaymentIntent[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(paymentIntents)
+      .where(and(eq(paymentIntents.organizationId, orgId), eq(paymentIntents.status, "created"), lt(paymentIntents.createdAt, olderThan)))
+      .orderBy(asc(paymentIntents.createdAt));
+  }
   async createPaymentIntent(intent: InsertPaymentIntent): Promise<PaymentIntent> {
     const tdb = await getDbForOrg(intent.organizationId);
     const [created] = await tdb.insert(paymentIntents).values({ ...intent, updatedAt: new Date() }).returning();
@@ -4101,6 +4114,13 @@ export class DatabaseStorage implements IStorage {
     }).returning();
     return created;
   }
+  async updateNotificationLogStatus(orgId: string, id: string, status: string, failureReason?: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(notificationLogs).set({
+      status,
+      failureReason: failureReason ?? null,
+    }).where(and(eq(notificationLogs.id, id), eq(notificationLogs.organizationId, orgId)));
+  }
   async updateNotificationTemplate(id: string, orgId: string, data: Partial<{
     name: string; eventType: string; channel: string; subject: string | null;
     bodyTemplate: string; isActive: boolean;
@@ -4597,7 +4617,7 @@ export class DatabaseStorage implements IStorage {
    */
   async recordAttendanceScan(employeeId: string, orgId: string, qrCodeId: string, lat?: number, lng?: number): Promise<{ log: AttendanceLog; eventType: "clock_in" | "clock_out" }> {
     const tdb = await getDbForOrg(orgId);
-    const today = todayInHarare();
+    const today = await todayForOrg(orgId);
     const now = new Date();
     const [existing] = await tdb.select().from(attendanceLogs)
       .where(and(eq(attendanceLogs.employeeId, employeeId), eq(attendanceLogs.organizationId, orgId), eq(attendanceLogs.date, today)));
@@ -5187,6 +5207,14 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(groupLedgerEntries).values(entry).returning();
     return created;
   }
+  // Split out so callers that already have an open transaction (e.g. a claim approval writing
+  // its status + history row) can write the ledger debit as part of that same commit instead of
+  // a detached call afterward — closes the crash window where the claim is durably approved but
+  // the group's ledger is never debited for it, with no record it was ever owed.
+  async createGroupLedgerEntryInTx(tx: OrgDataDb, entry: InsertGroupLedgerEntry): Promise<GroupLedgerEntry> {
+    const [created] = await tx.insert(groupLedgerEntries).values(entry).returning();
+    return created;
+  }
   /** Formalizes an existing informal society in one commit — every roster member and their
    *  historical contributions, or none of them, never a half-imported society. */
   async bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }> {
@@ -5617,7 +5645,7 @@ export class DatabaseStorage implements IStorage {
         amount: opening.toFixed(2),
         description: "Opening float",
         performedByUserId,
-        transactionDate: todayInHarare(),
+        transactionDate: await todayForOrg(data.organizationId),
       });
       const opened = await this.getPettyCashFloat(row.id, data.organizationId);
       return opened ?? row;
@@ -5642,21 +5670,26 @@ export class DatabaseStorage implements IStorage {
    *  can never push the balance negative — the guarded UPDATE below returns no row if the float
    *  doesn't have enough, and we throw rather than post an orphaned ledger entry. */
   async postPettyCashTransaction(data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }> {
-    const tdb = await getDbForOrg(data.organizationId);
+    return withOrgTransaction(data.organizationId, (tx) => this.postPettyCashTransactionInTx(tx, data));
+  }
+  // Split out so callers that already have an open transaction (e.g. a route that also writes an
+  // audit-log entry that must commit/rollback with this write) can pass it through instead of the
+  // balance UPDATE and ledger-row INSERT below committing as two separate, non-atomic statements.
+  async postPettyCashTransactionInTx(tx: OrgDataDb, data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }> {
     const amount = parseFloat(String(data.amount));
     const increases = ["opening", "replenishment", "adjustment_in"];
     const decreases = ["disbursement", "adjustment_out"];
     let float: PettyCashFloat;
     let discrepancyAmount: string | undefined;
     if (increases.includes(data.type)) {
-      const [row] = await tdb.update(pettyCashFloats)
+      const [row] = await tx.update(pettyCashFloats)
         .set({ balance: sql`${pettyCashFloats.balance} + ${amount}`, updatedAt: new Date() })
         .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)))
         .returning();
       if (!row) throw new Error("Petty cash float not found");
       float = row;
     } else if (decreases.includes(data.type)) {
-      const [row] = await tdb.update(pettyCashFloats)
+      const [row] = await tx.update(pettyCashFloats)
         .set({ balance: sql`${pettyCashFloats.balance} - ${amount}`, updatedAt: new Date() })
         .where(and(
           eq(pettyCashFloats.id, data.floatId),
@@ -5665,20 +5698,22 @@ export class DatabaseStorage implements IStorage {
         ))
         .returning();
       if (!row) {
-        const existing = await this.getPettyCashFloat(data.floatId, data.organizationId);
+        const [existing] = await tx.select().from(pettyCashFloats)
+          .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
         if (!existing) throw new Error("Petty cash float not found");
         throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount.toFixed(2)}`);
       }
       float = row;
     } else {
       // reconciliation: doesn't move the balance, just records a counted-vs-system snapshot
-      const existing = await this.getPettyCashFloat(data.floatId, data.organizationId);
+      const [existing] = await tx.select().from(pettyCashFloats)
+        .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
       if (!existing) throw new Error("Petty cash float not found");
       float = existing;
       const counted = parseFloat(String(data.countedAmount ?? "0"));
       discrepancyAmount = (counted - parseFloat(String(existing.balance))).toFixed(2);
     }
-    const [transaction] = await tdb.insert(pettyCashTransactions).values({
+    const [transaction] = await tx.insert(pettyCashTransactions).values({
       ...data,
       amount: amount.toFixed(2),
       balanceAfter: float.balance,
@@ -5757,14 +5792,18 @@ export class DatabaseStorage implements IStorage {
   /** Atomically bumps tombstone_orders.amount_paid alongside inserting the payment row —
    *  same conditional-update-then-insert shape as postPettyCashTransaction. */
   async recordTombstoneOrderPayment(data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }> {
-    const tdb = await getDbForOrg(data.organizationId);
+    return withOrgTransaction(data.organizationId, (tx) => this.recordTombstoneOrderPaymentInTx(tx, data));
+  }
+  // Split out so callers that also need to write an audit-log entry atomically with this payment
+  // can pass through their open transaction instead of the two writes below committing separately.
+  async recordTombstoneOrderPaymentInTx(tx: OrgDataDb, data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }> {
     const amount = parseFloat(String(data.amount));
-    const [order] = await tdb.update(tombstoneOrders)
+    const [order] = await tx.update(tombstoneOrders)
       .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}` })
       .where(and(eq(tombstoneOrders.id, data.orderId), eq(tombstoneOrders.organizationId, data.organizationId)))
       .returning();
     if (!order) throw new Error("Tombstone order not found");
-    const [payment] = await tdb.insert(tombstoneOrderPayments).values({ ...data, amount: amount.toFixed(2) }).returning();
+    const [payment] = await tx.insert(tombstoneOrderPayments).values({ ...data, amount: amount.toFixed(2) }).returning();
     return { payment, order };
   }
 
@@ -6558,11 +6597,20 @@ export class DatabaseStorage implements IStorage {
     `);
     const allRows = (rows.rows ?? rows) as { user_id: string | null; branch_id: string | null; currency: string; amount: string }[];
 
-    const legacyRows = await tdb.execute(sql`
-      SELECT currency, amount FROM legacy_group_receipts
-      WHERE organization_id = ${orgId} AND payment_date >= ${fromDate}::date AND payment_date <= ${toDate}::date
-    `);
-    const legacyAll = (legacyRows.rows ?? legacyRows) as { currency: string; amount: string }[];
+    // legacy_group_receipts only exists on Falakhe-style tenants' DBs (hand-created, not in
+    // shared/schema.ts or a migration) — treat "table doesn't exist" as zero legacy receipts
+    // rather than crashing this report for every other tenant, matching the same table's
+    // handling in financial-statements.ts.
+    let legacyAll: { currency: string; amount: string }[] = [];
+    try {
+      const legacyRows = await tdb.execute(sql`
+        SELECT currency, amount FROM legacy_group_receipts
+        WHERE organization_id = ${orgId} AND payment_date >= ${fromDate}::date AND payment_date <= ${toDate}::date
+      `);
+      legacyAll = (legacyRows.rows ?? legacyRows) as { currency: string; amount: string }[];
+    } catch (err: any) {
+      if (err?.code !== "42P01") throw err; // rethrow anything other than "undefined_table"
+    }
 
     const userTotals = new Map<string, { userId: string | null; currency: string; total: number; count: number }>();
     const branchTotals = new Map<string, { branchId: string | null; currency: string; total: number; count: number }>();

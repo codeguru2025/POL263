@@ -17,7 +17,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase, apiFetch } from "@/lib/queryClient";
-import { isValidNationalId } from "@shared/validation";
+import { isValidNationalId, nationalIdFormatHint } from "@shared/validation";
+import { useAuth } from "@/hooks/use-auth";
+import { useBranding } from "@/hooks/use-branding";
 import {
   Plus,
   Search,
@@ -206,6 +208,11 @@ export default function StaffClients() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
+  // This org's configured national ID format (shared/validation.ts NATIONAL_ID_FORMATS catalog
+  // key), for client-side validation matching the server's — see server/routes.ts POST /api/clients.
+  const { branding } = useBranding(user?.effectiveOrganizationId ?? user?.organizationId ?? null);
+  const nationalIdFormat = branding.nationalIdFormat;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -488,8 +495,8 @@ export default function StaffClients() {
       toast({ title: "Validation", description: "National ID is required.", variant: "destructive" });
       return;
     }
-    if (!isValidNationalId(formData.nationalId)) {
-      toast({ title: "Validation", description: "National ID format is invalid (e.g. 08833089H38).", variant: "destructive" });
+    if (!isValidNationalId(formData.nationalId, nationalIdFormat)) {
+      toast({ title: "Validation", description: `National ID ${nationalIdFormatHint(nationalIdFormat)}.`, variant: "destructive" });
       return;
     }
     if (!formData.phone?.trim()) {

@@ -16,14 +16,10 @@ import { resolveDobForQuote } from "@/lib/estimated-dob";
 import { useSearch } from "wouter";
 import { FileText, Plus, UserPlus, X, Share2, Loader2 } from "lucide-react";
 import { calculatePremiumPreview } from "@/lib/policy-premium-preview";
+import { useBranding } from "@/hooks/use-branding";
+import { isValidNationalId, nationalIdFormatHint } from "@shared/validation";
 
-const NATIONAL_ID_REGEX = /^\d+[A-Z]\d{2}$/;
 function toUpper(value: string) { return value.trim().toUpperCase(); }
-function isValidNationalId(value: string | null | undefined): boolean {
-  if (!value || !value.trim()) return false;
-  const n = value.trim().toUpperCase();
-  return NATIONAL_ID_REGEX.test(n);
-}
 
 interface CreatePolicyWizardProps {
   open: boolean;
@@ -53,6 +49,11 @@ export function CreatePolicyWizard({
 }: CreatePolicyWizardProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // This org's configured national ID format (shared/validation.ts NATIONAL_ID_FORMATS catalog
+  // key), for client-side validation matching the server's — see server/routes.ts POST /api/clients
+  // and POST /api/policies for the authoritative checks this mirrors.
+  const { branding } = useBranding(user?.organizationId ?? user?.effectiveOrganizationId ?? null);
+  const nationalIdFormat = branding.nationalIdFormat;
 
   const [createForm, setCreateForm] = useState({
     clientId: "",
@@ -300,12 +301,12 @@ export function CreatePolicyWizard({
         }
         if (!isLegacyIssuance) {
           if (!data.newClient.nationalId?.trim()) throw new Error("National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38).");
-          if (!isValidNationalId(data.newClient.nationalId)) throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+          if (!isValidNationalId(data.newClient.nationalId, nationalIdFormat)) throw new Error(`National ID ${nationalIdFormatHint(nationalIdFormat)}.`);
           if (!data.newClient.phone?.trim()) throw new Error("Phone is required.");
           if (!data.newClient.dateOfBirth) throw new Error("Date of birth is required.");
           if (!data.newClient.gender) throw new Error("Gender is required.");
-        } else if (data.newClient.nationalId?.trim() && !isValidNationalId(data.newClient.nationalId)) {
-          throw new Error("National ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+        } else if (data.newClient.nationalId?.trim() && !isValidNationalId(data.newClient.nationalId, nationalIdFormat)) {
+          throw new Error(`National ID ${nationalIdFormatHint(nationalIdFormat)}.`);
         }
         const clientRes = await apiRequest("POST", "/api/clients", {
           firstName: toUpper(data.newClient.firstName),
@@ -365,8 +366,8 @@ export function CreatePolicyWizard({
         if (!isLegacyIssuance && (!data.beneficiaryManual.relationship?.trim() || !data.beneficiaryManual.nationalId?.trim() || !data.beneficiaryManual.phone?.trim())) {
           throw new Error("Beneficiary: all fields are required (first name, last name, relationship, national ID, phone).");
         }
-        if (data.beneficiaryManual.nationalId?.trim() && !isValidNationalId(data.beneficiaryManual.nationalId)) {
-          throw new Error("Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38).");
+        if (data.beneficiaryManual.nationalId?.trim() && !isValidNationalId(data.beneficiaryManual.nationalId, nationalIdFormat)) {
+          throw new Error(`Beneficiary national ID ${nationalIdFormatHint(nationalIdFormat)}.`);
         }
         beneficiary = {
           firstName: toUpper(data.beneficiaryManual.firstName),
@@ -1302,7 +1303,7 @@ export function CreatePolicyWizard({
               if (!createForm.beneficiaryManual.lastName?.trim()) missing.push("beneficiary last name");
               if (!createForm.beneficiaryManual.relationship?.trim()) missing.push("beneficiary relationship");
               if (!createForm.beneficiaryManual.nationalId?.trim()) missing.push("beneficiary national ID");
-              else if (!isValidNationalId(createForm.beneficiaryManual.nationalId)) missing.push("a valid beneficiary national ID (e.g. 08833089H38)");
+              else if (!isValidNationalId(createForm.beneficiaryManual.nationalId, nationalIdFormat)) missing.push("a valid beneficiary national ID");
               if (!createForm.beneficiaryManual.phone?.trim()) missing.push("beneficiary phone");
             }
           }

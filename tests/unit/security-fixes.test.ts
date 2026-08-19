@@ -601,5 +601,5 @@ describe("Currency normalization edge cases", () => {
   it("maps RTGS → ZIG (legacy code)", () => expect(normalizeCurrency("RTGS")).toBe("ZIG"));
   it("handles mixed case ZaR", () => expect(normalizeCurrency("ZaR")).toBe("ZAR"));
   it("trims spaces", () => expect(normalizeCurrency("  USD  ")).toBe("USD"));
-  it("defaults unknown to USD", () => expect(normalizeCurrency("GBP")).toBe("USD"));
+  it("defaults unknown to USD", () => expect(normalizeCurrency("JPY")).toBe("USD"));
 });

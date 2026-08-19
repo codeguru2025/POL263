@@ -10,6 +10,254 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-19 — Tenant-genericity review: legacy_group_receipts crash risk fixed, nav-gating gap closed, 3 hardcoded-for-Falakhe systems generalized
+
+Requested a "thorough review" of things hardcoded specifically for Falakhe Funeral Services (the
+pilot tenant) that should be tenant-configurable settings instead, so other tenants aren't stuck
+with Falakhe's specific assumptions. Ran 4 parallel research forks (server-side literal Falakhe
+references, client-side literal Falakhe references, Falakhe-shaped assumptions baked into shared
+code without naming Falakhe, and a map of existing tenant-config mechanisms to keep new work
+consistent) before touching any code.
+
+**Real bug found and fixed — `legacy_group_receipts` crash risk.** `server/storage.ts`
+~6598-6608: a report function ran a raw, unguarded SQL query against `legacy_group_receipts`, a
+table that exists ONLY on Falakhe's dedicated DB (hand-created via one-off scripts, never added to
+`shared/schema.ts` or a migration). Any other tenant hitting that report endpoint got a hard SQL
+crash (`relation "legacy_group_receipts" does not exist`) instead of an empty result. A sibling
+query in `server/financial-statements.ts` (~567-590) already handled this correctly — applied the
+same try/catch-on-missing-relation (Postgres error `42P01`) pattern here.
+
+**Nav-gating gap.** `client/src/components/layout/staff-layout.tsx` ~329-339: 5 funeral-domain
+nav items ("Schemes (Employer/Society)", "Society Admin", "Tombstones Admin", "Tombstone
+Transactions", "Member Cards") had no `capabilityModule`, unlike sibling items in the same section
+(all correctly gated `capabilityModule: "funeral_ops"`) — every tenant saw them regardless of
+whether they use those product lines. Added the same gate to all 5.
+
+**Three systems generalized from hardcoded-for-Falakhe to tenant-configurable** (full detail in
+memory, not repeated here since these are feature generalizations, not bug fixes per this file's
+own convention — logged briefly for cross-reference):
+1. **Timezone** — `todayInHarare()`/`Africa/Harare` (UTC+2, no DST) was hardcoded at 60+ call
+   sites system-wide. Added `organizations.timezone` (IANA string, defaults to `Africa/Harare` —
+   zero behavior change for existing tenants), a proper `Intl`-based DST-aware helper
+   (`server/date-utils.ts`), and migrated every call site plus 3 client-side display bugs found
+   along the way (`attendance.tsx`, `fleet-tracking.tsx`, `funerals.tsx`).
+2. **National ID format** — the Zimbabwe-shaped regex (`shared/validation.ts`) was the only format
+   accepted for every tenant's clients. Added a curated format catalog (Zimbabwe / South Africa /
+   none), an `organizations.nationalIdFormat` column (defaults to `zimbabwe`), and migrated all 9
+   validation call sites (server + client) to respect it.
+3. **Currency list** — `SUPPORTED_CURRENCIES = ["USD","ZAR","ZIG"]` was a fixed 3-item tuple for
+   every tenant. Expanded to a 15-currency platform catalog (Southern/East Africa + GBP/EUR) and
+   added `organizations.enabledCurrencies` (an org-picked subset, defaults to today's 3 currencies
+   for every existing org), with `currency-select.tsx` as the single choke point so ~10 currency
+   pickers across the app respect the org's subset without individual changes.
+
+All three follow the same established pattern used by the pre-existing `countryFlagSettings`
+satellite-table/simple-column precedent: a schema column/table defaulting to today's exact
+behavior (zero migration risk for existing tenants), a settings-UI control in the new "General"
+tab (`client/src/pages/staff/settings.tsx`, itself new this session), and `PATCH
+/api/organizations/:id` wiring under the existing `manage:settings` gate.
+
+**Verified:** full suite (355/355 — 2 new tests added for currency normalization) and
+`npm run check` clean after all 5 pieces of work. One implementation agent (national ID) had to be
+relaunched fresh after a first attempt returned with zero tool calls and no changes — inherited
+conversational context apparently caused it to narrate rather than execute; a fresh (non-fork)
+agent with the same self-contained instructions completed it correctly on the first try.
+
+**Deliberately deferred** (Augustus's call, smaller items not worth a dedicated pass right now):
+the module/feature-flag system (`server/org-capabilities.ts`) has no self-service tenant-admin UI
+at all — it's platform-owner-only via billing plans — which matters because "gate it behind a
+module flag" was the natural recommendation for a couple of findings in this review; `legacy_group_receipts`
+itself should eventually become a proper migrated table gated by a new module key rather than
+staying a Falakhe-only hand-patched table (the crash-risk fix above makes it safe, not generic);
+`chapelWashBayFee`/`storageFee` are hardcoded dedicated columns instead of flowing through the
+already-generic `mortuaryServiceRates` catalog table; legacy-group receipt numbering
+(`LGR-YYYYMMDD-NNN`) has a hardcoded prefix unlike policy numbers, which already have a
+configurable one.
+
+**Lesson for next time:** "hardcoded for the pilot tenant" bugs come in two shapes worth checking
+for separately — (1) literal org-ID/name string matches in code (rare in this codebase; only one
+real instance found, and it was already properly org-scoped, just missing the table it needed),
+and (2) shared/schema-level assumptions that never name the tenant at all but only make sense for
+their specific situation (currency list, national ID format, timezone — all found via "what did we
+build because Falakhe specifically needed it" rather than grepping for Falakhe's name). The second
+shape is more common and more dangerous — it doesn't show up in a grep for the tenant's name.
+
+---
+
+## 2026-08-19 — Full functional + non-functional requirements audit: 4 HIGH functional bugs + PayNow reconciliation gap fixed, 2 items deferred
+
+Immediately after the security audit below, requested a broader "thorough check for all the
+non functional and functional requirements" (same phrasing as the 2026-08-04 audit). Ran the
+same 5-way parallel fork pattern across domains the security audit didn't cover: policy/product/
+pricing, claims/funerals/groups/pool (the least-tested recently-shipped area — group/burial-
+society phases shipped 2026-08-12 with no live UI testing), finance/reports/payroll, performance/
+scalability, and reliability/data-integrity. Confirmed with Augustus via AskUserQuestion before
+fixing anything with real behavioral/financial impact (forward-only, no retroactive backfill of
+historical data).
+
+**HIGH — Group ledger debit on claim approval wasn't atomic with the approval.**
+`server/routes.ts` ~6440-6478: the claim's `status → "approved"` update committed inside
+`withOrgTransaction`, but the group-ledger debit for group-service claims ran AFTER that
+transaction had already committed, in a try/catch that only logged failures — no rollback, no
+retry. Same non-atomic-financial-write pattern the security audit fixed for petty cash/tombstone,
+reintroduced here in code that predates that fix (shipped 2026-08-12). Fixed by adding
+`storage.createGroupLedgerEntryInTx()` (`server/storage.ts` ~5196) and moving the ledger insert
+plus the `TRANSITION_CLAIM` audit log inside the existing transaction.
+
+**HIGH — `reinstatementRequiresArrears` product setting was completely unenforced.** Same bug
+shape as `reinstatementNewWaitingPeriod`, which was already correctly wired up: a schema column
+(`productVersions.reinstatementRequiresArrears`, default `true`) with a full admin toggle in
+`client/src/pages/staff/products.tsx`, but zero server code read it. Every reinstatement path
+(`server/policy-status-on-payment.ts`) flipped `lapsed → active` on any cleared payment, even a
+partial one, regardless of outstanding arrears. Fixed in `policy-status-on-payment.ts`, reusing
+the same `computePolicyOutstanding` formula the policy detail/report views already use (so this
+agrees with what staff/clients see as the outstanding balance, rather than inventing a second
+arrears definition) — extracted that formula (plus `periodDaysForSchedule`/`periodsBetween`) out
+of `route-helpers.ts` into a new dependency-free `server/policy-outstanding.ts`, because
+`policy-status-on-payment.ts` importing from `route-helpers.ts` directly would have created a
+circular import (`policy-status-on-payment → route-helpers → storage → policy-status-on-payment`).
+`route-helpers.ts` re-exports the same names so no other call site needed to change. Forward-only:
+a lapsed policy with arrears outstanding now stays lapsed/grace until a payment actually clears
+the balance; no historical policy was touched.
+
+**HIGH — Agent commission `recurringStartMonth` was silently ignored.** `server/route-helpers.ts`
+`recordAgentCommission()` computed `recurringStart` but never read the variable — the recurring
+commission rate fired immediately after the "first months" tier ended instead of waiting for the
+configured start month, paying agents for a gap the two-tier config implies should earn nothing.
+This was live on the **seeded default config itself** (`firstMonthsCount: 2`,
+`recurringStartMonth: 5` — meaning months 3-4 were being paid at the recurring rate two months
+early on every policy, every payment). Fixed: the gap between `firstMonths` and `recurringStart`
+now pays zero commission, for both the product-version and org-level-plan-fallback paths.
+Forward-only — no historical commission entries were reversed or corrected.
+
+**HIGH — Notification email delivery failures were recorded as "sent".** `server/notifications.ts`
+wrote the `notification_log` row with `status: "sent"` before `sendEmail()` was even invoked, and
+never checked its return value. `sendEmail()` (`server/email-service.ts`) never throws — on
+failure it returns `{ok: false, message}` and only logs internally — so the log was permanently
+wrong for every failed send, with no way for staff or the client to ever discover a premium
+reminder, activation email, or claim update never arrived. Fixed: both call sites now check the
+`ok` field and call a new `storage.updateNotificationLogStatus(orgId, id, "failed", message)` to
+correct the log row when delivery actually failed.
+
+**MEDIUM — PayNow payments could get stuck "pending" indefinitely.** PayNow doesn't guarantee
+webhook delivery — that's the documented reason `pollPaynowStatus()` exists — but it was only
+ever triggered client-UI-side, so a client closing their browser before a payment resolved (with
+the webhook also delayed/dropped) left the `payment_intent` stuck with no automated recovery and
+no operator visibility. Fixed by adding a scheduled reconciliation tick in `server/routes.ts`
+(default every 20 min, advisory-locked, `PAYNOW_RECONCILIATION_TICK_MS`/`PAYNOW_STALE_INTENT_MINUTES`
+env-configurable) that finds intents still `created` past the staleness threshold (default 45 min)
+and re-polls each via the existing `pollPaynowStatus()`, logging found/resolved/still-stuck counts.
+
+**Verified:** full suite (353/353) and `npm run check` clean after all 5 fixes. One fix agent run
+crashed mid-task on a transient network error (not a logic problem) after only completing prep
+work (the `createGroupLedgerEntryInTx` storage method) — resumed cleanly in a second run with no
+duplicated or lost work, verified by diffing the working tree against the crashed run's stated
+progress before resuming.
+
+**Deliberately deferred** (Augustus's call): group/burial-society batch receipting
+(`server/routes.ts` ~5586-5670) does 200-500 fully sequential per-policy DB round trips inside one
+long-held transaction for a large society — a known-but-previously-deferred issue already flagged
+twice in `docs/AUDIT-PERFORMANCE-SECURITY-ARCHITECTURE.md` (2025-03-04), still not fixed; and the
+IFRS 17 "Liability for Incurred Claims" figure (`server/insurance-revenue.ts` ~118-136) likely
+excludes in-kind funeral-service claims entirely (sums only `cashInLieuAmount`), which may be the
+majority of actual claims for a funeral insurer — needs a decision on valuation approach (e.g.
+via cost-sheet/price-book line items) before touching the report code, not a code-only fix.
+
+**Lesson for next time:** three specific gap-shapes now have two independent instances each,
+across two audit sessions the same day — worth checking for a *third* instance next time this
+class of code is touched: (1) a schema column with a full admin UI but zero server code reading
+it (`reinstatementNewWaitingPeriod` was already fixed; `reinstatementRequiresArrears` wasn't,
+until now — check every "config with a UI toggle" column against a grep for its own name in
+`server/` before assuming it's wired up), (2) new/older financial mutation code skipping the
+transactional-write-plus-atomic-audit-log idiom from the 2026-08-04 platform-fee fix (petty
+cash/tombstone caught by the security audit; the claims-approval group-ledger debit predates that
+fix and was missed until this pass), (3) an unused-variable-shaped bug where a config value is
+computed but never actually read in the branch that should gate on it (`recurringStart` here,
+worth grepping for other `let x = ...; // computed but unused` patterns in commission/pricing math).
+
+---
+
+## 2026-08-19 — Full security audit: 7 real findings (3 HIGH, 4 MEDIUM), all fixed same session
+
+Requested a full security audit ("harden the system") right after the 2026-08-18 SOC 2
+remediation commit. Ran the proven 5-way parallel read-only fork pattern (auth/session/RBAC/MFA,
+multi-tenancy isolation, financial/ACID, newest-feature deep-dive, injection/validation/perf),
+each required to cite file:line and say "not found" rather than guess. No criticals this time —
+prior audits had already closed the highest-severity classes of bug (cross-tenant leaks, missing
+row locks, unaudited routes). All 7 real findings below were fixed the same session; two
+low-severity items (transitive npm vulns in `cookie`/`csurf` and `uuid`/`exceljs`, both moderate,
+0 high/critical) were deliberately left as-is per Augustus — fixing either requires a breaking
+major-version dependency bump, not worth the risk for a moderate/low finding.
+
+**HIGH — Inbound email routes had no permission check.** `GET/PATCH /api/inbound-emails*` and
+`POST /api/inbound-emails/:id/reply` (`server/routes.ts`) were gated only by
+`requireAuth, requireTenantScope, requireModule("email_inbound")` — every sibling Settings route
+in the same file additionally requires `requirePermission("manage:settings")`, but these three
+were added (in the 2026-08-14ish inbound-email commit) without it. Any authenticated staff/agent
+account, regardless of role, could read the org's full inbound correspondence (client PII) and
+send outbound email as the organization with no RBAC gate. Fixed by adding the same
+`requirePermission("manage:settings")` used by every other Settings route.
+
+**HIGH — Client password-reset-via-security-question had no lockout.** Login enforces a
+DB-backed lockout after 5 bad attempts (`clients.failedLoginAttempts`/`lockedUntil`), but
+`POST /api/client-auth/reset-password` (security-question-based) never read or wrote those
+columns — only the generic IP-based rate limiter defended it, trivially bypassed with multiple
+IPs. Security-question answers are lower-entropy than a password, and success here is a full
+account takeover (attacker sets a new password). A more sensitive operation was protected by a
+weaker control than the operation it guards. Fixed by applying the same lockout
+check-and-increment logic as login to this route.
+
+**HIGH — Petty cash and tombstone payment writes weren't transactional.** Both
+`postPettyCashTransaction` and `recordTombstoneOrderPayment` (`server/storage.ts`, built
+2026-08-05, the newest financial code in the repo) ran a balance/amount-paid UPDATE followed by
+a detail-row INSERT as two separate autocommitted statements — unlike every other money-moving
+path, which uses `withOrgTransaction`/`tdb.transaction()`. A crash between the two statements
+(connection drop, OOM, deploy restart) would leave a balance changed with no corresponding
+transaction row to reconcile against — silent, unexplained drift. Fixed by splitting each into a
+public wrapper (opens the transaction) + an `InTx` variant, matching the existing
+`createPlatformReceivableInTx` idiom from the 2026-08-04 platform-fee-durability fix.
+
+**MEDIUM — MFA disable skipped re-auth entirely for OAuth-only staff.** `POST
+/api/auth/mfa/disable` required the current password to disable MFA — but staff are
+Google-OAuth-only per this repo's auth model, so most staff accounts have no `passwordHash` and
+hit no check at all; a hijacked session alone (XSS, shared device, leaked cookie) could silently
+strip the MFA compliance control. Fixed by requiring a fresh TOTP/backup code for accounts with
+no password to fall back on.
+
+**MEDIUM — `lookup-by-phone` allowed unthrottled cross-client PII enumeration.**
+`/api/client-auth/lookup-by-phone` lets a client look up another client in the same org by phone,
+policy number, or national ID (intentional — pays-for-another-policy feature), returning full
+name and policy/premium detail. It wasn't in the auth rate limiter, only the generic 200 req/min
+`/api` limiter, letting a low-privilege account confirm "does national ID X belong to person Y"
+at scale — undermining national ID's classification as protected PII from the SOC 2 commit.
+Fixed by adding a dedicated 20 req/15min limiter on the route.
+
+**MEDIUM — Petty cash/tombstone audit logging wasn't atomic with the write it documents.**
+The `auditLog()` calls for these two new mutation routes didn't pass the `tx` parameter added in
+the SOC 2 commit specifically for this purpose — the financial write could commit while its audit
+entry silently failed after one retry, with no rollback. Fixed alongside the transactionality fix
+above: the route handlers now open the transaction and pass it to both the storage call and
+`auditLog(..., txDb)`.
+
+**MEDIUM — MFA verify-login endpoints had no IP-level rate limit.** `/api/auth/mfa/verify-login`
+and `/api/agent-auth/mfa-verify` were the only login/credential endpoints not mounted under
+`authLimiter`, unlike every sibling auth route. Mitigated in practice by a separate session-bound
+5-attempt lockout on the code itself, but added to `authLimiter` anyway for defense-in-depth
+against session-fixation/replay against a stolen pending-MFA cookie.
+
+**Verified:** full suite (353/353) and `npm run check` clean after all 7 fixes.
+
+**Lesson for next time:** new feature branches keep reintroducing two specific gaps even after
+they've been fixed elsewhere in the codebase: (1) a new Settings-adjacent route added without the
+`requirePermission("manage:settings")` its siblings all have (inbound email this time; check any
+new route under an existing settings-like feature area against its neighbors, not just against
+`requireAuth`), and (2) new financial mutation code that doesn't use the transactional
+write+audit-log idiom established by the 2026-08-04 platform-fee fix (petty cash/tombstone this
+time). When auditing newly-added modules, explicitly diff their permission/transaction shape
+against the nearest existing sibling route rather than checking them in isolation.
+
+---
+
 ## 2026-08-13 — Tenant email domain provisioning created dead DNS records (2 bugs) and couldn't support both sending and receiving on one hostname
 
 Testing an upgraded Resend plan by provisioning Kings and Queens Funeral Assurance's email

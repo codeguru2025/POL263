@@ -147,6 +147,7 @@ export function registerPlatformRoutes(app: Express): void {
         policyNumberPrefix: org.policyNumberPrefix,
         policyNumberPadding: org.policyNumberPadding,
         isWhitelabeled: org.isWhitelabeled,
+        timezone: org.timezone,
       },
       payments: {
         integrationId: paynow.integrationId,

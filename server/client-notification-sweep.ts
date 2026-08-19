@@ -11,7 +11,7 @@ import { storage } from "./storage";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
 import { withAdvisoryLock } from "./advisory-lock";
 import { structuredLog } from "./logger";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 
 let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -31,7 +31,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "Ju
 // (same convention as paymentAutomationTickRunning/parkedVehicleTickRunning in server/routes.ts)
 // — resets on restart/deploy, which is an acceptable gap given deploys are infrequent and this
 // covers the actual common case (curious re-clicks, manual test right after the scheduled run).
-const lastRunHarareDateByOrg = new Map<string, string>();
+const lastRunDateByOrg = new Map<string, string>();
 
 export interface ClientNotificationSweepResult {
   orgsScanned: number;
@@ -86,12 +86,12 @@ export async function runClientNotificationSweep(trigger: "scheduler" | "manual"
 }
 
 async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResult): Promise<void> {
-  // Harare-calendar "today", not the server's raw UTC clock — see date-utils.ts: a plain
-  // `new Date()` mis-attributes anything in the ~2h window after midnight Harare time (still
-  // "yesterday" in UTC) to the wrong calendar day, which would skip or misfire birthday /
-  // anniversary / due-date matching for a manual run that happens to land in that window (the
-  // scheduled 05:00 UTC / 07:00 CAT run is safely outside it either way).
-  const todayStr = todayInHarare();
+  // This org's own local "today", not the server's raw UTC clock — see date-utils.ts: a plain
+  // `new Date()` mis-attributes anything in the window after local midnight (still "yesterday" in
+  // UTC) to the wrong calendar day, which would skip or misfire birthday / anniversary / due-date
+  // matching for a manual run that happens to land in that window (the scheduled 05:00 UTC run is
+  // safely outside it for Harare-timezone orgs either way, but not guaranteed for every timezone).
+  const todayStr = await todayForOrg(orgId);
   const todayYear = Number(todayStr.slice(0, 4));
   const org = await storage.getOrganization(orgId);
 
@@ -175,10 +175,12 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
     ? (await storage.getOrganization(orgIdFilter) ? [{ id: orgIdFilter }] : [])
     : await storage.getOrganizations();
 
-  const todayStr = todayInHarare();
   for (const org of orgs) {
     result.orgsScanned++;
-    if (lastRunHarareDateByOrg.get(org.id) === todayStr) {
+    // Each org's own "today" (organizations.timezone) — computed per-org since tenants can be in
+    // different timezones, not once for the whole sweep run.
+    const todayStr = await todayForOrg(org.id);
+    if (lastRunDateByOrg.get(org.id) === todayStr) {
       // Already sent today's date-based batch for this org (scheduled run, or an earlier
       // manual click) — re-running would double-send every matching birthday/anniversary/
       // premium-due/pre-lapse email, not just the ones that would've changed.
@@ -187,7 +189,7 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
     }
     try {
       await runSweepForOrg(org.id, result);
-      lastRunHarareDateByOrg.set(org.id, todayStr);
+      lastRunDateByOrg.set(org.id, todayStr);
     } catch (err: any) {
       result.errors.push(`org ${org.id}: ${err?.message}`);
       structuredLog("error", "Client notification sweep: org processing failed", { orgId: org.id, error: err?.message });

@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useBranding } from "@/hooks/use-branding";
 import { ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2, CalendarDays, Users, FileDown, QrCode, ScanLine, Printer, Plus, Activity, UserCheck, UserX, Building2, MapPin } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 
@@ -33,11 +34,11 @@ function fmtTime(d: string | null | undefined) {
   catch { return d; }
 }
 
-/** HH:MM in Africa/Harare, for pre-filling <input type="time"> against a stored UTC instant. */
-function toHarareHHMM(d: string | null | undefined): string {
+/** HH:MM in the org's own timezone, for pre-filling <input type="time"> against a stored UTC instant. */
+function toOrgHHMM(d: string | null | undefined, timezone: string): string {
   if (!d) return "";
   try {
-    return new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Harare", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(d));
+    return new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(d));
   } catch {
     return "";
   }
@@ -569,7 +570,8 @@ function LiveDashboardPanel() {
 export default function StaffAttendance() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { permissions } = useAuth();
+  const { permissions, user } = useAuth();
+  const { branding } = useBranding(user?.organizationId);
   const canManageAttendance = permissions.includes("manage:attendance");
 
   // My attendance state
@@ -898,7 +900,7 @@ export default function StaffAttendance() {
                             <Button
                               size="sm" variant="ghost"
                               className="h-7 text-xs"
-                              onClick={() => { setCorrectLog(log); setCorrectClockIn(toHarareHHMM(log.clockInAt)); setCorrectClockOut(toHarareHHMM(log.clockOutAt)); }}
+                              onClick={() => { setCorrectLog(log); setCorrectClockIn(toOrgHHMM(log.clockInAt, branding.timezone)); setCorrectClockOut(toOrgHHMM(log.clockOutAt, branding.timezone)); }}
                             >
                               Correct
                             </Button>

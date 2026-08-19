@@ -188,7 +188,7 @@ Agents access the staff portal with agent-scoped permissions after login. They s
 - **Age Band Configs** for age-based premium tiers
 
 ### 6.3 Policy Management
-- Policy lifecycle: `draft → pending → active → grace → lapsed → reinstatement_pending → cancelled`
+- Policy lifecycle: `inactive → active → grace → lapsed → cancelled` (see `POLICY_STATUSES`/`VALID_POLICY_TRANSITIONS` in `shared/schema.ts`; reinstatement is a direct `lapsed → active` transition, not a separate pending state)
 - Auto-generated policy numbers (org prefix + padded sequence, e.g., `FAL-00001`)
 - Links to: client, product version, agent, group, branch
 - Premium amount, currency, payment schedule (monthly/weekly/biweekly)

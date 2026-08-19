@@ -792,10 +792,33 @@ export function setupAuth(app: Express) {
 
   app.post("/api/auth/mfa/disable", requireAuth, async (req: Request, res: Response) => {
     const user = req.user as any;
-    const { password } = req.body;
+    const { password, code } = req.body;
     if (user.passwordHash) {
       if (!password || !(await argon2.verify(user.passwordHash, password))) {
         return res.status(400).json({ message: "Current password is required to disable MFA" });
+      }
+    } else {
+      // Staff are Google-OAuth-only by default and have no passwordHash to re-check, so a hijacked
+      // session could otherwise strip MFA with nothing but the existing cookie. Require a fresh
+      // TOTP/backup code instead — same step-up the login flow itself demands.
+      const trimmedCode = typeof code === "string" ? code.trim() : "";
+      let codeOk = !!trimmedCode && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: trimmedCode })).valid;
+      if (!codeOk && trimmedCode && Array.isArray(user.mfaBackupCodes)) {
+        const codes: (string | null)[] = user.mfaBackupCodes;
+        for (let i = 0; i < codes.length; i++) {
+          const hash = codes[i];
+          if (!hash) continue;
+          if (await argon2.verify(hash, trimmedCode)) {
+            codeOk = true;
+            const updated = [...codes];
+            updated[i] = null; // single-use
+            await storage.updateUser(user.id, { mfaBackupCodes: updated } as any);
+            break;
+          }
+        }
+      }
+      if (!codeOk) {
+        return res.status(400).json({ message: "A current MFA code or backup code is required to disable MFA" });
       }
     }
     await storage.updateUser(user.id, { mfaEnabled: false, mfaSecret: null, mfaBackupCodes: null } as any);

@@ -3,6 +3,7 @@ import {
   SUPPORTED_CURRENCIES,
   isSupportedCurrency,
   normalizeCurrency,
+  normalizeEnabledCurrencies,
   currencySymbol,
   formatAmount,
   formatAmountWithCode,
@@ -24,7 +25,7 @@ describe("Currency validation", () => {
     });
 
     it("rejects invalid values", () => {
-      expect(isSupportedCurrency("EUR")).toBe(false);
+      expect(isSupportedCurrency("JPY")).toBe(false);
       expect(isSupportedCurrency("usd")).toBe(false);
       expect(isSupportedCurrency("")).toBe(false);
       expect(isSupportedCurrency(null)).toBe(false);
@@ -47,7 +48,7 @@ describe("Currency validation", () => {
     });
 
     it("defaults to USD for unknown or empty values", () => {
-      expect(normalizeCurrency("EUR")).toBe("USD");
+      expect(normalizeCurrency("JPY")).toBe("USD");
       expect(normalizeCurrency("")).toBe("USD");
       expect(normalizeCurrency(null)).toBe("USD");
       expect(normalizeCurrency(undefined)).toBe("USD");
@@ -87,8 +88,27 @@ describe("Currency validation", () => {
   });
 
   describe("SUPPORTED_CURRENCIES constant", () => {
-    it("contains exactly USD, ZAR, ZIG", () => {
-      expect(SUPPORTED_CURRENCIES).toEqual(["USD", "ZAR", "ZIG"]);
+    it("is the platform-wide catalog universe, including the original 3 plus additional markets", () => {
+      // SUPPORTED_CURRENCIES = the full platform catalog (shared/validation.ts CURRENCY_CATALOG),
+      // not any one org's enabled subset — see normalizeEnabledCurrencies for the org-scoped list,
+      // which still defaults to exactly these 3 for backward compatibility.
+      expect(SUPPORTED_CURRENCIES).toEqual(expect.arrayContaining(["USD", "ZAR", "ZIG"]));
+      expect(SUPPORTED_CURRENCIES.length).toBeGreaterThanOrEqual(10);
+      expect(SUPPORTED_CURRENCIES.length).toBeLessThanOrEqual(20);
+    });
+  });
+
+  describe("normalizeEnabledCurrencies", () => {
+    it("defaults to USD/ZAR/ZIG when missing, non-array, or empty", () => {
+      expect(normalizeEnabledCurrencies(undefined)).toEqual(["USD", "ZAR", "ZIG"]);
+      expect(normalizeEnabledCurrencies(null)).toEqual(["USD", "ZAR", "ZIG"]);
+      expect(normalizeEnabledCurrencies("USD")).toEqual(["USD", "ZAR", "ZIG"]);
+      expect(normalizeEnabledCurrencies([])).toEqual(["USD", "ZAR", "ZIG"]);
+      expect(normalizeEnabledCurrencies(["JPY", "XYZ"])).toEqual(["USD", "ZAR", "ZIG"]);
+    });
+
+    it("keeps only recognized catalog codes, de-duplicated", () => {
+      expect(normalizeEnabledCurrencies(["USD", "USD", "KES", "JPY"])).toEqual(["USD", "KES"]);
     });
   });
 });

@@ -294,7 +294,7 @@ export async function dispatchNotification(
       for (const tmpl of templates) {
         const renderedSubject = renderTemplate(tmpl.subject || "", ctx);
         const renderedBody = renderTemplate(tmpl.bodyTemplate, ctx);
-        await storage.createNotificationLog(orgId, {
+        const log = await storage.createNotificationLog(orgId, {
           recipientType: "client",
           recipientId: clientId,
           channel: tmpl.channel,
@@ -305,6 +305,10 @@ export async function dispatchNotification(
           status: "sent",
         });
 
+        // sendEmail() never throws — on failure it returns {ok: false, message} and only logs
+        // internally, so the log row written above (optimistically "sent") must be corrected
+        // here on a real failure, or a message that never arrived stays recorded as delivered
+        // with no way for staff/the client to ever discover it.
         try {
           if (tmpl.channel === "email" && !emailAllowed) {
             structuredLog("info", "Notification email skipped — email_notifications module not enabled for this tenant", { orgId, clientId, eventType });
@@ -315,7 +319,7 @@ export async function dispatchNotification(
             }
             if (clientEmail) {
               const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
-              await sendEmail({
+              const result = await sendEmail({
                 to: clientEmail,
                 fromName: ctx.orgName,
                 subject: renderedSubject,
@@ -327,6 +331,9 @@ export async function dispatchNotification(
                 html: `<p>${escapeHtml(renderedBody).replace(/\n/g, "<br/>")}</p>`,
                 attachments,
               });
+              if (!result.ok) {
+                await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
+              }
             } else {
               structuredLog("warn", "Notification email skipped — client has no email on file", { orgId, clientId, eventType });
             }
@@ -337,6 +344,7 @@ export async function dispatchNotification(
           structuredLog("error", "Failed to deliver notification via channel", {
             error: (err as Error).message, orgId, clientId, eventType, channel: tmpl.channel,
           });
+          await storage.updateNotificationLogStatus(orgId, log.id, "failed", (err as Error).message).catch(() => {});
         }
       }
     } else {
@@ -358,7 +366,7 @@ export async function dispatchNotification(
             const client = await storage.getClient(clientId, orgId);
             if (client?.email) {
               const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
-              await storage.createNotificationLog(orgId, {
+              const log = await storage.createNotificationLog(orgId, {
                 recipientType: "client",
                 recipientId: clientId,
                 channel: "email",
@@ -367,7 +375,9 @@ export async function dispatchNotification(
                 policyId: ctx.policyId ?? null,
                 status: "sent",
               });
-              await sendEmail({
+              // sendEmail() never throws — check its result explicitly (see comment on the
+              // templated-path call site above for why the optimistic "sent" log needs correcting).
+              const result = await sendEmail({
                 to: client.email,
                 fromName: ctx.orgName,
                 subject: renderedSubject,
@@ -379,6 +389,9 @@ export async function dispatchNotification(
                 html: `<p>${escapeHtml(renderedBody).replace(/\n/g, "<br/>")}</p>`,
                 attachments,
               });
+              if (!result.ok) {
+                await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
+              }
             }
           } catch (err) {
             structuredLog("error", "Failed to send default-channel notification email", {

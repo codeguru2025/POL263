@@ -67,6 +67,24 @@ export const organizations = pgTable("organizations", {
   /** Admin-uploaded product brochure PDF, overriding the auto-generated one at
    *  GET /api/products/brochure. Null = no override, always serve the generated version. */
   brochureUrl: text("brochure_url"),
+  /** IANA timezone (e.g. "Africa/Harare", "Africa/Johannesburg") this tenant's "today"/grace/lapse/
+   *  notification-timing computations use — see server/date-utils.ts. Defaults to Africa/Harare so
+   *  every tenant that existed before this column was added keeps byte-identical behavior. */
+  timezone: text("timezone").notNull().default("Africa/Harare"),
+  /** Which national-ID shape (shared/validation.ts NATIONAL_ID_FORMATS catalog key) this org
+   *  enforces on client/dependent/beneficiary national ID fields. A curated catalog rather than a
+   *  free-text regex an admin could author (avoids ReDoS/correctness risk from untrusted
+   *  patterns). Defaults to "zimbabwe" — the shape hardcoded everywhere before this was
+   *  configurable — so every tenant that existed before this column was added keeps
+   *  byte-identical validation behavior. */
+  nationalIdFormat: text("national_id_format").notNull().default("zimbabwe"),
+  /** Which currencies (shared/validation.ts CURRENCY_CATALOG keys) this org has actually turned on
+   *  — a subset of the platform-wide catalog, not the catalog itself. Every currency-picker across
+   *  the app (client/src/components/currency-select.tsx) filters to this list. Defaults to
+   *  ["USD","ZAR","ZIG"] — the previously hardcoded fixed 3-currency list every tenant got — so
+   *  every org that existed before this column was added keeps byte-identical currency-picker
+   *  behavior. jsonb array, same pattern as productTypes/distributionChannels above. */
+  enabledCurrencies: jsonb("enabled_currencies").$type<string[]>().notNull().default(["USD", "ZAR", "ZIG"]),
 });
 
 /** Central-DB-only routing pointer: the public /pay/:token page has no session, so it can't

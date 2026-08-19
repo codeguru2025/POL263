@@ -155,10 +155,10 @@ if (enableCsrf) {
   // mounting authLimiter on the full prefix meant every real session got 429'd within
   // minutes (e.g. the client portal's 15s unread-count poll alone exhausts 20 req/15min).
   app.use(
-    ["/api/auth/google", "/api/auth/google/callback", "/api/auth/mobile-exchange", "/api/auth/demo-login"],
+    ["/api/auth/google", "/api/auth/google/callback", "/api/auth/mobile-exchange", "/api/auth/demo-login", "/api/auth/mfa/verify-login"],
     authLimiter
   );
-  app.use("/api/agent-auth/login", authLimiter);
+  app.use(["/api/agent-auth/login", "/api/agent-auth/mfa-verify"], authLimiter);
   app.use(
     [
       "/api/client-auth/login",
@@ -171,6 +171,21 @@ if (enableCsrf) {
   );
   app.use("/api/security-questions", authLimiter);
   app.use("/api/agents/by-referral", authLimiter);
+
+  // Lets an authenticated client search other clients in the org by phone/policy/national ID
+  // (pay-for-another-policy feature) — returns another person's name + policy/premium data, so it
+  // needs its own throttle rather than inheriting the generic 200 req/min "/api" limit, which would
+  // let a low-privilege account enumerate PII at scale.
+  app.use(
+    "/api/client-auth/lookup-by-phone",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("lookup"),
+      windowMs: 15 * 60 * 1000,
+      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      message: { message: "Too many lookup requests, please try again later" },
+    })
+  );
 
   app.use(
     "/api/payments/paynow/result",

@@ -25,6 +25,7 @@ import type { FuneralCase, FuneralTask, FleetVehicle } from "@shared/schema";
 import { computeServiceCharge } from "@shared/pricing";
 import { QuoteDialog } from "./quotations";
 import { useAuth } from "@/hooks/use-auth";
+import { useBranding } from "@/hooks/use-branding";
 import { CountryFlagFields, type CountryFlagSettings } from "@/components/country-flag-fields";
 
 // Funeral cases store date of birth, not age — the quotation form wants age directly.
@@ -1449,6 +1450,8 @@ function CaseDetailView({
   onDeleteServiceCharge?: (id: string) => void;
   countryFlagSettings?: CountryFlagSettings;
 }) {
+  const { user } = useAuth();
+  const { branding } = useBranding(user?.organizationId);
   const completed = tasks.filter((t) => t.status === "completed").length;
   const [payingChargeId, setPayingChargeId] = useState<string | null>(null);
   const [payingChargeBy, setPayingChargeBy] = useState("");
@@ -1563,10 +1566,10 @@ function CaseDetailView({
             <>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4 mb-1.5">Timeline</p>
               <div className="space-y-0.5">
-                <DetailRow label="Body wash" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
-                <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
-                <DetailRow label="Memorial start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
-                <DetailRow label="Memorial end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA", { timeZone: "Africa/Harare" }) : undefined} />
+                <DetailRow label="Body wash" value={(fc as any).bodyWashTime ? new Date((fc as any).bodyWashTime).toLocaleString("en-ZA", { timeZone: branding.timezone }) : undefined} />
+                <DetailRow label="Departure for burial" value={(fc as any).burialDepartureTime ? new Date((fc as any).burialDepartureTime).toLocaleString("en-ZA", { timeZone: branding.timezone }) : undefined} />
+                <DetailRow label="Memorial start" value={(fc as any).memorialServiceStart ? new Date((fc as any).memorialServiceStart).toLocaleString("en-ZA", { timeZone: branding.timezone }) : undefined} />
+                <DetailRow label="Memorial end" value={(fc as any).memorialServiceEnd ? new Date((fc as any).memorialServiceEnd).toLocaleString("en-ZA", { timeZone: branding.timezone }) : undefined} />
               </div>
             </>
           )}

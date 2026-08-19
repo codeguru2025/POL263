@@ -19,7 +19,7 @@ import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremiu
 import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock } from "./advisory-lock";
-import { todayInHarare, harareLocalToUtcDate } from "./date-utils";
+import { todayForOrg, localToUtcDate, getOrgTimezone } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
 import { buildInsuranceContractSummary } from "./insurance-revenue";
 import { buildDailyReport } from "./daily-report";
@@ -60,7 +60,7 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding, tenantDatabases as cpTenantDatabases } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
-import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, parsePositiveAmount, validatePasswordPolicy } from "../shared/validation";
+import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, normalizeEnabledCurrencies, DEFAULT_ENABLED_CURRENCIES, parsePositiveAmount, validatePasswordPolicy, NATIONAL_ID_FORMATS, NATIONAL_ID_FORMAT_KEYS, DEFAULT_NATIONAL_ID_FORMAT, isNationalIdFormatKey, nationalIdFormatHint, type NationalIdFormatKey } from "../shared/validation";
 import { computeServiceCharge } from "../shared/pricing";
 import { checkAvailability } from "./scheduling-availability";
 import {
@@ -114,6 +114,20 @@ import { isAgentScoped } from "@shared/roles";
 import rateLimit from "express-rate-limit";
 import { createRedisStore } from "./rate-limit-redis-store";
 
+
+/** Looks up an org's configured national ID format (shared/validation.ts NATIONAL_ID_FORMATS
+ *  catalog key), falling back to "zimbabwe" — the pre-existing hardcoded shape — if the org can't
+ *  be found or has an unrecognized value. No caching layer (unlike getOrgTimezone in date-utils.ts):
+ *  this is looked up at most once or twice per client/dependent/beneficiary mutation request, not
+ *  per date computation, so the extra round trip isn't worth the staleness tradeoff. Goes through
+ *  storage.getOrganization() per this codebase's "all DB ops go through server/storage.ts"
+ *  convention (see CLAUDE.md). */
+async function resolveOrgNationalIdFormat(orgId: string | null | undefined): Promise<NationalIdFormatKey> {
+  if (!orgId) return DEFAULT_NATIONAL_ID_FORMAT;
+  const org = await storage.getOrganization(orgId);
+  const key = (org as any)?.nationalIdFormat;
+  return isNationalIdFormatKey(key) ? key : DEFAULT_NATIONAL_ID_FORMAT;
+}
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
@@ -464,7 +478,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             metadata: null,
           } as any);
         } else {
-          const idempotencyKey = `auto-${policy.id}-${todayInHarare()}`;
+          const idempotencyKey = `auto-${policy.id}-${await todayForOrg(orgId)}`;
           const intentResult = await createPaymentIntent({
             organizationId: orgId,
             clientId: policy.clientId,
@@ -571,6 +585,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       paymentAutomationTickRunning = false;
     }
   }, automationTickMs);
+
+  // PayNow doesn't support webhooks reliably in every deployment, so `handlePaynowResult` (the
+  // webhook) is the primary confirmation path with `pollPaynowStatus` as a secondary check — but
+  // that secondary check has only ever been triggered client-UI-side. If a client closes their
+  // browser before a payment resolves and the webhook is delayed or dropped, the intent stays
+  // "created" forever with no automated recovery and no operator visibility. This sweep re-polls
+  // intents stuck in "created" past a threshold so most resolve on their own; anything still
+  // stuck after that is at least visible in the structured logs for an operator to investigate.
+  let paynowReconciliationTickRunning = false;
+  const PAYNOW_RECONCILIATION_LOCK_KEY = 9_002_630_003; // stable pg advisory lock key for this scheduler
+  const PAYNOW_STALE_INTENT_MINUTES = Math.max(5, parseInt(process.env.PAYNOW_STALE_INTENT_MINUTES || "", 10) || 45);
+  const paynowReconciliationTickMs = Math.max(60_000, parseInt(process.env.PAYNOW_RECONCILIATION_TICK_MS || "", 10) || (20 * 60 * 1000));
+  setInterval(async () => {
+    if (paynowReconciliationTickRunning) return;
+    paynowReconciliationTickRunning = true;
+    try {
+      await withAdvisoryLock(PAYNOW_RECONCILIATION_LOCK_KEY, async () => {
+        const orgs = await storage.getOrganizations();
+        const cutoff = new Date(Date.now() - PAYNOW_STALE_INTENT_MINUTES * 60 * 1000);
+        for (const org of orgs) {
+          let found = 0, resolved = 0, stillStuck = 0;
+          try {
+            const staleIntents = await storage.getStalePendingPaymentIntents(org.id, cutoff);
+            found = staleIntents.length;
+            for (const intent of staleIntents) {
+              try {
+                const result = await pollPaynowStatus(intent.id, org.id);
+                if (result.status === "paid" || result.status === "failed") resolved++;
+                else stillStuck++;
+              } catch (err: any) {
+                stillStuck++;
+                structuredLog("error", "PayNow reconciliation poll failed for intent", { orgId: org.id, intentId: intent.id, error: err?.message });
+              }
+            }
+          } catch (err: any) {
+            structuredLog("error", "PayNow reconciliation sweep failed for org", { orgId: org.id, error: err?.message });
+            continue;
+          }
+          if (found > 0) {
+            structuredLog("info", "PayNow reconciliation sweep", { orgId: org.id, found, resolved, stillStuck, staleAfterMinutes: PAYNOW_STALE_INTENT_MINUTES });
+          }
+        }
+      });
+    } catch (err: any) {
+      structuredLog("error", "PayNow reconciliation scheduler failed", { error: err?.message, stack: err?.stack });
+    } finally {
+      paynowReconciliationTickRunning = false;
+    }
+  }, paynowReconciliationTickMs);
 
   const PARKED_ALERT_MINUTES = 5;
   const PARKED_STILL_RADIUS_METERS = 50;
@@ -1730,7 +1793,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = req.params.id as string;
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canManageTenants = perms.includes("create:tenant") || perms.includes("delete:tenant");
-    const canWriteOrg = perms.includes("write:organization");
+    // manage:settings holders can reach this endpoint too (needed for the timezone field below,
+    // an operational org setting alongside country-flag/receipt-adverts/etc. in Settings) — the
+    // per-field allowlist further down still restricts what manage:settings alone can actually
+    // change; it does not gain write:organization's broader field access.
+    const canWriteOrg = perms.includes("write:organization") || perms.includes("manage:settings");
     if (!canManageTenants && (id !== user.organizationId || !canWriteOrg)) {
       return res.status(403).json({ message: "Cross-tenant access denied or insufficient permissions" });
     }
@@ -1756,6 +1823,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         sanitizedTenant.slug = candidate;
       } else if (isPlatformOwner && PLATFORM_ONLY_TENANT_REGISTRY_FIELDS.has(key)) {
         sanitizedTenant[key] = value;
+      } else if (key === "timezone") {
+        // Not "branding" — this org's own operational date/time computations (grace/lapse
+        // sweeps, notification timing, receipt dates — see server/date-utils.ts), so it stays
+        // self-service here rather than moving to the platform-console branding overlay.
+        if (typeof value !== "string" || !value.trim()) {
+          return res.status(400).json({ message: "timezone must be a non-empty IANA timezone string." });
+        }
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: value.trim() });
+        } catch {
+          return res.status(400).json({ message: `"${value}" is not a recognized IANA timezone.` });
+        }
+        sanitizedOrg.timezone = value.trim();
+      } else if (key === "nationalIdFormat") {
+        // Same self-service rationale as timezone above — this org's own operational client-
+        // capture validation, not "branding". Restricted to the curated catalog (shared/
+        // validation.ts NATIONAL_ID_FORMATS) rather than accepting an arbitrary string, since that
+        // catalog is exactly what stops a tenant admin from being able to inject their own regex.
+        if (typeof value !== "string" || !isNationalIdFormatKey(value)) {
+          return res.status(400).json({ message: `nationalIdFormat must be one of: ${NATIONAL_ID_FORMAT_KEYS.join(", ")}.` });
+        }
+        sanitizedOrg.nationalIdFormat = value;
+      } else if (key === "enabledCurrencies") {
+        // Same self-service rationale as timezone/nationalIdFormat above. Restricted to the
+        // curated CURRENCY_CATALOG in shared/validation.ts (not arbitrary strings) and required to
+        // leave at least one currency enabled — an empty list would make every currency-picker in
+        // the app unusable for this org.
+        if (!Array.isArray(value) || value.length === 0 || !value.every((v) => typeof v === "string" && isSupportedCurrency(v))) {
+          return res.status(400).json({ message: `enabledCurrencies must be a non-empty array of currency codes from: ${SUPPORTED_CURRENCIES.join(", ")}.` });
+        }
+        sanitizedOrg.enabledCurrencies = normalizeEnabledCurrencies(value);
       } else {
         rejectedFields.push(key);
       }
@@ -2386,15 +2484,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const nationalIdNorm = normalizeNationalId(req.body.nationalId);
+    const clientNationalIdFormat = await resolveOrgNationalIdFormat(user.organizationId);
     if (!isLegacyGroupCapture) {
       if (!nationalIdNorm) {
         return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
       }
-      if (!isValidNationalId(req.body.nationalId)) {
-        return res.status(400).json({ message: "National ID must be digits, then one letter, then two digits (e.g. 08833089H38)." });
+      if (!isValidNationalId(req.body.nationalId, clientNationalIdFormat)) {
+        return res.status(400).json({ message: `National ID ${nationalIdFormatHint(clientNationalIdFormat)}.` });
       }
-    } else if (nationalIdNorm && !isValidNationalId(req.body.nationalId)) {
-      return res.status(400).json({ message: "National ID must be digits, then one letter, then two digits (e.g. 08833089H38)." });
+    } else if (nationalIdNorm && !isValidNationalId(req.body.nationalId, clientNationalIdFormat)) {
+      return res.status(400).json({ message: `National ID ${nationalIdFormatHint(clientNationalIdFormat)}.` });
     }
     const phone = toUpperTrim(req.body.phone, false);
     const address = toUpperTrim(req.body.address, true);
@@ -2540,7 +2639,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!relationship) return res.status(400).json({ message: "Relationship is required for dependants." });
     if (!isLegacyDependentCapture && !dateOfBirth) return res.status(400).json({ message: "Date of birth is required for dependants." });
     if (!isLegacyDependentCapture && !gender) return res.status(400).json({ message: "Gender is required for dependants." });
-    if (nationalIdDep && !isValidNationalId(nationalIdDep)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    if (nationalIdDep) {
+      const depNationalIdFormat = await resolveOrgNationalIdFormat(user.organizationId);
+      if (!isValidNationalId(nationalIdDep, depNationalIdFormat)) {
+        return res.status(400).json({ message: `National ID ${nationalIdFormatHint(depNationalIdFormat)}.` });
+      }
+    }
 
     // Soft duplicate check — dependents frequently have no national ID (the strong signal
     // POST /api/clients uses), so match on name + DOB instead. Same "surface, don't block"
@@ -2684,13 +2788,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Inbound Email Inbox ─────────────────────────────────────────────────
-  app.get("/api/inbound-emails", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+  app.get("/api/inbound-emails", requireAuth, requireTenantScope, requirePermission("manage:settings"), requireModule("email_inbound"), async (req, res) => {
     const user = req.user as any;
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     return res.json(await storage.getInboundEmails(user.organizationId, status));
   });
 
-  app.patch("/api/inbound-emails/:id", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+  app.patch("/api/inbound-emails/:id", requireAuth, requireTenantScope, requirePermission("manage:settings"), requireModule("email_inbound"), async (req, res) => {
     const user = req.user as any;
     const { status, linkedNote } = req.body;
     if (status !== undefined && !["unread", "reviewed", "archived"].includes(status)) {
@@ -2709,7 +2813,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
-  app.post("/api/inbound-emails/:id/reply", requireAuth, requireTenantScope, requireModule("email_inbound"), async (req, res) => {
+  app.post("/api/inbound-emails/:id/reply", requireAuth, requireTenantScope, requirePermission("manage:settings"), requireModule("email_inbound"), async (req, res) => {
     const user = req.user as any;
     const bodyText = typeof req.body.body === "string" ? req.body.body.trim() : "";
     if (!bodyText) return res.status(400).json({ message: "body is required" });
@@ -3208,7 +3312,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
     if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const statusOk = policy.status === "active" || policy.status === "grace";
 
     let productName = "";
@@ -3401,22 +3505,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         structuredLog("warn", "POST /api/policies 400", { reason: "beneficiary relationship missing", userId: user?.id, orgId: user?.organizationId });
         return res.status(400).json({ message: "Beneficiary relationship is required." });
       }
+      const beneficiaryNationalIdFormat = await resolveOrgNationalIdFormat(user.organizationId);
       if (!isDepLinked) {
         if (!isLegacyGroupIssuance && !benNationalId) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID missing", userId: user?.id, orgId: user?.organizationId });
           return res.status(400).json({ message: "Beneficiary national ID is required." });
         }
-        if (benNationalId && !isValidNationalId(beneficiary.nationalId)) {
+        if (benNationalId && !isValidNationalId(beneficiary.nationalId, beneficiaryNationalIdFormat)) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary national ID invalid", userId: user?.id, orgId: user?.organizationId });
-          return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+          return res.status(400).json({ message: `Beneficiary national ID ${nationalIdFormatHint(beneficiaryNationalIdFormat)}.` });
         }
         if (!isLegacyGroupIssuance && !benPhone) {
           structuredLog("warn", "POST /api/policies 400", { reason: "manual beneficiary phone missing", userId: user?.id, orgId: user?.organizationId });
           return res.status(400).json({ message: "Beneficiary phone is required." });
         }
-      } else if (benNationalId && !isValidNationalId(beneficiary.nationalId)) {
+      } else if (benNationalId && !isValidNationalId(beneficiary.nationalId, beneficiaryNationalIdFormat)) {
         structuredLog("warn", "POST /api/policies 400", { reason: "dep-linked beneficiary national ID invalid format", userId: user?.id, orgId: user?.organizationId });
-        return res.status(400).json({ message: "Beneficiary national ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+        return res.status(400).json({ message: `Beneficiary national ID ${nationalIdFormatHint(beneficiaryNationalIdFormat)}.` });
       }
       beneficiary.firstName = benFirst;
       beneficiary.lastName = benLast;
@@ -3570,7 +3675,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // Legacy/backfilled policies: auto-activate and waive waiting period immediately.
     if ((policyInsert as any).isLegacy) {
-      const today = todayInHarare();
+      const today = await todayForOrg(user.organizationId);
       await withOrgTransaction(user.organizationId, async (txDb) => {
         await txDb.update(policies).set({
           status: "active",
@@ -3738,7 +3843,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rejectionReason: rejectionReason || null,
       }).where(eq(waitingPeriodWaivers.id, waiver.id)).returning();
       if (action === "approve") {
-        const today = todayInHarare();
+        const today = await todayForOrg(user.organizationId);
         await txDb.update(policies).set({ waitingPeriodEndDate: today }).where(eq(policies.id, waiver.policyId));
         const [policy] = await txDb.select().from(policies).where(eq(policies.id, waiver.policyId)).limit(1);
         if (policy?.status === "inactive") {
@@ -3773,7 +3878,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const rawPremium = body.premiumAmount;
     const premiumEffectiveDate = typeof body.premiumEffectiveDate === "string" && body.premiumEffectiveDate.trim()
       ? body.premiumEffectiveDate.trim()
-      : todayInHarare();
+      : await todayForOrg(user.organizationId);
     const premiumChangeReason = typeof body.premiumChangeReason === "string" ? body.premiumChangeReason : null;
     delete body.premiumAmount;
     delete body.premiumEffectiveDate;
@@ -3883,7 +3988,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     if (isLegacyRequest) {
-      const today = todayInHarare();
+      const today = await todayForOrg(user.organizationId);
       const legacyEffectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       updated = await withOrgTransaction(user.organizationId, async (txDb) => {
         const [row] = await txDb.update(policies).set({
@@ -3984,7 +4089,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // change the policy's inception (effectiveDate). Defaults to today.
       const reconcileFrom = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : todayInHarare();
+        : await todayForOrg(user.organizationId);
 
       const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
       const newPremium = parseFloat(String(premiumAmount));
@@ -4202,7 +4307,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const policy = accessCheck.policy;
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const todayDate = new Date();
     const policyStatusOk = policy.status === "active" || policy.status === "grace";
 
@@ -4352,7 +4457,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (Math.abs(newPremium - oldPremium) >= 0.01) {
       const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : todayInHarare();
+        : await todayForOrg(user.organizationId);
       reconciliation = await reconcilePremiumChange({
         orgId: user.organizationId,
         policy: recalced,
@@ -4404,7 +4509,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (Math.abs(newPremium - oldPremium) >= 0.01) {
       const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
-        : todayInHarare();
+        : await todayForOrg(user.organizationId);
       reconciliation = await reconcilePremiumChange({
         orgId: user.organizationId,
         policy: recalced,
@@ -4450,7 +4555,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const effectiveDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
       ? req.body.effectiveDate.trim()
-      : todayInHarare();
+      : await todayForOrg(user.organizationId);
     const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
     const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
     const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
@@ -4654,7 +4759,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
       const recordedByForLedger = actorRow?.id ?? null;
-      const today = todayInHarare();
+      const today = await todayForOrg(user.organizationId);
       const parsed = insertPaymentTransactionSchema.parse({
         ...req.body,
         organizationId: user.organizationId,
@@ -4747,7 +4852,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Only reinstate/activate if the payment actually covered a full cycle above — otherwise
       // status would flip to "active" while currentCycleEnd stays stale/unset (monthCount === 0).
       if (tx.status === "cleared" && tx.policyId && policy && monthCount > 0) {
-        const todayDate = todayInHarare();
+        const todayDate = await todayForOrg(user.organizationId);
         const updated = await applyPolicyStatusForClearedPayment(txDb, tx.policyId, policy, todayDate, " (recorded)", recordedByForLedger ?? undefined);
         policyStatusChange = updated
           ? { from: policy.status, to: "active" as const, reason: policy.status === "inactive" ? "First premium paid — conversion" : policy.status === "grace" ? "Payment received" : "Reinstatement — payment received" }
@@ -5225,7 +5330,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Lock the policy row to prevent concurrent modifications
       await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policyId} FOR UPDATE`);
 
-      const today = todayInHarare();
+      const today = await todayForOrg(user.organizationId);
       const [tx] = await txDb.insert(paymentTransactions).values({
         organizationId: user.organizationId,
         policyId,
@@ -5355,7 +5460,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const rows = lines.slice(1);
     let receipted = 0;
     let creditNotes = 0;
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     for (const line of rows) {
       const parts = line.split(",").map((p) => p.trim());
       if (parts.length < 2) continue;
@@ -5504,7 +5609,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!groupId || (!isItemized && (!Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null))) {
       return res.status(400).json({ message: "groupId and either items (itemized) or policyIds+totalAmount are required" });
     }
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const effectiveDate = receiptDate ? String(receiptDate).trim() : today;
     const isBackdated = effectiveDate < today;
     if (isBackdated && (!submitterNote || !String(submitterNote).trim())) {
@@ -5754,7 +5859,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const policy = await storage.getPolicy(receipt.policyId, user.organizationId);
       if (!policy) return res.status(404).json({ message: "Policy not found." });
-      const effectiveDate = receipt.backdatedDate || todayInHarare();
+      const effectiveDate = receipt.backdatedDate || await todayForOrg(user.organizationId);
       const isPremiumOverride = !!(receipt.metadataJson as any)?.premiumOverride;
       const approvedNoteText = isPremiumOverride
         ? `Premium override approved — receipted ${receipt.amount} vs system premium ${(receipt.metadataJson as any)?.systemPremium ?? "?"}`
@@ -6212,7 +6317,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   async function checkWaitingPeriodViolation(policy: any, orgId: string, dateOfDeath: string | null | undefined): Promise<{ violated: boolean; waitingPeriodEndDate: string | null }> {
     const waitingPeriodEndDate = await resolvePolicyWaitingPeriodEndDate(policy, orgId);
     if (!waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
-    const asOf = dateOfDeath || todayInHarare();
+    const asOf = dateOfDeath || await todayForOrg(orgId);
     return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
   }
 
@@ -6435,8 +6540,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       updateData.exGratiaReason = exGratia.reason;
     }
 
-    // Status update + history row must commit together — a crash between the two would leave
-    // an approved/rejected claim with no record of who/when/why in its status history.
+    // Status update + history row + (if applicable) the group ledger debit + audit log must all
+    // commit together — a crash mid-way used to leave a durably-approved group claim with no
+    // ledger debit and no record it was ever owed (found in the 2026-08-19 functional audit).
     const updated = await withOrgTransaction(claim.organizationId, async (txDb) => {
       const [row] = await txDb.update(claims).set(updateData)
         .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
@@ -6450,32 +6556,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await txDb.insert(claimStatusHistory).values({
         claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyReason, changedBy: effectiveUserId,
       });
-      return row;
-    });
-    await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, updated);
-    // Group-service claim, approved — debit the group's ledger for the payout amount. This is
-    // the moment a group-service quotation's ledger deduction actually commits, after going
-    // through the same review/approval procedure as any other claim (segregation of duties,
-    // waiting-period/ex-gratia checks above) — satisfies "groups must also follow the standing
-    // claims procedure." Only fires once, on the submitted->approved transition (not on later
-    // scheduled/payable/paid/closed transitions of the same claim).
-    if (toStatus === "approved" && updated.groupId && updated.cashInLieuAmount) {
-      try {
-        await storage.createGroupLedgerEntry({
+      // Group-service claim, approved — debit the group's ledger for the payout amount. This is
+      // the moment a group-service quotation's ledger deduction actually commits, after going
+      // through the same review/approval procedure as any other claim (segregation of duties,
+      // waiting-period/ex-gratia checks above) — satisfies "groups must also follow the standing
+      // claims procedure." Only fires once, on the submitted->approved transition (not on later
+      // scheduled/payable/paid/closed transitions of the same claim).
+      if (toStatus === "approved" && row.groupId && row.cashInLieuAmount) {
+        await storage.createGroupLedgerEntryInTx(txDb, {
           organizationId: claim.organizationId,
-          groupId: updated.groupId,
+          groupId: row.groupId,
           entryType: "claim_debit",
-          amount: updated.cashInLieuAmount,
-          currency: updated.currency,
-          description: `Claim ${updated.claimNumber} approved`,
+          amount: row.cashInLieuAmount,
+          currency: row.currency,
+          description: `Claim ${row.claimNumber} approved`,
           referenceType: "claim",
-          referenceId: updated.id,
+          referenceId: row.id,
           createdBy: user.id,
         });
-      } catch (err: any) {
-        structuredLog("error", "Group ledger debit failed (claim approval)", { claimId: updated.id, groupId: updated.groupId, error: err?.message });
       }
-    }
+      await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, row, undefined, txDb);
+      return row;
+    });
     // Notify submitter of status change
     if (claim.submittedBy && claim.submittedBy !== user.id) {
       notifyUser(claim.organizationId, claim.submittedBy, {
@@ -6843,7 +6945,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         vehicleId,
         driverId: typeof req.body.driverId === "string" && req.body.driverId ? req.body.driverId : null,
         funeralCaseId: caseId,
-        tripDate: req.body.tripDate || todayInHarare(),
+        tripDate: req.body.tripDate || await todayForOrg(user.organizationId),
         purpose: typeof req.body.purpose === "string" ? req.body.purpose : null,
         startLocation: typeof req.body.startLocation === "string" ? req.body.startLocation : null,
         destination: typeof req.body.destination === "string" ? req.body.destination : null,
@@ -6892,8 +6994,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/schedule/pdf", requireAuth, requireTenantScope, requirePermission("read:funeral_ops"), async (req, res) => {
     const user = req.user as any;
-    // Default to tomorrow (in Harare — the sweep this drives runs on Harare calendar days)
-    const [hY, hM, hD] = todayInHarare().split("-").map(Number);
+    // Default to tomorrow, in this org's own timezone.
+    const [hY, hM, hD] = (await todayForOrg(user.organizationId)).split("-").map(Number);
     const defaultDate = new Date(Date.UTC(hY, hM - 1, hD + 1)).toISOString().slice(0, 10);
     const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
       ? req.query.date : defaultDate;
@@ -6909,7 +7011,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const dept = req.query.dept as string;
     if (!validDepts.includes(dept as any)) return res.status(400).json({ message: `dept must be one of: ${validDepts.join(", ")}` });
 
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const firstOfMonth = today.slice(0, 8) + "01";
     const from = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : firstOfMonth;
     const to = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : today;
@@ -7678,7 +7780,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     try {
       const emp = await storage.getPayrollEmployeeByUserId(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
-      const todayLog = emp ? await storage.getAttendanceLogForDate(emp.id, user.organizationId, todayInHarare()) : undefined;
+      const todayLog = emp ? await storage.getAttendanceLogForDate(emp.id, user.organizationId, await todayForOrg(user.organizationId)) : undefined;
       const isClockedIn = !!todayLog?.clockInAt && !todayLog?.clockOutAt;
       if (!isClockedIn) {
         return res.status(400).json({ message: "You must clock in (Attendance → Scan) before checking out a company vehicle." });
@@ -7834,7 +7936,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const effectiveSelfId = await resolveOrSyncTenantUserId(orgId, user.id);
     const agentId = isAgent ? effectiveSelfId : (typeof req.query.agentId === "string" ? req.query.agentId : effectiveSelfId);
 
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(orgId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to   = typeof req.query.toDate   === "string" && req.query.toDate   ? req.query.toDate   : def.to;
 
@@ -8330,7 +8432,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         amount,
         organizationId: user.organizationId,
         requisitionNumber,
-        raisedDate: req.body.raisedDate || todayInHarare(),
+        raisedDate: req.body.raisedDate || await todayForOrg(user.organizationId),
         requestedBy,
         funeralCaseId,
         status: submit ? "submitted" : "draft",
@@ -8373,7 +8475,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const action = String(req.body.action || "");
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canApprove = !!user.isPlatformOwner || effPerms.includes("approve:finance");
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const patch: Record<string, any> = {};
     let updated: typeof existing | undefined;
     // approvedBy/paidBy reference the tenant DB's users table — resolve the same way
@@ -8736,7 +8838,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
-    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : todayInHarare();
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : await todayForOrg(user.organizationId);
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -8829,7 +8931,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (existing.status === "paid") return res.status(400).json({ message: "Expenditure is already fully paid" });
     const amount = parsePositiveAmount(req.body.amount);
     if (!amount) return res.status(400).json({ message: "A valid positive amount is required" });
-    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : todayInHarare();
+    const paidDate = typeof req.body.paidDate === "string" && req.body.paidDate ? req.body.paidDate : await todayForOrg(user.organizationId);
     let payout: { currency: string; amount: number; entityAmount?: string; fxRateApplied?: string };
     try {
       payout = resolveCrossCurrencyPayout(req.body, existing.currency, amount);
@@ -9193,19 +9295,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const performedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-      const { transaction, float: updatedFloat } = await storage.postPettyCashTransaction({
-        organizationId: user.organizationId,
-        floatId: String(floatId),
-        type,
-        amount: (isReconciliation ? 0 : amt!).toFixed(2),
-        category: category ? String(category).trim() : undefined,
-        description: String(description).trim(),
-        receiptRef: receiptRef ? String(receiptRef).trim() : undefined,
-        countedAmount: isReconciliation ? String(Number(countedAmount).toFixed(2)) : undefined,
-        performedByUserId,
-        transactionDate: String(transactionDate),
+      const { transaction, float: updatedFloat } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const result = await storage.postPettyCashTransactionInTx(txDb, {
+          organizationId: user.organizationId,
+          floatId: String(floatId),
+          type,
+          amount: (isReconciliation ? 0 : amt!).toFixed(2),
+          category: category ? String(category).trim() : undefined,
+          description: String(description).trim(),
+          receiptRef: receiptRef ? String(receiptRef).trim() : undefined,
+          countedAmount: isReconciliation ? String(Number(countedAmount).toFixed(2)) : undefined,
+          performedByUserId,
+          transactionDate: String(transactionDate),
+        });
+        await auditLog(req, "POST_PETTY_CASH_TRANSACTION", "PettyCashTransaction", result.transaction.id, null, result.transaction, undefined, txDb);
+        return result;
       });
-      await auditLog(req, "POST_PETTY_CASH_TRANSACTION", "PettyCashTransaction", transaction.id, null, transaction);
       return res.status(201).json({ transaction, float: updatedFloat });
     } catch (err: any) {
       return res.status(400).json({ message: safeError(err) });
@@ -9356,17 +9461,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
       const receivedByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-      const { payment, order: updatedOrder } = await storage.recordTombstoneOrderPayment({
-        organizationId: user.organizationId,
-        orderId: order.id,
-        receiptNumber,
-        amount: amt.toFixed(2),
-        currency: order.currency,
-        paymentChannel: channel,
-        receivedByUserId,
-        notes: typeof req.body.notes === "string" ? req.body.notes.trim() : undefined,
+      const { payment, order: updatedOrder } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const result = await storage.recordTombstoneOrderPaymentInTx(txDb, {
+          organizationId: user.organizationId,
+          orderId: order.id,
+          receiptNumber,
+          amount: amt.toFixed(2),
+          currency: order.currency,
+          paymentChannel: channel,
+          receivedByUserId,
+          notes: typeof req.body.notes === "string" ? req.body.notes.trim() : undefined,
+        });
+        await auditLog(req, "RECORD_TOMBSTONE_ORDER_PAYMENT", "TombstoneOrderPayment", result.payment.id, null, result.payment, undefined, txDb);
+        return result;
       });
-      await auditLog(req, "RECORD_TOMBSTONE_ORDER_PAYMENT", "TombstoneOrderPayment", payment.id, null, payment);
       return res.status(201).json({ payment, order: updatedOrder });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
@@ -9654,7 +9762,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       informantAddress: req.body.informantAddress, deceasedName: req.body.deceasedName,
       deceasedAge: req.body.deceasedAge ? parseInt(req.body.deceasedAge) : undefined,
       deceasedSex: req.body.deceasedSex, casketType: req.body.casketType,
-      quotationDate: req.body.quotationDate || todayInHarare(),
+      quotationDate: req.body.quotationDate || await todayForOrg(user.organizationId),
       vatRate: req.body.vatRate != null && req.body.vatRate !== "" ? parseFloat(req.body.vatRate) : 0,
       discountAmount: req.body.discountAmount ? parseFloat(req.body.discountAmount) : 0,
       paymentType: req.body.paymentType,
@@ -10402,8 +10510,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (rawClockOut && !timeRe.test(rawClockOut)) return res.status(400).json({ message: "Invalid clock-out time." });
 
       const existing = await storage.getAttendanceLogForDate(emp.id, user.organizationId, rawDate);
-      const clockInAt = rawClockIn ? harareLocalToUtcDate(rawDate, rawClockIn) : (existing?.clockInAt ?? null);
-      const clockOutAt = rawClockOut ? harareLocalToUtcDate(rawDate, rawClockOut) : (existing?.clockOutAt ?? null);
+      const orgTz = await getOrgTimezone(user.organizationId);
+      const clockInAt = rawClockIn ? localToUtcDate(rawDate, rawClockIn, orgTz) : (existing?.clockInAt ?? null);
+      const clockOutAt = rawClockOut ? localToUtcDate(rawDate, rawClockOut, orgTz) : (existing?.clockOutAt ?? null);
       if (clockInAt && clockOutAt && clockOutAt.getTime() <= clockInAt.getTime()) {
         return res.status(400).json({ message: "Clock-out time must be after clock-in time." });
       }
@@ -10459,8 +10568,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (rawClockIn && !timeRe.test(rawClockIn)) return res.status(400).json({ message: "Invalid clock-in time." });
     if (rawClockOut && !timeRe.test(rawClockOut)) return res.status(400).json({ message: "Invalid clock-out time." });
 
-    const clockInAt = rawClockIn ? harareLocalToUtcDate(existing.date, rawClockIn) : existing.clockInAt;
-    const clockOutAt = rawClockOut ? harareLocalToUtcDate(existing.date, rawClockOut) : existing.clockOutAt;
+    const orgTz = await getOrgTimezone(user.organizationId);
+    const clockInAt = rawClockIn ? localToUtcDate(existing.date, rawClockIn, orgTz) : existing.clockInAt;
+    const clockOutAt = rawClockOut ? localToUtcDate(existing.date, rawClockOut, orgTz) : existing.clockOutAt;
     if (clockInAt && clockOutAt && new Date(clockOutAt).getTime() <= new Date(clockInAt).getTime()) {
       return res.status(400).json({ message: "Clock-out time must be after clock-in time." });
     }
@@ -10532,7 +10642,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // read-only aggregation, so keeping it here avoids duplicating query logic in storage.ts.
   app.get("/api/attendance/live", requireAuth, requireTenantScope, requirePermission("read:payroll"), async (req, res) => {
     const user = req.user as any;
-    const today = todayInHarare();
+    const today = await todayForOrg(user.organizationId);
     const [todayLogs, employees] = await Promise.all([
       storage.getAttendanceLogs(user.organizationId, { date: today }),
       storage.getPayrollEmployees(user.organizationId),
@@ -10684,9 +10794,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const radius = qr.geofenceRadiusMeters ?? 500;
         const distance = haversineMeters(lat, lng, Number(qr.latitude), Number(qr.longitude));
         if (distance > radius) {
-          const today = todayInHarare();
-          const dayStart = harareLocalToUtcDate(today, "00:00");
-          const dayEnd = harareLocalToUtcDate(today, "23:59");
+          const orgTz = await getOrgTimezone(user.organizationId);
+          const today = await todayForOrg(user.organizationId);
+          const dayStart = localToUtcDate(today, "00:00", orgTz);
+          const dayEnd = localToUtcDate(today, "23:59", orgTz);
           const driverId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
           const todaysAssignments = await storage.getDriverAssignmentsForDriverOnDate(driverId, user.organizationId, dayStart, dayEnd);
           if (todaysAssignments.length === 0) {
@@ -10886,7 +10997,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Public branding (no auth required, for login/splash screens) ──
   app.get("/api/public/branding", async (req, res) => {
-    const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#0d9488" };
+    const NEUTRAL = { name: "POL263", logoUrl: "/assets/logo.png", isWhitelabeled: false, primaryColor: "#0d9488", timezone: "Africa/Harare", nationalIdFormat: DEFAULT_NATIONAL_ID_FORMAT, enabledCurrencies: DEFAULT_ENABLED_CURRENCIES };
     const orgIdParam = typeof req.query.orgId === "string" ? req.query.orgId.trim() : "";
     // Fall back to subdomain-resolved tenant when no explicit orgId provided
     const orgId = orgIdParam || ((req as any).tenantId as string | undefined) || "";
@@ -10904,6 +11015,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       email: org.email,
       website: org.website,
       isWhitelabeled: org.isWhitelabeled,
+      timezone: org.timezone || "Africa/Harare",
+      nationalIdFormat: isNationalIdFormatKey((org as any).nationalIdFormat) ? (org as any).nationalIdFormat : DEFAULT_NATIONAL_ID_FORMAT,
+      enabledCurrencies: normalizeEnabledCurrencies((org as any).enabledCurrencies),
     });
   });
 
@@ -10932,6 +11046,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       referralCode: ref,
       products: withVersions,
       branches: branches.filter((b) => b.isActive),
+      nationalIdFormat: await resolveOrgNationalIdFormat(orgId),
     });
   });
 
@@ -10994,6 +11109,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     try {
       const policyNumber = await storage.generatePolicyNumber(orgId);
+      const publicRegNationalIdFormat = await resolveOrgNationalIdFormat(orgId);
       const depsList = Array.isArray(rawDeps) ? rawDeps : [];
       const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
       for (const d of depsList) {
@@ -11010,7 +11126,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // register.tsx) never even collects gender, so every dependent failed this check with
         // no error shown to the registrant. Only name + relationship are genuinely required.
         if (!dFirst || !dLast || !dRel) continue;
-        if (dNationalId && !isValidNationalId(dNationalId)) continue;
+        if (dNationalId && !isValidNationalId(dNationalId, publicRegNationalIdFormat)) continue;
         createdDeps.push(await storage.createDependent({
           organizationId: orgId,
           clientId: client.id,
@@ -11031,7 +11147,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
         const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
         const bp = toUpperTrim(ben.phone, false);
-        if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId)) ben = null;
+        if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId, publicRegNationalIdFormat)) ben = null;
         else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
       }
       const policyParsed = insertPolicySchema.parse({
@@ -11039,7 +11155,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clientId: client.id, productVersionId: pv.id, agentId: agentId || null,
         status: "inactive", premiumAmount: premium, currency: currency || "USD",
         paymentSchedule: paymentSchedule || "monthly",
-        effectiveDate: todayInHarare(),
+        effectiveDate: await todayForOrg(orgId),
         beneficiaryFirstName: ben?.firstName ? String(ben.firstName).trim() : null,
         beneficiaryLastName: ben?.lastName ? String(ben.lastName).trim() : null,
         beneficiaryRelationship: ben?.relationship ? String(ben.relationship).trim() : null,
@@ -11104,15 +11220,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!lastName) missingFields.push("lastName");
     if (!productVersionId) missingFields.push("productVersionId");
     if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
-    const nationalIdNorm = normalizeNationalId(nationalId);
-    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
-    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
-    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
-    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
-    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
     const agent = await storage.getUserByReferralCode(referralCode);
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
     if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
+    // Org resolved above (not after validation) so the national ID check below can use this org's
+    // configured format instead of always assuming the "zimbabwe" default.
+    const registerPolicyNationalIdFormat = await resolveOrgNationalIdFormat(agent.organizationId);
+    const nationalIdNorm = normalizeNationalId(nationalId);
+    if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
+    if (!isValidNationalId(nationalId, registerPolicyNationalIdFormat)) return res.status(400).json({ message: `National ID ${nationalIdFormatHint(registerPolicyNationalIdFormat)}.` });
+    if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
+    if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
+    if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
     return handlePublicPolicyRegistration(req, res, agent.organizationId, agent.id, req.body.branchId || agent.branchId || null);
   });
 
@@ -11213,6 +11332,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       isWalkIn: true,
       products: withVersions,
       branches: branches.filter((b) => b.isActive),
+      nationalIdFormat: isNationalIdFormatKey((org as any).nationalIdFormat) ? (org as any).nationalIdFormat : DEFAULT_NATIONAL_ID_FORMAT,
     });
   });
 
@@ -11224,14 +11344,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!lastName) missingFields.push("lastName");
     if (!productVersionId) missingFields.push("productVersionId");
     if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
+    const org = await storage.getOrganization(orgId);
+    if (!org) return res.status(400).json({ message: "Organisation not found" });
+    // Org resolved above (not after validation) so the national ID check below can use this org's
+    // configured format instead of always assuming the "zimbabwe" default.
+    const walkinNationalIdFormat = isNationalIdFormatKey((org as any).nationalIdFormat) ? (org as any).nationalIdFormat : DEFAULT_NATIONAL_ID_FORMAT;
     const nationalIdNorm = normalizeNationalId(nationalId);
     if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
-    if (!isValidNationalId(nationalId)) return res.status(400).json({ message: "National ID must be digits, one letter, then two digits (e.g. 08833089H38)." });
+    if (!isValidNationalId(nationalId, walkinNationalIdFormat)) return res.status(400).json({ message: `National ID ${nationalIdFormatHint(walkinNationalIdFormat)}.` });
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
-    const org = await storage.getOrganization(orgId);
-    if (!org) return res.status(400).json({ message: "Organisation not found" });
     return handlePublicPolicyRegistration(req, res, orgId, null, req.body.branchId || null);
   });
 
@@ -12071,8 +12194,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Receipting activity by staff member and branch, for a given period.
   app.get("/api/reports/receipting-by-user", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : todayInHarare();
-    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : todayInHarare();
+    const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : await todayForOrg(user.organizationId);
+    const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : await todayForOrg(user.organizationId);
     return res.json(await storage.getReceiptingByUserAndBranch(user.organizationId, fromDate, toDate));
   });
 
@@ -12401,7 +12524,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Executive summary (finance-gated) ───────────────────
   app.get("/api/dashboard/executive-summary", requireAuth, requireTenantScope, requireAnyPermission("approve:finance", "read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to   = typeof req.query.toDate   === "string" && req.query.toDate   ? req.query.toDate   : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12661,14 +12784,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return streamAgentPortfolioPDF(user.organizationId, filters, res, { attachment: req.query.download === "1" });
   });
 
-  const defaultStatementRange = () => {
-    const to = todayInHarare();
+  const defaultStatementRange = async (orgId: string) => {
+    const to = await todayForOrg(orgId);
     const from = `${to.slice(0, 7)}-01`;
     return { from, to };
   };
   app.get("/api/reports/income-statement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12676,7 +12799,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.get("/api/reports/cash-flow", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12685,7 +12808,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/income-statement/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12695,7 +12818,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/cash-flow/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12705,7 +12828,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/transaction-ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12716,13 +12839,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/daily", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : todayInHarare();
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
     return res.json(await buildDailyReport(user.organizationId, date));
   });
 
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : todayInHarare();
+    const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
     const { streamDailyReportPdf } = await import("./financial-statement-pdf");
     await streamDailyReportPdf(user.organizationId, date, res, { attachment: req.query.download === "1" });
   });
@@ -12732,7 +12855,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // server/executive-report.ts.
   app.get("/api/reports/executive", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultExecutiveSummaryRange();
+    const def = await defaultExecutiveSummaryRange(user.organizationId);
     const from = typeof req.query.from === "string" && req.query.from ? req.query.from : def.from;
     const to = typeof req.query.to === "string" && req.query.to ? req.query.to : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12741,7 +12864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/executive/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultExecutiveSummaryRange();
+    const def = await defaultExecutiveSummaryRange(user.organizationId);
     const from = typeof req.query.from === "string" && req.query.from ? req.query.from : def.from;
     const to = typeof req.query.to === "string" && req.query.to ? req.query.to : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
@@ -12751,7 +12874,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : todayInHarare();
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : await todayForOrg(user.organizationId);
     const note = typeof req.body.note === "string" ? req.body.note.trim() : "";
     if (!note) return res.status(400).json({ message: "Note text is required" });
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
@@ -12771,7 +12894,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(403).json({ message: "Missing permission: read:finance" });
     }
     const draftText = typeof req.body.draftText === "string" ? req.body.draftText : "";
-    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : todayInHarare();
+    const date = typeof req.body.date === "string" && req.body.date ? req.body.date : await todayForOrg(user.organizationId);
     const contextSummary = await buildNoteEnhanceContext(user.organizationId, date);
     const result = await enhanceNote({ draftText, contextSummary });
     if (!result.ok) return res.status(422).json({ message: result.error });
@@ -12808,7 +12931,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/reports/balance-sheet", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : todayInHarare();
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : await todayForOrg(user.organizationId);
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildBalanceSheet(user.organizationId, { asOf, branchId }));
   });
@@ -12818,10 +12941,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // coverage, computed only for product versions explicitly classified measurementApproach='paa'.
   app.get("/api/reports/insurance-contract-summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
-    const def = defaultStatementRange();
+    const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
-    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : todayInHarare();
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : await todayForOrg(user.organizationId);
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId }));
   });
@@ -13704,14 +13827,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "insurance-contract-summary": {
-          const defRange = (() => {
-            const to = todayInHarare();
-            const from = `${to.slice(0, 7)}-01`;
-            return { from, to };
-          })();
+          const orgToday = await todayForOrg(user.organizationId);
+          const defRange = { from: `${orgToday.slice(0, 7)}-01`, to: orgToday };
           const from = reportFilters.fromDate || defRange.from;
           const to = reportFilters.toDate || defRange.to;
-          const asOf = todayInHarare();
+          const asOf = orgToday;
           const summary = await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId: reportFilters.branchId });
           headers = ["Metric", "Currency", "Amount", "Period / As Of", "Note"];
           rows = [

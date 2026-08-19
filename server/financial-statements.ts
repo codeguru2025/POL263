@@ -13,7 +13,7 @@
 import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 import {
   paymentReceipts,
   serviceReceipts,
@@ -899,9 +899,9 @@ export interface ExecutiveSummaryParams {
   branchId?: string;
 }
 
-/** Default range for callers that don't have their own — month-to-date. */
-export function defaultExecutiveSummaryRange(): { from: string; to: string } {
-  const to = todayInHarare();
+/** Default range for callers that don't have their own — month-to-date, in the org's own timezone. */
+export async function defaultExecutiveSummaryRange(orgId: string): Promise<{ from: string; to: string }> {
+  const to = await todayForOrg(orgId);
   const from = `${to.slice(0, 7)}-01`;
   return { from, to };
 }

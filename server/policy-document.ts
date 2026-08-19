@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
-import { todayInHarare } from "./date-utils";
+import { todayForOrg } from "./date-utils";
 
 const SUPPORTED_LANGUAGES: Record<string, string> = {
   en: "English", sn: "Shona", nd: "Ndebele", zu: "Zulu", xh: "Xhosa",
@@ -94,7 +94,7 @@ async function _renderPolicyDocumentPdf(
     }
   }
 
-  const today = todayInHarare();
+  const today = await todayForOrg(orgId);
   const policyStatusOk = policy.status === "active" || policy.status === "grace";
 
   interface EnrichedMember {
@@ -506,7 +506,7 @@ export function registerPolicyDocumentRoute(app: Express) {
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     res.setHeader("Content-Type", "application/pdf");
-    const statementDate = todayInHarare();
+    const statementDate = await todayForOrg(policy.organizationId);
     const attachment =
       req.query.download === "1" ||
       req.query.download === "true" ||
