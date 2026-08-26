@@ -18,7 +18,7 @@ import { isAgentScoped } from "@shared/roles";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants } from "@shared/control-plane-schema";
 import { validatePasswordPolicy } from "@shared/validation";
-import { auditLog } from "./route-helpers";
+import { auditLog, invalidateOtherSessions } from "./route-helpers";
 
 const PgSession = connectPgSimple(session);
 
@@ -1040,6 +1040,8 @@ export function setupAuth(app: Express) {
     }
     const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
     await storage.updateUser(user.id, { passwordHash });
+    await auditLog(req, "CHANGE_PASSWORD", "User", user.id, undefined, undefined);
+    await invalidateOtherSessions({ sessField: "passportUser", matchValue: user.id, currentSessionId: req.sessionID });
     return res.json({ message: "Password updated" });
   });
 
@@ -1188,6 +1190,28 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * Permissions powerful enough (account/org-wide user and settings management) that SOC 2 access-
+ * control expectations require MFA on top of RBAC, not just opt-in. Platform owners are the same
+ * tier by definition — they hold every permission implicitly. Checked in both requirePermission
+ * and requireAnyPermission below; enrollment itself (POST /api/auth/mfa/enroll|confirm|disable)
+ * is gated only by requireAuth, never by this, so a not-yet-enrolled admin can always reach the
+ * enroll flow rather than being locked out with no path forward.
+ */
+const MFA_REQUIRED_PERMISSIONS = new Set(["manage:settings", "manage:users"]);
+
+function rejectForMissingMfa(req: Request, res: Response, user: any, perms: string[]) {
+  structuredLog("warn", "Blocked for missing MFA on privileged permission", {
+    userId: user.id,
+    perms,
+    requestId: (req as any).requestId,
+  });
+  return res.status(403).json({
+    message: "This action requires multi-factor authentication. Enroll MFA in Settings to continue.",
+    code: "MFA_REQUIRED",
+  });
+}
+
 export function requirePermission(...requiredPerms: string[]) {
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!req.isAuthenticated() || !req.user) {
@@ -1195,8 +1219,12 @@ export function requirePermission(...requiredPerms: string[]) {
     }
 
     const user = req.user as any;
-    // Platform owners are superusers — they bypass all permission checks.
-    if (user.isPlatformOwner) return next();
+    // Platform owners are superusers — they bypass all permission checks — but still need MFA,
+    // since they hold every permission implicitly, including the ones gated below.
+    if (user.isPlatformOwner) {
+      if (!user.mfaEnabled) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
+      return next();
+    }
 
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
@@ -1216,6 +1244,10 @@ export function requirePermission(...requiredPerms: string[]) {
       return res.status(403).json({ message: "Insufficient permissions" });
     }
 
+    if (!user.mfaEnabled && requiredPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
+      return rejectForMissingMfa(req, res, user, requiredPerms);
+    }
+
     next();
   };
 }
@@ -1227,8 +1259,12 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
     }
 
     const user = req.user as any;
-    // Platform owners are superusers — they bypass all permission checks.
-    if (user.isPlatformOwner) return next();
+    // Platform owners are superusers — they bypass all permission checks — but still need MFA,
+    // since they hold every permission implicitly, including the ones gated below.
+    if (user.isPlatformOwner) {
+      if (!user.mfaEnabled) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
+      return next();
+    }
 
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
@@ -1237,8 +1273,8 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
       user.organizationId = effectiveOrgId;
     }
 
-    const hasAny = anyOfPerms.some((p) => effectivePerms.includes(p));
-    if (!hasAny) {
+    const grantedPerms = anyOfPerms.filter((p) => effectivePerms.includes(p));
+    if (grantedPerms.length === 0) {
       structuredLog("warn", "Permission denied", {
         userId: user.id,
         requiredAnyOf: anyOfPerms,
@@ -1246,6 +1282,10 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
         requestId: (req as any).requestId,
       });
       return res.status(403).json({ message: "Insufficient permissions" });
+    }
+
+    if (!user.mfaEnabled && grantedPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
+      return rejectForMissingMfa(req, res, user, grantedPerms);
     }
 
     next();

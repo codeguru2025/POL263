@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { pushToClient } from "./push";
 import { sendEmail, escapeHtml } from "./email-service";
+import { sendSms } from "./sms-service";
 import { hasModule } from "./module-gate";
 
 /** Best-effort PDF attachment for the events that have a document worth attaching. Never throws. */
@@ -286,11 +287,13 @@ export async function dispatchNotification(
     const org = await storage.getOrganization(orgId);
     ctx.orgName = ctx.orgName || org?.name || "POL263";
     const emailAllowed = await hasModule(orgId, "email_notifications");
+    const smsAllowed = await hasModule(orgId, "sms_notifications");
 
     const templates = await storage.getActiveTemplatesByEvent(orgId, eventType);
 
     if (templates.length > 0) {
       let clientEmail: string | null | undefined;
+      let clientPhone: string | null | undefined;
       for (const tmpl of templates) {
         const renderedSubject = renderTemplate(tmpl.subject || "", ctx);
         const renderedBody = renderTemplate(tmpl.bodyTemplate, ctx);
@@ -339,6 +342,25 @@ export async function dispatchNotification(
             }
           } else if (tmpl.channel === "push") {
             await pushToClient(orgId, clientId, { title: renderedSubject, body: renderedBody, data: { policyId: ctx.policyId } });
+          } else if (tmpl.channel === "sms" && !smsAllowed) {
+            structuredLog("info", "Notification SMS skipped — sms_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+          } else if (tmpl.channel === "sms") {
+            if (clientPhone === undefined) {
+              const client = await storage.getClient(clientId, orgId);
+              clientPhone = client?.phone ?? null;
+            }
+            if (clientPhone) {
+              // sendSms() never throws — check its result explicitly, same reasoning as the
+              // email branch above: the optimistic "sent" log written before this call needs
+              // correcting on a real failure, or a message that never arrived stays recorded
+              // as delivered with no way for staff/the client to ever discover it.
+              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional" });
+              if (!result.ok) {
+                await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
+              }
+            } else {
+              structuredLog("warn", "Notification SMS skipped — client has no phone number on file", { orgId, clientId, eventType });
+            }
           }
         } catch (err) {
           structuredLog("error", "Failed to deliver notification via channel", {

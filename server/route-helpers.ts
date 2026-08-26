@@ -11,6 +11,38 @@ import type { OrgDataDb } from "./tenant-db";
 export { currencyField };
 
 /**
+ * Kills other active sessions for an account after a credential change (password change/reset),
+ * so a stolen/logged-in session doesn't survive it. Staff/agent sessions store the passport
+ * token ("userId" or "userId:orgId") at sess.passport.user; client-portal sessions store a plain
+ * sess.clientId instead (see requireClientAuth in client-auth.ts) — same "sessions" table (the
+ * shared-DB pool session store, not a tenant DB; every login uses this one store regardless of
+ * tenant DB isolation), different JSON shape. Pass currentSessionId to keep the requester's own
+ * session alive (a change-password call); omit it for an unauthenticated reset flow, which has
+ * no session of its own to preserve and should kill every existing one.
+ */
+export async function invalidateOtherSessions(
+  opts: { sessField: "passportUser" | "clientId"; matchValue: string; currentSessionId?: string }
+): Promise<void> {
+  const { sessField, matchValue, currentSessionId } = opts;
+  const column = sessField === "passportUser" ? `sess->'passport'->>'user'` : `sess->>'clientId'`;
+  // passport's token can be "userId" or "userId:orgId" — prefix-match; clientId is a plain exact value.
+  const op = sessField === "passportUser" ? "LIKE" : "=";
+  const pattern = sessField === "passportUser" ? `${matchValue}%` : matchValue;
+  try {
+    // Deferred import (not a top-level one) so this module stays loadable in unit tests that mock
+    // ./storage and ./tenant-db to avoid pulling in DB modules requiring DATABASE_URL — those
+    // tests never call this function, so ./db's module-load-time env check never runs for them.
+    const { pool } = await import("./db");
+    await pool.query(`delete from sessions where sid != $1 and ${column} ${op} $2`, [currentSessionId || "", pattern]);
+  } catch (err) {
+    structuredLog("warn", "Failed to invalidate other sessions after credential change", {
+      error: (err as Error).message,
+      sessField,
+    });
+  }
+}
+
+/**
  * `tx` lets a caller already inside withOrgTransaction pass its transaction handle so this audit
  * write commits/rolls back atomically with the mutation it records — pass it for financially or
  * compliance-critical writes; omit it for the common case (audit write outside a transaction).

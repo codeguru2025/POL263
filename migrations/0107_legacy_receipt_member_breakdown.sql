@@ -3,4 +3,14 @@
 -- POST /api/groups/legacy-receipts). Array of {name, amount} — free text, since a brand-new
 -- legacy group (the only case this lump-sum path is for) has no formal client/policy records
 -- to reference yet.
-ALTER TABLE legacy_group_receipts ADD COLUMN IF NOT EXISTS member_breakdown jsonb;
+--
+-- IF EXISTS added 2026-08-26: legacy_group_receipts was hand-created via a one-off script only
+-- on Falakhe's dedicated DB, never a real migration — so it doesn't exist on any other tenant's
+-- dedicated DB (e.g. IFALAKHE FUNERAL SERVICES). Without IF EXISTS this ALTER TABLE hard-fails
+-- on every such tenant, which stops the migration runner (script/run-migrations.ts) from
+-- recording this file as applied for that DB, which in turn blocks every migration after it in
+-- the sequence — not just this one. Safe to edit post-hoc: the runner tracks applied migrations
+-- by filename only (schema_migrations table, no checksum), so this is a no-op re-run on any DB
+-- where it already succeeded (shared DB, Falakhe) and only changes behavior where it was
+-- previously failing outright.
+ALTER TABLE IF EXISTS legacy_group_receipts ADD COLUMN IF NOT EXISTS member_breakdown jsonb;

@@ -16,6 +16,8 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
+import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock } from "./advisory-lock";
@@ -53,6 +55,7 @@ import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
+import { getOrgSmsConfig, upsertOrgSmsConfig } from "./sms-config";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
 import { isReservedTenantSlug } from "./tenant-slug-policy";
@@ -933,10 +936,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.use("/api/upload/signature", handleMulterError);
 
-  // Receipt advert image upload
+  // Receipt advert image upload — ?format=a4|thermal selects which print format's shape this
+  // image is validated against (shared/receipt-advert-specs.ts). Required: an advert now has two
+  // independent image slots (server/receipt-pdf.ts draws a different one per print format), so
+  // there's no longer a single unambiguous "the" advert image to fall back to.
   app.post("/api/upload/receipt-advert-image", requireAuth, requireTenantScope, requirePermission("manage:settings"), logoMemUpload.single("file"), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    if (!isReceiptAdvertFormat(req.query.format)) {
+      return res.status(400).json({ message: "format query param must be 'a4' or 'thermal'" });
+    }
+    const validation = validateReceiptAdvertImage(req.file.buffer, req.query.format);
+    if (!validation.ok) return res.status(400).json({ message: validation.message });
     try {
       const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "receipt-adverts");
       return res.json({ url });
@@ -992,6 +1003,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/receipt-adverts/:id/deactivate", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     await storage.updateReceiptAdvert(req.params.id as string, { isActive: false }, user.organizationId);
+    await auditLog(req, "DEACTIVATE_RECEIPT_ADVERT", "ReceiptAdvert", req.params.id as string, null, null);
     return res.json({ success: true });
   });
 
@@ -1212,6 +1224,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const quotesByLeadId = await storage.getQuotesByLeadIds(leads.map((l) => l.id), user.organizationId);
     const withQuotes = leads.map((l) => ({ ...l, quoteId: quotesByLeadId[l.id]?.id ?? null }));
     return res.json(withQuotes);
+  });
+
+  // Scannable QR for the current user's own public vCard page — lets the "Share your vCard"
+  // panel on /staff/my-vcard show something a client can point their camera at directly, without
+  // needing the staff member to first open the public page themselves.
+  app.get("/api/my-vcard/qr", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    if (!user.referralCode) return res.status(404).json({ message: "No referral code set for this account" });
+    const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+    if (!base) return res.status(503).json({ message: "APP_BASE_URL is not configured" });
+    const { buildVerifyQrBuffer } = await import("./pdf-utils");
+    const buf = await buildVerifyQrBuffer(`${base}/card/${user.referralCode}`, 300);
+    if (!buf) return res.status(500).json({ message: "Failed to generate QR code" });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    return res.send(buf);
   });
 
   app.get("/api/public/agent-card/:refCode/manifest.json", async (req, res) => {
@@ -2917,6 +2945,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getProductsByOrg(user.organizationId));
   });
 
+  // ── Product brochure (all active products, casket/cover/rates, org logo+contact) ──
+  // Registered BEFORE GET /api/products/:id below — Express matches routes in registration
+  // order, and "/api/products/brochure" would otherwise be swallowed by the ":id" route with
+  // id="brochure" (which then fails a DB lookup: "brochure" isn't a valid product UUID).
+  app.get("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    const org = await storage.getOrganization(user.organizationId);
+    if (org?.brochureUrl) return res.redirect(org.brochureUrl);
+    const { streamProductBrochurePDF } = await import("./product-brochure-pdf");
+    await streamProductBrochurePDF(user.organizationId, res, { attachment: req.query.download === "1" });
+  });
+
+  app.post("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), brochureUpload.single("file"), async (req, res) => {
+    const user = req.user as any;
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    const before = await storage.getOrganization(user.organizationId);
+    const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "brochures");
+    const after = await storage.updateOrganization(user.organizationId, { brochureUrl: url });
+    await auditLog(req, "UPLOAD_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: url });
+    return res.json({ brochureUrl: after?.brochureUrl ?? url });
+  });
+  app.use("/api/products/brochure", handleMulterError);
+
+  app.delete("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const before = await storage.getOrganization(user.organizationId);
+    await storage.updateOrganization(user.organizationId, { brochureUrl: null });
+    await auditLog(req, "REMOVE_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: null });
+    return res.json({ brochureUrl: null });
+  });
+
   app.get("/api/products/:id", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
     const user = req.user as any;
     const product = await storage.getProduct(req.params.id as string, user.organizationId);
@@ -2962,35 +3022,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const product = await storage.getProduct(req.params.id as string, user.organizationId);
     if (!product || product.organizationId !== user.organizationId) return res.status(404).json({ message: "Product not found" });
     return res.json(await storage.getProductVersions(req.params.id as string, user.organizationId));
-  });
-
-  // ── Product brochure (all active products, casket/cover/rates, org logo+contact) ──
-  app.get("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
-    const user = req.user as any;
-    const org = await storage.getOrganization(user.organizationId);
-    if (org?.brochureUrl) return res.redirect(org.brochureUrl);
-    const { streamProductBrochurePDF } = await import("./product-brochure-pdf");
-    await streamProductBrochurePDF(user.organizationId, res, { attachment: req.query.download === "1" });
-  });
-
-  app.post("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), brochureUpload.single("file"), async (req, res) => {
-    const user = req.user as any;
-    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
-    const before = await storage.getOrganization(user.organizationId);
-    const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "brochures");
-    const after = await storage.updateOrganization(user.organizationId, { brochureUrl: url });
-    await auditLog(req, "UPLOAD_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: url });
-    return res.json({ brochureUrl: after?.brochureUrl ?? url });
-  });
-  app.use("/api/products/brochure", handleMulterError);
-
-  app.delete("/api/products/brochure", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
-    const user = req.user as any;
-    const before = await storage.getOrganization(user.organizationId);
-    await storage.updateOrganization(user.organizationId, { brochureUrl: null });
-    await auditLog(req, "REMOVE_PRODUCT_BROCHURE", "Organization", user.organizationId, { brochureUrl: before?.brochureUrl ?? null }, { brochureUrl: null });
-    return res.json({ brochureUrl: null });
   });
 
   app.post("/api/products/:id/versions", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
@@ -5000,6 +5031,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
       });
       if (!result.ok) return res.status(400).json({ message: result.error });
+      await auditLog(req, "INITIATE_PAYNOW_PAYMENT", "PaymentIntent", intent.id, null, { method: method || "visa_mastercard" });
       return res.json({
         redirectUrl: result.redirectUrl,
         pollUrl: result.pollUrl,
@@ -5025,6 +5057,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { submitOmariOtp } = await import("./payment-service");
       const result = await submitOmariOtp(id, user.organizationId, otp.trim(), "admin", user.id);
       if (!result.ok) return res.status(400).json({ message: result.error });
+      await auditLog(req, "SUBMIT_PAYNOW_OTP", "PaymentIntent", id, null, { paid: result.paid });
       return res.json({ paid: result.paid });
     } catch (err) {
       structuredLog("error", "Staff O'Mari OTP submit failed", { error: (err as Error).message });
@@ -6106,6 +6139,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       actorId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
     });
     if (!result.ok) return res.status(400).json({ message: result.error });
+    await auditLog(req, "INITIATE_PAYNOW_PAYMENT", "GroupPaymentIntent", id, null, { method: method || "visa_mastercard" });
     return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
   });
 
@@ -6130,6 +6164,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Never return the key — only indicate whether one is set
       hasKey: !!cfg.integrationKey,
     });
+  });
+
+  app.get("/api/sms-config", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const cfg = await getOrgSmsConfig(user.organizationId);
+    return res.json({
+      enabled: cfg.enabled,
+      senderId: cfg.senderId,
+      // Never return the token — only indicate whether one is set
+      hasApiToken: !!cfg.apiToken,
+    });
+  });
+
+  app.post("/api/sms-config", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const { apiToken, senderId } = req.body || {};
+    const patch: Partial<{ apiToken: string; senderId: string }> = {};
+    if (typeof apiToken === "string" && apiToken.trim()) patch.apiToken = apiToken.trim();
+    if (typeof senderId === "string") patch.senderId = senderId.trim();
+    await upsertOrgSmsConfig(user.organizationId, patch);
+    // Never audit-log the actual token value — only whether it changed.
+    await auditLog(req, "UPDATE_SMS_CONFIG", "Organization", user.organizationId, null, {
+      senderId: patch.senderId,
+      apiTokenChanged: !!patch.apiToken,
+    });
+    return res.json({ ok: true });
   });
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -7402,35 +7462,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const feeAmount = parseFloat(String(intake.storageFeeAmount ?? ""));
     if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This intake has no valid storage fee amount set" });
     const before = intake;
-    const updated = await storage.recordStoragePayment(req.params.id as string, user.organizationId, {
-      storageFeePaidBy: paidBy,
-      storageFeePaidAt: paidAt ? new Date(paidAt) : new Date(),
-      storageFeeStatus: status,
-    });
-    await auditLog(req, "RECORD_STORAGE_PAYMENT", "MortuaryIntake", req.params.id as string, before, updated);
-    // A storage fee payment is real cash income — issue a service receipt so it's picked up by
-    // queryReceipts() in financial-statements.ts (income statement / daily report only sum
-    // payment_receipts + service_receipts, they never read mortuary_intakes directly).
+    // Status flip + receipt creation must commit together — see the case-service-charge payment
+    // route's comment above for why (same bug class, same fix).
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
-    const receipt = await storage.createServiceReceipt({
-      organizationId: user.organizationId,
-      branchId: intake.branchId ?? null,
-      funeralCaseId: intake.funeralCaseId ?? null,
-      quotationId: null,
-      receiptNumber,
-      amount: feeAmount.toFixed(2),
-      currency: intake.storageFeeCurrency || "USD",
-      paymentChannel: channel,
-      issuedByUserId: effectiveUserId,
-      issuedAt: new Date(),
-      status: "issued",
-      idempotencyKey: null,
-      notes: `Mortuary storage fee — ${intake.deceasedName} (${status === "paid_at_admission" ? "paid at admission" : "paid at collection"})`,
-    });
-    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
-    return res.json({ ...updated, serviceReceiptId: receipt.id });
+    // Allocated via its own short atomic transaction — called before, not nested inside, the
+    // transaction below (see POST /api/tombstones/orders/:id/payments for the established pattern).
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    try {
+      const { updated, receipt } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const updated = await storage.recordStoragePayment(req.params.id as string, user.organizationId, {
+          storageFeePaidBy: paidBy,
+          storageFeePaidAt: paidAt ? new Date(paidAt) : new Date(),
+          storageFeeStatus: status,
+        }, txDb);
+        // The UPDATE above only matches a row still in "unpaid" status (see the storage-method
+        // comment) — undefined here means a concurrent request already paid this fee between our
+        // read of `intake` above and this transaction's UPDATE. Abort before issuing a second
+        // receipt for the same fee.
+        if (!updated) throw new Error("ALREADY_PAID");
+        await auditLog(req, "RECORD_STORAGE_PAYMENT", "MortuaryIntake", req.params.id as string, before, updated, undefined, txDb);
+        // A storage fee payment is real cash income — issue a service receipt so it's picked up by
+        // queryReceipts() in financial-statements.ts (income statement / daily report only sum
+        // payment_receipts + service_receipts, they never read mortuary_intakes directly).
+        const receipt = await storage.createServiceReceipt({
+          organizationId: user.organizationId,
+          branchId: intake.branchId ?? null,
+          funeralCaseId: intake.funeralCaseId ?? null,
+          quotationId: null,
+          receiptNumber,
+          amount: feeAmount.toFixed(2),
+          currency: intake.storageFeeCurrency || "USD",
+          paymentChannel: channel,
+          issuedByUserId: effectiveUserId,
+          issuedAt: new Date(),
+          status: "issued",
+          idempotencyKey: null,
+          notes: `Mortuary storage fee — ${intake.deceasedName} (${status === "paid_at_admission" ? "paid at admission" : "paid at collection"})`,
+        }, txDb);
+        await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt, undefined, txDb);
+        return { updated, receipt };
+      });
+      return res.json({ ...updated, serviceReceiptId: receipt.id });
+    } catch (err: any) {
+      if (err?.message === "ALREADY_PAID") return res.status(409).json({ message: "Storage fee is already paid" });
+      throw err;
+    }
   });
 
   // Dispatch
@@ -7486,34 +7563,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const feeAmount = parseFloat(String(dispatch.chapelWashBayFeeAmount ?? ""));
     if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This dispatch has no valid chapel & wash bay fee amount set" });
     const before = dispatch;
-    const updated = await storage.recordChapelWashBayPayment(req.params.id as string, user.organizationId, {
-      chapelWashBayFeePaidBy: paidBy,
-      chapelWashBayFeePaidAt: new Date(),
-      chapelWashBayFeeStatus: "paid",
-    });
-    await auditLog(req, "RECORD_CHAPEL_WASH_BAY_PAYMENT", "MortuaryDispatch", dispatch.id, before, updated);
-    // Same gap as the storage-payment route above — issue a service receipt so this shows up
-    // as income, not just a status flag on the dispatch row.
+    // Status flip + receipt creation must commit together — see the case-service-charge payment
+    // route's comment for why (same bug class, same fix).
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
-    const receipt = await storage.createServiceReceipt({
-      organizationId: user.organizationId,
-      branchId: null,
-      funeralCaseId: dispatch.funeralCaseId ?? null,
-      quotationId: null,
-      receiptNumber,
-      amount: feeAmount.toFixed(2),
-      currency: dispatch.chapelWashBayFeeCurrency || "USD",
-      paymentChannel: channel,
-      issuedByUserId: effectiveUserId,
-      issuedAt: new Date(),
-      status: "issued",
-      idempotencyKey: null,
-      notes: "Mortuary chapel & wash bay fee",
-    });
-    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
-    return res.json(updated);
+    // Allocated via its own short atomic transaction — called before, not nested inside, the
+    // transaction below (see POST /api/tombstones/orders/:id/payments for the established pattern).
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    try {
+      const { updated, receipt } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const updated = await storage.recordChapelWashBayPayment(req.params.id as string, user.organizationId, {
+          chapelWashBayFeePaidBy: paidBy,
+          chapelWashBayFeePaidAt: new Date(),
+          chapelWashBayFeeStatus: "paid",
+        }, txDb);
+        // See the storage-payment route's matching comment: undefined means a concurrent request
+        // already paid this fee between our read of `dispatch` above and this UPDATE.
+        if (!updated) throw new Error("ALREADY_PAID");
+        await auditLog(req, "RECORD_CHAPEL_WASH_BAY_PAYMENT", "MortuaryDispatch", dispatch.id, before, updated, undefined, txDb);
+        const receipt = await storage.createServiceReceipt({
+          organizationId: user.organizationId,
+          branchId: null,
+          funeralCaseId: dispatch.funeralCaseId ?? null,
+          quotationId: null,
+          receiptNumber,
+          amount: feeAmount.toFixed(2),
+          currency: dispatch.chapelWashBayFeeCurrency || "USD",
+          paymentChannel: channel,
+          issuedByUserId: effectiveUserId,
+          issuedAt: new Date(),
+          status: "issued",
+          idempotencyKey: null,
+          notes: "Mortuary chapel & wash bay fee",
+        }, txDb);
+        await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt, undefined, txDb);
+        return { updated, receipt };
+      });
+      return res.json(updated);
+    } catch (err: any) {
+      if (err?.message === "ALREADY_PAID") return res.status(409).json({ message: "Chapel & wash bay fee is already paid" });
+      throw err;
+    }
   });
 
   // Belongings
@@ -9876,7 +9966,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/quotations/:id/guarantor", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
+    const before = await storage.getQuotationGuarantor(req.params.id as string, user.organizationId);
     const guarantor = await storage.upsertQuotationGuarantor(req.params.id as string, user.organizationId, req.body);
+    await auditLog(req, "UPSERT_QUOTATION_GUARANTOR", "QuotationGuarantor", guarantor.id, before ?? null, guarantor);
     return res.json(guarantor);
   });
 
@@ -9899,6 +9991,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       quotationId: quote.id,
       organizationId: user.organizationId,
     });
+    await auditLog(req, "CREATE_QUOTATION_COLLATERAL", "QuotationCollateral", item.id, null, item);
     return res.status(201).json(item);
   });
 
@@ -10097,35 +10190,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!paidBy) return res.status(400).json({ message: "paidBy is required" });
     const feeAmount = parseFloat(String(before.computedAmount ?? ""));
     if (!Number.isFinite(feeAmount) || feeAmount <= 0) return res.status(400).json({ message: "This charge has no valid amount set" });
-    const updated = await storage.recordCaseServiceChargePayment(id, user.organizationId, {
-      paidBy,
-      paidByUserId: typeof req.body.paidByUserId === "string" && req.body.paidByUserId ? req.body.paidByUserId : undefined,
-    });
-    await auditLog(req, "RECORD_CASE_SERVICE_CHARGE_PAYMENT", "CaseServiceCharge", id, before, updated);
-    // Same gap as the mortuary storage/chapel-wash-bay payment routes — this was flipping
-    // case_service_charges.status to 'paid' with no corresponding service_receipts row, so the
-    // payment never appeared in queryReceipts()'s income totals (financial-statements.ts).
+    // Status flip + receipt creation must commit together — a crash between the two used to leave
+    // a charge marked "paid" with no service_receipts row, so the payment silently never appeared
+    // in queryReceipts()'s income totals (financial-statements.ts). Same fix as the sibling
+    // mortuary storage/chapel-wash-bay payment routes below.
     const fc = await storage.getFuneralCase(before.funeralCaseId, user.organizationId);
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
     const channel = typeof req.body.paymentChannel === "string" && req.body.paymentChannel ? req.body.paymentChannel : "cash";
-    const receipt = await storage.createServiceReceipt({
-      organizationId: user.organizationId,
-      branchId: fc?.branchId ?? null,
-      funeralCaseId: before.funeralCaseId,
-      quotationId: null,
-      receiptNumber,
-      amount: feeAmount.toFixed(2),
-      currency: before.currency || "USD",
-      paymentChannel: channel,
-      issuedByUserId: effectiveUserId,
-      issuedAt: new Date(),
-      status: "issued",
-      idempotencyKey: null,
-      notes: `Mortuary service charge: ${before.name}`,
-    });
-    await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt);
-    return res.json({ ...updated, serviceReceiptId: receipt.id });
+    // Allocated via its own short atomic transaction (storage.getNextPaymentReceiptNumber) —
+    // called before, not nested inside, the transaction below, matching the established pattern
+    // (see POST /api/tombstones/orders/:id/payments above).
+    const receiptNumber = await storage.getNextPaymentReceiptNumber(user.organizationId);
+    try {
+      const { updated, receipt } = await withOrgTransaction(user.organizationId, async (txDb) => {
+        const updated = await storage.recordCaseServiceChargePayment(id, user.organizationId, {
+          paidBy,
+          paidByUserId: typeof req.body.paidByUserId === "string" && req.body.paidByUserId ? req.body.paidByUserId : undefined,
+        }, txDb);
+        // See the mortuary storage-payment route's matching comment: undefined means a concurrent
+        // request already paid this charge between our read of `before` above and this UPDATE.
+        if (!updated) throw new Error("ALREADY_PAID");
+        await auditLog(req, "RECORD_CASE_SERVICE_CHARGE_PAYMENT", "CaseServiceCharge", id, before, updated, undefined, txDb);
+        const receipt = await storage.createServiceReceipt({
+          organizationId: user.organizationId,
+          branchId: fc?.branchId ?? null,
+          funeralCaseId: before.funeralCaseId,
+          quotationId: null,
+          receiptNumber,
+          amount: feeAmount.toFixed(2),
+          currency: before.currency || "USD",
+          paymentChannel: channel,
+          issuedByUserId: effectiveUserId,
+          issuedAt: new Date(),
+          status: "issued",
+          idempotencyKey: null,
+          notes: `Mortuary service charge: ${before.name}`,
+        }, txDb);
+        await auditLog(req, "CREATE_SERVICE_RECEIPT", "ServiceReceipt", receipt.id, null, receipt, undefined, txDb);
+        return { updated, receipt };
+      });
+      return res.json({ ...updated, serviceReceiptId: receipt.id });
+    } catch (err: any) {
+      if (err?.message === "ALREADY_PAID") return res.status(409).json({ message: "Charge is already paid" });
+      throw err;
+    }
   });
 
   app.delete("/api/case-service-charges/:id", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
@@ -11057,6 +11165,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     orgId: string,
     agentId: string | null,
     effectiveBranchId: string | null,
+    // No staff session exists on this public endpoint, so there's no req.user for the usual
+    // auditLog(req, ...) helper to read an actor from — callers pass a human-readable label for
+    // who/what initiated this (the referring agent's email, or a "walk-in" marker) instead.
+    actorLabel: string,
   ): Promise<void> {
     const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt } = req.body;
     const nationalIdNorm = normalizeNationalId(nationalId)!;
@@ -11181,6 +11293,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         },
         members: memberRows, memberAddOns: [],
       });
+      await storage.createAuditLog({
+        organizationId: orgId,
+        actorEmail: actorLabel,
+        action: "CREATE_POLICY",
+        entityType: "Policy",
+        entityId: policy.id,
+        after: policy,
+        requestId: (req as any).requestId,
+        ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
+      } as any);
       if (normalizedPaymentMethod) {
         await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
           organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
@@ -11232,7 +11354,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
-    return handlePublicPolicyRegistration(req, res, agent.organizationId, agent.id, req.body.branchId || agent.branchId || null);
+    return handlePublicPolicyRegistration(req, res, agent.organizationId, agent.id, req.body.branchId || agent.branchId || null, agent.email ? `${agent.email} (agent referral link)` : "Agent referral link");
   });
 
   // ─── (legacy unused block — kept for diff continuity, removed below) ─────
@@ -11355,7 +11477,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
-    return handlePublicPolicyRegistration(req, res, orgId, null, req.body.branchId || null);
+    return handlePublicPolicyRegistration(req, res, orgId, null, req.body.branchId || null, "Public walk-in registration form");
   });
 
   // ─── Groups ──────────────────────────────────────────────
@@ -12294,6 +12416,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     const item = await storage.createCostLineItem(body);
+    await auditLog(req, "CREATE_COST_SHEET_ITEM", "CostLineItem", item.id, null, item);
     return res.status(201).json(item);
   });
 

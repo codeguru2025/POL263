@@ -22,6 +22,7 @@ import { sql } from "drizzle-orm";
 import { sendEmail } from "./email-service";
 import { hasModule } from "./module-gate";
 import { validatePasswordPolicy } from "@shared/validation";
+import { invalidateOtherSessions } from "./route-helpers";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -656,6 +657,28 @@ export function setupClientAuth(app: Express) {
         failedLoginAttempts: 0,
         lockedUntil: null,
       }, client.organizationId);
+      // Fire-and-forget, same reasoning as the notification email below: the password change has
+      // already succeeded, so neither of these should turn a successful reset into a slower (or
+      // failed) response. Not awaiting also matters for a subtler reason here specifically —
+      // constantTimeResponse() below only adds a flat delay on top of whatever ran before it, it
+      // doesn't normalize total elapsed time, so awaiting extra DB work only on this (correct-
+      // answer) branch would make it measurably slower than the wrong-answer branch above,
+      // reopening exactly the timing side-channel constantTimeResponse exists to close.
+      (async () => {
+        await storage.createAuditLog({
+          organizationId: client.organizationId,
+          actorEmail: client.email,
+          action: "RESET_PASSWORD",
+          entityType: "Client",
+          entityId: client.id,
+          requestId: (req as any).requestId,
+          ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
+        } as any);
+        // No session of the requester's own to preserve (this flow is unauthenticated) — kill
+        // every existing session for this client, including any attacker who reset the password
+        // hoping to ride an already-open legitimate session.
+        await invalidateOtherSessions({ sessField: "clientId", matchValue: client.id });
+      })().catch((err) => structuredLog("error", "Post-reset audit log / session invalidation failed", { error: (err as Error).message, clientId: client.id }));
 
       // Security notice, not an admin-editable template — sent directly so an org admin
       // can't disable or reword the one signal a client gets if someone else reset their
@@ -702,6 +725,16 @@ export function setupClientAuth(app: Express) {
     }
     const newHash = await hashSecret(newPassword);
     await storage.updateClient(clientId, { passwordHash: newHash }, clientOrgId);
+    await storage.createAuditLog({
+      organizationId: clientOrgId,
+      actorEmail: client.email,
+      action: "CHANGE_PASSWORD",
+      entityType: "Client",
+      entityId: clientId,
+      requestId: (req as any).requestId,
+      ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
+    } as any);
+    await invalidateOtherSessions({ sessField: "clientId", matchValue: clientId, currentSessionId: req.sessionID });
     return res.json({ message: "Password updated" });
   });
 

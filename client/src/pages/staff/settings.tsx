@@ -4,6 +4,7 @@ import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, dataTableStickyHeaderClass, EmptyState } from "@/components/ds";
 import { Input } from "@/components/ui/input";
 import { validatePasswordPolicy, MIN_PASSWORD_LENGTH, NATIONAL_ID_FORMATS, NATIONAL_ID_FORMAT_KEYS, DEFAULT_NATIONAL_ID_FORMAT, SUPPORTED_CURRENCIES, CURRENCY_CONFIG, DEFAULT_ENABLED_CURRENCIES, normalizeEnabledCurrencies, type NationalIdFormatKey, type SupportedCurrency } from "@shared/validation";
+import { RECEIPT_ADVERT_IMAGE_SPECS } from "@shared/receipt-advert-specs";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -43,6 +44,7 @@ import {
   Globe,
   Video,
   Coins,
+  MessageSquare,
 } from "lucide-react";
 import type { CountryFlagSettings } from "@/components/country-flag-fields";
 import { useQuery, useMutation, useQueryClient, useQueries } from "@tanstack/react-query";
@@ -105,7 +107,9 @@ export default function StaffSettings() {
   const [advertTitle, setAdvertTitle] = useState("");
   const [advertBody, setAdvertBody] = useState("");
   const [advertImageUrl, setAdvertImageUrl] = useState("");
+  const [advertImageUrlThermal, setAdvertImageUrlThermal] = useState("");
   const [advertImageUploading, setAdvertImageUploading] = useState(false);
+  const [advertImageUploadingThermal, setAdvertImageUploadingThermal] = useState(false);
   const [advertDeleteId, setAdvertDeleteId] = useState<string | null>(null);
 
   const { data: advertsList = [], refetch: refetchAdverts } = useQuery<any[]>({
@@ -209,6 +213,30 @@ export default function StaffSettings() {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // ── SMS (Africala/SMSala) config ─────────────────────────────
+  // Each tenant is a distinct customer under our SMSala reseller account with their own API
+  // token and Sender ID — see server/sms-config.ts. The token is never returned by GET; the
+  // input stays blank (placeholder shows whether one is set) and is only sent on save if the
+  // admin actually typed a new one.
+  const { data: smsConfig } = useQuery<{ enabled: boolean; senderId?: string; hasApiToken: boolean }>({
+    queryKey: ["/api/sms-config"],
+    enabled: !isControlPlaneMode && canManageSettings,
+  });
+  const [smsSenderId, setSmsSenderId] = useState("");
+  const [smsApiToken, setSmsApiToken] = useState("");
+  useEffect(() => {
+    if (smsConfig?.senderId !== undefined) setSmsSenderId(smsConfig.senderId || "");
+  }, [smsConfig]);
+  const saveSmsConfigMutation = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/sms-config", { senderId: smsSenderId, ...(smsApiToken ? { apiToken: smsApiToken } : {}) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sms-config"] });
+      setSmsApiToken("");
+      toast({ title: "SMS settings saved" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   // ── Agent Content Posts (vCard training/education feed) ──────
   const { data: agentContentList = [] } = useQuery<any[]>({
     queryKey: ["/api/agent-content-posts"],
@@ -287,6 +315,7 @@ export default function StaffSettings() {
     setAdvertTitle("");
     setAdvertBody("");
     setAdvertImageUrl("");
+    setAdvertImageUrlThermal("");
   }
 
   function openNewAdvert() {
@@ -299,34 +328,47 @@ export default function StaffSettings() {
     setAdvertTitle(advert.title || "");
     setAdvertBody(advert.body || "");
     setAdvertImageUrl(advert.imageUrl || "");
+    setAdvertImageUrlThermal(advert.imageUrlThermal || "");
     setAdvertDialogOpen(true);
   }
 
-  async function handleAdvertImageUpload(e: ChangeEvent<HTMLInputElement>) {
+  // Shared by both image slots below — format ("a4" | "thermal") picks which shape the server
+  // validates against (shared/receipt-advert-specs.ts) and which state setter receives the result.
+  async function handleAdvertImageUpload(
+    e: ChangeEvent<HTMLInputElement>,
+    format: "a4" | "thermal",
+    setUrl: (url: string) => void,
+    setUploading: (v: boolean) => void
+  ) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setAdvertImageUploading(true);
+    setUploading(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
       const csrf = getCsrfToken();
-      const res = await fetch("/api/upload/receipt-advert-image", {
+      const res = await fetch(`/api/upload/receipt-advert-image?format=${format}`, {
         method: "POST",
         headers: csrf ? { "x-csrf-token": csrf } : {},
         body: fd,
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Upload failed");
-      setAdvertImageUrl(json.url);
+      setUrl(json.url);
     } catch (err: any) {
       toast({ title: "Upload failed", description: err.message, variant: "destructive" });
     } finally {
-      setAdvertImageUploading(false);
+      setUploading(false);
     }
   }
 
   function handleSaveAdvert() {
-    const data = { title: advertTitle.trim(), body: advertBody.trim(), imageUrl: advertImageUrl.trim() };
+    const data = {
+      title: advertTitle.trim(),
+      body: advertBody.trim(),
+      imageUrl: advertImageUrl.trim(),
+      imageUrlThermal: advertImageUrlThermal.trim(),
+    };
     if (editingAdvertId) updateAdvertMutation.mutate({ id: editingAdvertId, data });
     else createAdvertMutation.mutate(data);
   }
@@ -571,6 +613,9 @@ export default function StaffSettings() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-medium text-sm truncate">{advert.title || "(No title)"}</span>
                               {advert.isActive && <Badge className="bg-emerald-600 text-white text-xs">Active</Badge>}
+                              <Badge variant="outline" className="text-[10px]" title={advert.imageUrlThermal ? "Has a separate thermal-receipt image" : "Falls back to the A4 image on thermal receipts"}>
+                                {advert.imageUrlThermal ? "A4 + Thermal images" : "A4 image only"}
+                              </Badge>
                             </div>
                             {advert.body && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{advert.body}</p>}
                           </div>
@@ -607,24 +652,46 @@ export default function StaffSettings() {
                   </DialogHeader>
                   <div className="space-y-4 py-2">
                     <div className="space-y-2">
-                      <Label>Advert Image <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <Label>A4 Receipt Image <span className="text-muted-foreground text-xs">(optional)</span></Label>
                       <div className="flex items-center gap-4">
                         <div className="h-20 w-32 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
                           {advertImageUrl ? (
-                            <img key={advertImageUrl} src={resolveAssetUrl(advertImageUrl)} alt="Advert" className="object-contain max-h-full max-w-full p-1" />
+                            <img key={advertImageUrl} src={resolveAssetUrl(advertImageUrl)} alt="A4 advert" className="object-contain max-h-full max-w-full p-1" />
                           ) : (
                             <span className="text-xs text-muted-foreground text-center px-2">No image</span>
                           )}
                         </div>
                         <div className="space-y-1">
-                          <input id="advert-img-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={handleAdvertImageUpload} />
+                          <input id="advert-img-upload" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={(e) => handleAdvertImageUpload(e, "a4", setAdvertImageUrl, setAdvertImageUploading)} />
                           <Button type="button" size="sm" variant="outline" disabled={advertImageUploading} onClick={() => document.getElementById("advert-img-upload")?.click()}>
                             {advertImageUploading ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Uploading…</> : "Upload Image"}
                           </Button>
                           {advertImageUrl && (
                             <Button type="button" size="sm" variant="ghost" className="text-destructive text-xs" onClick={() => setAdvertImageUrl("")}>Remove</Button>
                           )}
-                          <p className="text-xs text-muted-foreground">PNG, JPG or WebP. Max 5MB.</p>
+                          <p className="text-xs text-muted-foreground">{RECEIPT_ADVERT_IMAGE_SPECS.a4.hintText}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Thermal Receipt Image <span className="text-muted-foreground text-xs">(optional — falls back to the A4 image above if not set)</span></Label>
+                      <div className="flex items-center gap-4">
+                        <div className="h-20 w-20 rounded border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+                          {advertImageUrlThermal ? (
+                            <img key={advertImageUrlThermal} src={resolveAssetUrl(advertImageUrlThermal)} alt="Thermal advert" className="object-contain max-h-full max-w-full p-1" />
+                          ) : (
+                            <span className="text-xs text-muted-foreground text-center px-2">No image</span>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <input id="advert-img-upload-thermal" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" className="hidden" onChange={(e) => handleAdvertImageUpload(e, "thermal", setAdvertImageUrlThermal, setAdvertImageUploadingThermal)} />
+                          <Button type="button" size="sm" variant="outline" disabled={advertImageUploadingThermal} onClick={() => document.getElementById("advert-img-upload-thermal")?.click()}>
+                            {advertImageUploadingThermal ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Uploading…</> : "Upload Image"}
+                          </Button>
+                          {advertImageUrlThermal && (
+                            <Button type="button" size="sm" variant="ghost" className="text-destructive text-xs" onClick={() => setAdvertImageUrlThermal("")}>Remove</Button>
+                          )}
+                          <p className="text-xs text-muted-foreground">{RECEIPT_ADVERT_IMAGE_SPECS.thermal.hintText}</p>
                         </div>
                       </div>
                     </div>
@@ -746,6 +813,38 @@ export default function StaffSettings() {
                     disabled={saveEnabledCurrenciesMutation.isPending || orgEnabledCurrencies.length === 0}
                   >
                     {saveEnabledCurrenciesMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Save
+                  </Button>
+                </div>
+              </CardSection>
+              <CardSection
+                title="SMS (Africala)"
+                description="Your own SMSala sub-account credentials, used to send policy/account SMS notices. Each organization has a distinct API token and Sender ID under our SMSala reseller account — never shared across tenants."
+                icon={MessageSquare}
+                className="mt-6"
+              >
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-2">
+                    <Label htmlFor="sms-api-token">API Token</Label>
+                    <Input
+                      id="sms-api-token"
+                      type="password"
+                      value={smsApiToken}
+                      onChange={(e) => setSmsApiToken(e.target.value)}
+                      placeholder={smsConfig?.hasApiToken ? "••••••••  (set — leave blank to keep)" : "Not set"}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="sms-sender-id">Sender ID</Label>
+                    <Input
+                      id="sms-sender-id"
+                      value={smsSenderId}
+                      onChange={(e) => setSmsSenderId(e.target.value)}
+                      placeholder="e.g. FALAKHE"
+                    />
+                  </div>
+                  <Button onClick={() => saveSmsConfigMutation.mutate()} disabled={saveSmsConfigMutation.isPending}>
+                    {saveSmsConfigMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Save
                   </Button>
                 </div>

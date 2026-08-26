@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // dispatchNotification pulls in storage (DB), email-service (SMTP), push, and module-gate —
 // mock all of it, same pattern as tests/unit/middleware.test.ts. vi.mock factories are hoisted
 // above top-level const declarations, so the mock fns must be created via vi.hoisted().
-const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule } = vi.hoisted(() => ({
+const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule, mockSendSms } = vi.hoisted(() => ({
   mockStorage: {
     getOrganization: vi.fn(),
     getActiveTemplatesByEvent: vi.fn(),
@@ -13,6 +13,7 @@ const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule } = vi.hoist
   mockSendEmail: vi.fn(),
   mockPushToClient: vi.fn(),
   mockHasModule: vi.fn(),
+  mockSendSms: vi.fn(),
 }));
 
 vi.mock("../../server/storage", () => ({ storage: mockStorage }));
@@ -22,6 +23,13 @@ vi.mock("../../server/email-service", () => ({
 }));
 vi.mock("../../server/push", () => ({ pushToClient: (...args: any[]) => mockPushToClient(...args) }));
 vi.mock("../../server/module-gate", () => ({ hasModule: (...args: any[]) => mockHasModule(...args) }));
+// sms-service now resolves per-org credentials via sms-config.ts -> control-plane-db.ts, which
+// throws at import time if DATABASE_URL isn't set (not the case in this unit test process) —
+// mock it out same as email/push above, rather than pulling in a real DB connection.
+vi.mock("../../server/sms-service", () => ({
+  sendSms: (...args: any[]) => mockSendSms(...args),
+  normalizePhoneForSms: (v: string) => v,
+}));
 
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 
@@ -41,6 +49,7 @@ describe("dispatchNotification — default-channel email", () => {
     mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]); // no admin-configured template
     mockStorage.createNotificationLog.mockResolvedValue(undefined);
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
   });
 
   it("emails by default for an event type that previously was in-app-only (e.g. pre_lapse_warning)", async () => {

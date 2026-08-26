@@ -5,9 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Eye, MessageSquareText, Users, ExternalLink } from "lucide-react";
+import { Loader2, Eye, MessageSquareText, Users, ExternalLink, Copy, Check, Share2 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
@@ -72,6 +72,27 @@ export default function StaffMyVCard() {
   });
 
   const referralCode = user?.referralCode;
+  const cardUrl = referralCode ? `${window.location.origin}/card/${referralCode}` : "";
+
+  const [linkCopied, setLinkCopied] = useState(false);
+  const copyLink = async () => {
+    await navigator.clipboard.writeText(cardUrl);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+    toast({ title: "Link copied" });
+  };
+  const shareLink = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "My vCard", url: cardUrl });
+        return;
+      } catch {
+        // Cancelled the native share sheet, or the browser doesn't really support it — fall
+        // through to the clipboard copy either way.
+      }
+    }
+    copyLink();
+  };
 
   return (
     <StaffLayout>
@@ -89,6 +110,28 @@ export default function StaffMyVCard() {
             ) : undefined
           }
         />
+
+        {referralCode && (
+          <CardSection title="Share your vCard" description="Give this link or QR code to a prospect — they land on your public vCard page and can save your contact or request a quote." icon={Share2}>
+            <div className="flex flex-col sm:flex-row gap-6">
+              <div className="flex-1 space-y-3 max-w-lg">
+                <div className="flex items-center gap-2">
+                  <Input readOnly value={cardUrl} className="font-mono text-xs" data-testid="input-vcard-link" />
+                  <Button type="button" variant="outline" size="icon" className="shrink-0" onClick={copyLink} aria-label="Copy link" data-testid="button-copy-vcard-link">
+                    {linkCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="gap-2" onClick={shareLink} data-testid="button-share-vcard-link">
+                  <Share2 className="h-4 w-4" /> Share
+                </Button>
+                <p className="text-xs text-muted-foreground">Or have them scan the QR code — it opens the same page.</p>
+              </div>
+              <div className="shrink-0 rounded-lg border p-3 bg-white w-fit">
+                <img src={getApiBase() + "/api/my-vcard/qr"} alt="QR code to your vCard" className="h-32 w-32" data-testid="img-vcard-qr" />
+              </div>
+            </div>
+          </CardSection>
+        )}
 
         <CardSection title="Usage" description="Distinct from your client list — this is how your public vCard page itself is performing." icon={Eye}>
           {statsLoading ? (

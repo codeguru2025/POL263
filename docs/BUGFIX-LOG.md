@@ -10,6 +10,275 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-26 — Pre-push review: payment-route race condition, 2 misattributed audit-log entries, 1 timing side-channel
+
+Ran a dedicated `/code-review high` pass over the full day's diff before pushing (payment-route
+ACID fixes, MFA enforcement, audit-trail work, receipt-advert sizing, vCard UI). Found 3 real bugs,
+all in code from earlier the same session, all fixed before push:
+
+**1. The earlier "atomic" fix for the 3 mortuary/case-service payment routes (see this file's
+other 2026-08-26 entry on ACID fixes) closed the crash-between-two-writes gap but left a genuine
+concurrency race.** `server/routes.ts`: the "is this already paid?" guard (e.g.
+`if (intake.storageFeeStatus !== "unpaid") return 400`) reads a row fetched *before* entering
+`withOrgTransaction` — two near-simultaneous requests (double-click, retry-after-timeout, two staff
+members) both read "unpaid", both pass the guard, both commit independently, and neither storage
+UPDATE had a status predicate to stop it. Two `service_receipts` rows for one fee, double-booking
+income. Fixed by making the UPDATE itself a compare-and-swap: added `AND status = 'unpaid'` to the
+WHERE clause in `recordCaseServiceChargePayment`/`recordStoragePayment`/`recordChapelWashBayPayment`
+(`server/storage.ts`), so a concurrent transaction's UPDATE finds 0 matching rows once the first
+commits (Postgres serializes UPDATEs to the same row — no explicit lock statement needed) and the
+methods now return `undefined` instead of silently succeeding twice. Route handlers check for that
+and throw `"ALREADY_PAID"` inside the transaction (aborting it before a second receipt is created),
+caught outside and turned into a 409.
+
+**2. Two of the day's new audit-log calls attributed the event to the wrong entity.**
+`CREATE_QUOTATION_COLLATERAL` and `UPSERT_QUOTATION_GUARANTOR` both logged against the *parent*
+`FuneralQuotation` (entityType/entityId) instead of the collateral/guarantor row actually created —
+contradicting the sibling `DELETE_QUOTATION_COLLATERAL` call (same feature, correctly attributed)
+and the codebase-wide convention of a `CREATE_*` audit entry pointing at what was created. Fixed
+both to log `"QuotationCollateral"`/`"QuotationGuarantor"` with the created row's own id. Same
+pattern, same fix, for `CREATE_COST_SHEET_ITEM` (was logging the parent `CostSheet`, now logs
+`"CostLineItem"` with the item's id).
+
+**3. Client password-reset (security-question flow) audit-log + session-invalidation calls
+reintroduced a timing side-channel.** `server/client-auth.ts`'s `constantTimeResponse()` only adds
+a flat delay on top of whatever ran before it — it does not measure and normalize *total* elapsed
+time. Awaiting the new audit-log insert + sessions-table DELETE only on the correct-answer branch
+(added earlier this session) made a correct security-answer guess measurably slower than a wrong
+one, reopening exactly the oracle `constantTimeResponse` exists to close — before the 5-attempt
+lockout would otherwise catch a brute-force attempt. Fixed by making both calls fire-and-forget,
+matching the pattern the very next code block already uses for the post-reset notification email
+(same file, same reasoning: the password change already succeeded, nothing after it should affect
+response timing or turn a success into a failure).
+
+**Deliberately not fixed, flagged instead**: `server/sms-service.ts`'s `normalizePhoneForSms`
+prepends a single global country code to any locally-formatted number, with no per-client/per-org
+country awareness — a real bug for a multi-country tenant (Falakhe has SA clients per
+`is_south_africa`), but that's pre-existing code from a different, not-yet-live feature (SMS
+integration is still blocked on Sender ID approval — see project memory), not something touched
+this session, and fixing it properly needs a schema decision (where does a client's country come
+from?) rather than a quick patch. Also noted but not changed: `MFA_REQUIRED_PERMISSIONS`
+(`server/auth.ts`) is a hardcoded in-code Set rather than a DB-driven flag on the permissions table
+— a deliberate, defensible tradeoff (an admin-editable "which permissions require MFA" setting
+would itself need protecting), not a bug, but worth remembering if a new privileged permission is
+ever added: it needs a matching entry there, and nothing currently prompts for that.
+
+**Verified**: `npm run check` clean, 388/388 tests still passing after all three fixes.
+
+---
+
+## 2026-08-26 — IFALAKHE tenant DB stuck 7 migrations behind since 0107 (silent, no error surfaced to a user)
+
+**Symptom**: while shipping migration 0114 (receipt-advert thermal images), `npm run db:migrate:do`
+reported IFALAKHE FUNERAL SERVICES' dedicated DB skipped with `relation "legacy_group_receipts"
+does not exist`. Not something a user would ever see directly — `script/run-migrations.ts` catches
+per-tenant failures and just warns, so this had been silently accumulating with no visible symptom
+until someone happened to read the migration-run output.
+
+**Root cause**: `migrations/0107_legacy_receipt_member_breakdown.sql` runs `ALTER TABLE
+legacy_group_receipts ADD COLUMN ...` unconditionally. `legacy_group_receipts` is a hand-created,
+raw-SQL-managed table that only ever existed on Falakhe's dedicated DB (created via a one-off
+script, never a real migration, never added to `shared/schema.ts` — see the 2026-08-19
+tenant-genericity entry below for the matching *query*-side version of this same gap). Any other
+tenant's dedicated DB — IFALAKHE's, or any future one — doesn't have that table, so 0107 hard-fails
+there. Because the migration runner processes each tenant's files strictly in order and only marks
+a file as applied *after* it succeeds, one hard failure doesn't just skip that file — it blocks
+every migration after it in the sequence for that tenant, forever, until someone notices and fixes
+the blocking file. IFALAKHE had been stuck since 0107 shipped, missing MFA support, client consent,
+timezone/national-ID-format/currency configurability, and now the advert-image column too — 7
+migrations of drift, invisible because nothing surfaces this to a user-facing error.
+
+**Fix**: `ALTER TABLE legacy_group_receipts` → `ALTER TABLE IF EXISTS legacy_group_receipts` in
+0107. Safe to edit after the fact: `script/run-migrations.ts` tracks applied migrations by
+filename only, in a plain `schema_migrations(filename TEXT PRIMARY KEY)` table with no checksum —
+so this is a guaranteed no-op re-run on every DB where 0107 already succeeded (shared DB, Falakhe),
+and only changes behavior on a DB where it was previously failing outright. Confirmed no other
+migration file references `legacy_group_receipts` or any other hand-created table without a guard.
+
+**Verified**: re-ran `npm run db:migrate:do` — IFALAKHE applied all 8 pending migrations (0107
+through 0114) cleanly in one pass, confirmed caught up.
+
+**Lesson**: any table created outside the Drizzle schema / migration system (search migrations/
+for "hand-created" or "raw-SQL-managed" in comments) needs every migration that touches it to use
+`IF EXISTS`/`IF NOT EXISTS` defensively — it's guaranteed to be missing on some tenant's DB, not a
+hypothetical. The query-side version of this same mistake was already fixed once (2026-08-19,
+below); this is the migration-side instance of the identical root cause. Worth checking new
+migrations against this specific pattern before merging.
+
+---
+
+## 2026-08-26 — Product brochure download broken: shadowed by an earlier `:id` route
+
+**Symptom**: clicking "Download Brochure" on the Product Builder page (`/staff/products`) returned
+a raw DB error: `Failed query: select ... from "products" where "products"."id" = $1 params:
+brochure`.
+
+**Root cause**: `server/routes.ts` registered `GET /api/products/:id` (line ~2922) *before*
+`GET /api/products/brochure` (line ~2970). Express matches routes in registration order, and a
+`:id` path segment matches any literal string — so a request to `/api/products/brochure` matched
+the `:id` route first, with `req.params.id` literally set to the string `"brochure"`. The handler
+then tried `storage.getProduct("brochure", orgId)`, which built a `WHERE products.id = 'brochure'`
+query against a `uuid` column and failed at the DB level rather than 404ing cleanly. The intended
+brochure handler (redirect to an uploaded PDF, or stream an auto-generated one) was never reached.
+
+**Fix**: moved the brochure GET/POST/DELETE block to before `GET /api/products/:id` in the
+registration order — no route logic changed, just where it sits in the file. Also wrote a small
+one-off script (not kept) that parses every `app.get/post/patch/put/delete` registration in
+`routes.ts` and checks for any literal path shadowed by an earlier same-method `:param` route with
+the same segment shape — this was the only instance found across all ~510 registered routes.
+
+**Lesson**: any route with a literal segment following a same-prefix `:param` route (e.g.
+`/api/products/brochure` after `/api/products/:id`) needs the literal one registered *first*.
+Worth the same shadowing check next time a new literal sub-path is added under an existing
+`:id`-shaped resource — the error surfaces as a confusing DB-level failure (wrong-typed id), not
+an obvious routing error, which is why this went unnoticed until a user hit it directly.
+
+**Verified**: `npm run check` clean, 380/380 tests, and the route-shadowing scan above confirmed
+no other instance of this bug shape exists in `server/routes.ts`. Not committed — Augustus hasn't
+said "commit"/"push".
+
+---
+
+## 2026-08-26 — Audit trail: 9 real audit-logging gaps closed (public policy registration was the biggest), plus a plain-English readability layer
+
+> **Update, same day**: 2 of the new `CREATE_*` calls added below (quotation collateral,
+> quotation guarantor) logged the wrong entity — caught by a pre-push review pass and fixed. See
+> "Pre-push review" entry above (newer, listed first).
+
+Requested the audit trail be "simple and easy to read... even a layperson" and to "record
+everything that would have been done." Two separate pieces: a UI readability layer (not a bug —
+logged briefly here for cross-reference) and a completeness sweep of `server/routes.ts`'s ~265
+mutation routes for missing `auditLog()` calls, which found real gaps.
+
+**Real gaps found and fixed** (a fork agent scanned all 265 `app.post/patch/put/delete` handlers;
+~25 of the 40 routes with no `auditLog(` call were legitimate exemptions — file uploads returning
+only a URL, previews/calculations, public webhook receivers with no attributable actor):
+- **Biggest one**: `handlePublicPolicyRegistration` (`server/routes.ts` ~11100), the shared
+  handler behind both `POST /api/public/register-policy` (agent referral links) and `POST
+  /api/public/walkin-register` (org walk-in registration), had **zero** audit logging — every
+  policy created through a public/vCard signup or walk-in form was invisible in the audit trail.
+  No `req.user` exists on these unauthenticated public routes, so `auditLog(req, ...)`'s usual
+  actor-from-session lookup doesn't apply; added an `actorLabel` parameter each caller supplies
+  (the referring agent's email, or a "Public walk-in registration form" marker) and a direct
+  `storage.createAuditLog()` call using it as `actorEmail`.
+- `POST /api/quotations/:id/guarantor` and `.../collateral` (~9916, 9932) — guarantor/collateral
+  are financial/legal liability records with no audit trail at all. Added
+  `UPSERT_QUOTATION_GUARANTOR` / `CREATE_QUOTATION_COLLATERAL`.
+- `POST /api/cost-sheets/:id/items` (~12333) — feeds directly into per-case profit/loss reporting,
+  unaudited. Added `CREATE_COST_SHEET_ITEM`.
+- `POST /api/receipt-adverts/:id/deactivate` (993) — its sibling `/activate` correctly audit-logs;
+  deactivate didn't. Same asymmetric-sibling-route bug shape as the chapel-wash-bay/storage-
+  payment gap fixed earlier this same day.
+- `POST /api/payment-intents/:id/initiate` + `/otp`, and `POST /api/group-payment-intents/:id/
+  initiate` (~4988, 5019, 6097) — staff-initiated real PayNow payment attempts, unaudited (payment-
+  service.ts never calls auditLog internally, confirmed by grep). Added `INITIATE_PAYNOW_PAYMENT` /
+  `SUBMIT_PAYNOW_OTP`. Left the *public* `/api/pay/:token/initiate` link alone — client-initiated,
+  no staff session to attribute, lower insider-accountability value than the staff-facing routes.
+
+**Deliberately deferred, not fixed**: `POST /api/platform/app-release`, `PATCH .../app-release/:id`,
+`POST /api/platform/backup-sync` (~1517-1559) — genuinely platform-global actions (not scoped to
+any tenant), so they can't use the per-tenant `audit_logs` table the way every other gap above
+does (`orgIdOverride` needs a real tenant id to attach to). Fixing this properly means a new
+platform-level audit mechanism, not a missing-call insertion — a real feature addition, out of
+scope for this pass. Flagged to Augustus rather than forced through with a wrong-shaped fix.
+
+**Readability layer (feature, not a bug)**: new `client/src/lib/audit-format.ts` — generic
+SNAKE_CASE-action and CamelCase-entity humanizers plus a before/after field-diff summarizer, so
+`client/src/pages/staff/audit.tsx` shows a plain-English sentence ("Jane Doe recorded storage
+payment") and a short "field: old → new" list by default, with the existing raw-JSON diff button
+(kept, just renamed "Technical details" and consolidated with the action code/request ID) still
+available for anyone who wants the full record. Deliberately generic (no hand-written per-action
+copy table) so it covers all ~250+ distinct action codes without needing to enumerate them.
+
+**Verified**: `npm run check` clean, 380/380 tests (17 new — `tests/unit/audit-format.test.ts`,
+including a regression test for a bug caught in review: an early version of the summary sentence
+force-lowercased the whole phrase, which flattened preserved acronyms like "MFA" down to "mfa").
+**Not visually verified in a browser** — this session's local `DATABASE_URL` points at the real
+production shared DB, and viewing the
+staff audit page requires a real authenticated session, so `npm run dev` against it was avoided
+per that same prior lesson. If the UI looks off, check here first before assuming the logic broke.
+Not committed — Augustus hasn't said "commit"/"push".
+
+---
+
+## 2026-08-26 — 3 mortuary/case-service payment routes non-atomic (status flip vs. receipt); MFA enforcement gap for privileged staff; password-change session/audit gap
+
+> **Update, same day**: the transaction fix below closed the crash-between-two-writes gap but
+> left a genuine concurrent-double-payment race, and the password-change fix introduced a timing
+> side-channel — both caught by a pre-push review pass and fixed. See "Pre-push review" entry
+> above (newer, listed first).
+
+Requested a full bug/ACID/NFR/SOC2 audit. Ran 3 parallel fork agents (new-code review of the
+uncommitted SMS integration — came back clean, no criticals; a SOC2+MFA gap analysis; a fresh
+bugs/ACID/NFR sweep excluding areas already covered by the 2026-08-19 audits). Two real findings
+fixed same session, verified against live production data before shipping.
+
+**ACID bug — payment status flip not atomic with receipt creation, 3 routes.**
+`server/routes.ts`: `POST /api/case-service-charges/:id/payment` (~10125),
+`POST /api/mortuary-intakes/:id/storage-payment` (~7420), and
+`POST /api/mortuary-intakes/:id/chapel-wash-bay-payment` (~7505) each flipped a charge/fee status
+to `"paid"` and then separately called `storage.createServiceReceipt(...)` as two independent,
+non-transactional writes. A crash or dropped connection between the two left a charge permanently
+marked paid with no corresponding `service_receipts` row — the exact "invisible income" bug class
+(`financial-statements.ts`'s `queryReceipts()` never sees the paid charge) already fixed multiple
+times before, reintroduced here via bad request-timing rather than a missing call outright. Fixed
+by wrapping both writes (plus their `auditLog()` calls) in one `withOrgTransaction()`, matching the
+established idiom used elsewhere (e.g. `POST /api/tombstones/orders/:id/payments`). Added an
+optional `tx?: OrgDataDb` param to the 4 storage methods involved
+(`recordCaseServiceChargePayment`, `recordStoragePayment`, `recordChapelWashBayPayment`,
+`createServiceReceipt`) so they can run inside a caller-supplied transaction — same pattern
+`storage.createAuditLog` already used. `getNextPaymentReceiptNumber()` stays outside the
+transaction (it's already its own short atomic allocation, and nesting `withOrgTransaction` calls
+opens a second pool connection rather than truly nesting — matches the pre-existing tombstone-
+payment route's pattern, not a new convention invented for this fix).
+
+**Lesson**: this is the third time this exact gap-shape (new/older financial mutation skipping the
+transactional-write-plus-audit-log idiom) has turned up in an audit — grep for a 4th instance
+before touching more payment-confirmation routes.
+
+**Security/SOC2 — MFA was opt-in with zero enforcement, including for the platform owner.**
+`server/auth.ts`'s `requirePermission`/`requireAnyPermission`: `mfaEnabled` was tracked and
+checked at login, but nothing ever required it — a platform owner or org admin holding
+`manage:settings`/`manage:users` could run indefinitely with MFA off. Checked live production data
+before deciding how to ship this: **every single privileged account had MFA disabled**, including
+the platform owner's own account and all 13 org-admin accounts across every tenant. Augustus chose
+hard-block-immediately (via AskUserQuestion) with full knowledge this locks every one of those
+accounts, including his own, out of privileged actions until they enroll — MFA enrollment itself
+(`POST /api/auth/mfa/enroll|confirm|disable`) is gated only by `requireAuth`, never by the new
+check, so there's always a path to fix it. Added `MFA_REQUIRED_PERMISSIONS` (`manage:settings`,
+`manage:users`) checked in both middleware functions; for `requireAnyPermission` the gate only
+fires on the permission(s) that actually granted access for that request, not merely requested,
+so a route accepting either a privileged or a non-privileged permission doesn't block a user who
+only holds the non-privileged one.
+
+**Related, smaller gap fixed in the same pass**: staff (`server/auth.ts` `POST
+/api/auth/change-password`) and client (`server/client-auth.ts` `POST
+/api/client-auth/change-password`, `POST /api/client-auth/reset-password`) password-change
+endpoints didn't invalidate other active sessions or write an audit-log entry, unlike every other
+privileged mutation. Added `invalidateOtherSessions()` (`server/route-helpers.ts`) — deletes rows
+from the shared `sessions` table (connect-pg-simple; same store for staff and client sessions
+regardless of tenant DB isolation) matching the account's session token, excluding the requester's
+own current session for an authenticated change, excluding none for the unauthenticated
+security-question reset flow (kills every session, since a legitimate owner's already-open session
+shouldn't survive someone else resetting the password via security question). Client audit-log
+entries use `actorEmail` only, no `actorId` — `audit_logs.actor_id` FK-references `users`, not
+`clients`, and `storage.createAuditLog` already has a graceful FK-violation fallback for exactly
+this case (platform owner switching into a tenant DB where their own row doesn't exist).
+
+**Deferred, not built**: client-portal MFA. Zero MFA capability exists for clients today (schema
+has no MFA columns on `clients`, only on `users`). Augustus's direction: build this as SMS-based
+OTP once the in-progress SMS/Africala integration goes live (see memory
+`project_sms_africala_integration`), not email — and pair it with a client-onboarding step where
+the client picks their preferred communication channel, which the app then uses by default. Not
+started; blocked on the SMS integration itself (still pending Falakhe's Sender ID approval).
+
+**Verified:** `npm run check` clean; full suite 363/363 (8 new tests added covering the MFA
+enforcement paths in both `requirePermission` and `requireAnyPermission`, including the
+"gate fires only on the permission that actually granted access" case for `requireAnyPermission`).
+Not yet committed — Augustus hasn't said "commit"/"push".
+
+---
+
 ## 2026-08-19 — Tenant-genericity review: legacy_group_receipts crash risk fixed, nav-gating gap closed, 3 hardcoded-for-Falakhe systems generalized
 
 Requested a "thorough review" of things hardcoded specifically for Falakhe Funeral Services (the

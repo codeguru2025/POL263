@@ -96,7 +96,15 @@ async function loadReceiptContext(receipt: any, orgId: string) {
   if (activeAdvert?.imageUrl) {
     advertImageData = await resolveImage(activeAdvert.imageUrl);
   }
-  return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData };
+  // Thermal-specific image, falling back to the A4 one when an advert predates this field or
+  // simply hasn't had a thermal variant uploaded — see shared/receipt-advert-specs.ts for why
+  // the two formats need differently-shaped images in the first place.
+  let advertImageDataThermal: Buffer | null = advertImageData;
+  const thermalUrl = (activeAdvert as any)?.imageUrlThermal;
+  if (thermalUrl && thermalUrl !== activeAdvert?.imageUrl) {
+    advertImageDataThermal = await resolveImage(thermalUrl);
+  }
+  return { policy, client, org, productName, issuedByName, activeAdvert, advertImageData, advertImageDataThermal };
 }
 
 /**
@@ -494,7 +502,7 @@ export async function streamThermalReceiptToResponse(
     res.status(404).json({ message: "Receipt not found" });
     return;
   }
-  const { policy, client, org, productName, issuedByName, activeAdvert, advertImageData } = await loadReceiptContext(receipt, orgId);
+  const { policy, client, org, productName, issuedByName, activeAdvert, advertImageDataThermal: advertImageData } = await loadReceiptContext(receipt, orgId);
   if (!policy || !client || !org) {
     res.status(404).json({ message: "Receipt data incomplete" });
     return;

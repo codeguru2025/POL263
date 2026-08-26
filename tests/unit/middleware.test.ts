@@ -24,7 +24,7 @@ vi.mock("../../server/storage", () => ({
 vi.mock("@shared/control-plane-schema", () => ({ tenants: {} }));
 
 import { storage } from "../../server/storage";
-import { requireAuth, requirePermission, applyPlatformOwnerTenantOverride } from "../../server/auth";
+import { requireAuth, requirePermission, requireAnyPermission, applyPlatformOwnerTenantOverride } from "../../server/auth";
 
 function mockReq(overrides: Record<string, any> = {}) {
   const user = overrides.user;
@@ -108,13 +108,52 @@ describe("requirePermission middleware", () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it("platform owner bypasses permission check entirely", async () => {
-    const req = mockReq({ user: { id: "u1", organizationId: "org1", isPlatformOwner: true } });
+  it("platform owner bypasses the permission check entirely, but still needs MFA", async () => {
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", isPlatformOwner: true, mfaEnabled: true } });
     const res = mockRes();
     const next = vi.fn();
     await (requirePermission("delete:tenant") as any)(req, res, next);
     expect(next).toHaveBeenCalled();
     expect(storage.getUserEffectivePermissions).not.toHaveBeenCalled();
+  });
+
+  it("blocks a platform owner without MFA enrolled, even though they'd otherwise bypass RBAC", async () => {
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", isPlatformOwner: true, mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requirePermission("delete:tenant") as any)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "MFA_REQUIRED" }));
+  });
+
+  it("blocks manage:settings without MFA enrolled, even with the permission granted", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["manage:settings"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requirePermission("manage:settings") as any)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "MFA_REQUIRED" }));
+  });
+
+  it("allows manage:settings once MFA is enrolled", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["manage:settings"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: true } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requirePermission("manage:settings") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("does not require MFA for a permission outside the privileged set", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["read:policy"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requirePermission("read:policy") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
   });
 
   it("requires ALL permissions when multiple are specified", async () => {
@@ -133,6 +172,52 @@ describe("requirePermission middleware", () => {
     const next = vi.fn();
     await (requirePermission("read:policy", "write:policy") as any)(req, res, next);
     expect(next).toHaveBeenCalled();
+  });
+});
+
+describe("requireAnyPermission middleware", () => {
+  beforeEach(() => {
+    vi.mocked(storage.getUserEffectivePermissions).mockReset();
+  });
+
+  it("calls next when the user holds one of the listed permissions", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["read:reports"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1" } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requireAnyPermission("manage:settings", "read:reports") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("blocks with MFA_REQUIRED only when the permission that actually granted access is privileged", async () => {
+    // Only read:reports is held — manage:settings never granted this request, so MFA shouldn't
+    // gate it even though manage:settings is in the requested set.
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["read:reports"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requireAnyPermission("manage:settings", "read:reports") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("blocks manage:users without MFA when that's the permission that actually granted access", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["manage:users"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requireAnyPermission("manage:users", "read:reports") as any)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: "MFA_REQUIRED" }));
+  });
+
+  it("platform owner bypass still requires MFA", async () => {
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", isPlatformOwner: true, mfaEnabled: false } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requireAnyPermission("read:reports") as any)(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
   });
 });
 

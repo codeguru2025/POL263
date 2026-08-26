@@ -15,7 +15,7 @@ import { cpDb } from "./control-plane-db";
 import { billingPlans, tenantSubscriptions, tenantFeatureFlags, billingSettings } from "@shared/control-plane-schema";
 import { structuredLog } from "./logger";
 
-export const ALL_KNOWN_MODULES = ["claims", "funeral_ops", "fleet", "payroll", "whatsapp_notifications", "mobile_payments", "email_notifications", "email_inbound"] as const;
+export const ALL_KNOWN_MODULES = ["claims", "funeral_ops", "fleet", "payroll", "whatsapp_notifications", "mobile_payments", "email_notifications", "email_inbound", "sms_notifications"] as const;
 export type ModuleKey = (typeof ALL_KNOWN_MODULES)[number];
 
 interface CachedModules {

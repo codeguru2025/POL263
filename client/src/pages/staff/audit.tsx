@@ -2,12 +2,12 @@ import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, FilterBar, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { humanizeAction, humanizeEntityType, summarizeAuditEntry, summarizeChanges } from "@/lib/audit-format";
 
 const ACTION_OPTIONS = [
   "CREATE_CLIENT",
@@ -95,74 +95,68 @@ export default function AuditLogs() {
       ),
     },
     {
-      id: "action",
-      header: "Action",
-      accessor: (log) => log.action,
-      cell: (log) => (
-        <Badge variant="outline" className="font-mono text-[10px]">
-          {log.action}
-        </Badge>
-      ),
-    },
-    {
-      id: "actor",
-      header: "Actor",
-      accessor: (log) => log.actorEmail || "system",
-      cell: (log) => <span className="text-sm">{log.actorEmail || "system"}</span>,
-    },
-    {
-      id: "entity",
-      header: "Target Entity",
-      accessor: (log) => log.entityType,
-      cell: (log) => (
-        <span className="text-sm">
-          {log.entityType}
-          {log.entityId && (
-            <span className="text-muted-foreground ml-1 font-mono text-[10px]">
-              ({log.entityId.slice(0, 8)}...)
-            </span>
-          )}
-        </span>
-      ),
-    },
-    {
-      id: "requestId",
-      header: "Request ID",
-      accessor: (log) => log.requestId || "",
-      cell: (log) => (
-        <span className="font-mono text-[10px] text-muted-foreground">{log.requestId || "—"}</span>
-      ),
-    },
-    {
-      id: "diff",
-      header: "Before/After Diff",
+      id: "summary",
+      header: "What happened",
       sortable: false,
-      cell: (log) =>
-        log.before || log.after ? (
-          <details className="cursor-pointer">
-            <summary className="text-xs text-primary hover:underline">View diff</summary>
-            <div className="mt-2 space-y-2">
-              {log.before && (
-                <div>
-                  <span className="text-[10px] font-semibold text-destructive">BEFORE:</span>
-                  <pre className="text-[10px] bg-destructive/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
-                    {JSON.stringify(log.before, null, 2)}
-                  </pre>
-                </div>
-              )}
-              {log.after && (
-                <div>
-                  <span className="text-[10px] font-semibold text-emerald-600">AFTER:</span>
-                  <pre className="text-[10px] bg-emerald-500/5 p-2 rounded-md font-mono mt-1 overflow-x-auto max-w-sm">
-                    {JSON.stringify(log.after, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </details>
-        ) : (
-          <span className="text-xs text-muted-foreground italic">No diff</span>
-        ),
+      accessor: (log) => summarizeAuditEntry(log),
+      cell: (log) => {
+        const changes = summarizeChanges(log.before, log.after);
+        return (
+          <div className="space-y-1 max-w-md">
+            <p className="text-sm leading-snug">{summarizeAuditEntry(log)}</p>
+            {log.entityType && (
+              <p className="text-xs text-muted-foreground">
+                {humanizeEntityType(log.entityType)}
+                {log.entityId && <span className="font-mono"> · {log.entityId.slice(0, 8)}</span>}
+              </p>
+            )}
+            {changes.length > 0 && (
+              <ul className="text-xs text-muted-foreground space-y-0.5 pl-3 border-l-2 border-border/60">
+                {changes.map((c) => (
+                  <li key={c.field}>
+                    <span className="font-medium text-foreground/80">{c.field}:</span>{" "}
+                    {c.from} <span aria-hidden>→</span> {c.to}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: "details",
+      header: "Technical details",
+      sortable: false,
+      cell: (log) => (
+        <details className="cursor-pointer">
+          <summary className="text-xs text-primary hover:underline">View details</summary>
+          <div className="mt-2 space-y-2 text-[10px] font-mono text-muted-foreground">
+            <div>Action: {log.action}</div>
+            {log.requestId && <div>Request ID: {log.requestId}</div>}
+            {(log.before || log.after) && (
+              <div className="space-y-2">
+                {log.before && (
+                  <div>
+                    <span className="font-semibold text-destructive">BEFORE:</span>
+                    <pre className="bg-destructive/5 p-2 rounded-md mt-1 overflow-x-auto max-w-sm">
+                      {JSON.stringify(log.before, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {log.after && (
+                  <div>
+                    <span className="font-semibold text-emerald-600">AFTER:</span>
+                    <pre className="bg-emerald-500/5 p-2 rounded-md mt-1 overflow-x-auto max-w-sm">
+                      {JSON.stringify(log.after, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </details>
+      ),
     },
   ];
 
@@ -171,7 +165,7 @@ export default function AuditLogs() {
       <PageShell>
         <PageHeader
           title="Audit Logs"
-          description="Track all system events within the current tenant scope."
+          description="A plain-English record of who did what, and when. Click “View details” on any row for the full technical record."
         />
 
         <FilterBar className="rounded-xl border border-border/70 bg-card/80 px-4 py-3 shadow-sm">
@@ -192,7 +186,7 @@ export default function AuditLogs() {
             <SelectContent>
               <SelectItem value="__all__">All actions</SelectItem>
               {ACTION_OPTIONS.map((a) => (
-                <SelectItem key={a} value={a}>{a}</SelectItem>
+                <SelectItem key={a} value={a}>{humanizeAction(a)}</SelectItem>
               ))}
             </SelectContent>
           </Select>

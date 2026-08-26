@@ -163,16 +163,20 @@ export const tenantStorage = pgTable("tenant_storage", {
  *   "paynow"            — PayNow Zimbabwe
  *   "stripe"            — Stripe
  *   "whatsapp_cloud"    — WhatsApp Cloud API (Meta)
- *   "sms_bulksms"       — BulkSMS
- *   "sms_twilio"        — Twilio SMS
+ *   "sms_africala"      — Africala/SMSala (implemented — see server/sms-config.ts). Each
+ *                          tenant is a distinct customer under our SMSala reseller account
+ *                          with their own API token and Sender ID.
+ *   "sms_bulksms"       — BulkSMS (not implemented — example of another SMS vendor shape)
+ *   "sms_twilio"        — Twilio SMS (not implemented)
  *
  * config shape examples:
  *   paynow:         { integrationId, integrationKey, mode, returnUrl, resultUrl }
  *   whatsapp_cloud: { phoneNumberId, accessToken, webhookVerifyToken }
+ *   sms_africala:   { apiToken, senderId }
  *   sms_bulksms:    { apiToken, senderId }
  *
- * Sensitive fields (keys, tokens) should be encrypted with TENANT_CONFIG_ENCRYPTION_KEY.
- * Phase 1: plaintext. Phase 2: AES-256-GCM encryption layer added.
+ * Sensitive fields (keys, tokens) are encrypted with TENANT_CONFIG_ENCRYPTION_KEY
+ * (server/tenant-config-crypto.ts) before being written to the config jsonb column.
  */
 export const tenantIntegrations = pgTable(
   "tenant_integrations",

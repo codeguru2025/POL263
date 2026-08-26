@@ -4313,11 +4313,18 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(caseServiceCharges).values(charge).returning();
     return created;
   }
-  async recordCaseServiceChargePayment(id: string, orgId: string, data: { paidBy: string; paidByUserId?: string }): Promise<CaseServiceCharge | undefined> {
-    const tdb = await getDbForOrg(orgId);
+  // The status='unpaid' condition below is a compare-and-swap, not just a filter: it's what
+  // makes two concurrent payment requests for the same charge safe without an explicit row lock.
+  // Postgres serializes UPDATEs to the same row — the second concurrent transaction blocks until
+  // the first commits, then re-evaluates this WHERE clause and finds 0 rows (status is now
+  // "paid"), so `updated` comes back undefined instead of silently double-processing the payment.
+  // The route handler checks for that and aborts the transaction rather than issuing a second
+  // receipt.
+  async recordCaseServiceChargePayment(id: string, orgId: string, data: { paidBy: string; paidByUserId?: string }, tx?: OrgDataDb): Promise<CaseServiceCharge | undefined> {
+    const tdb = tx ?? await getDbForOrg(orgId);
     const [updated] = await tdb.update(caseServiceCharges)
       .set({ status: "paid", paidAt: new Date(), paidBy: data.paidBy, paidByUserId: data.paidByUserId })
-      .where(and(eq(caseServiceCharges.id, id), eq(caseServiceCharges.organizationId, orgId)))
+      .where(and(eq(caseServiceCharges.id, id), eq(caseServiceCharges.organizationId, orgId), eq(caseServiceCharges.status, "unpaid")))
       .returning();
     return updated;
   }
@@ -6250,8 +6257,8 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(serviceReceipts.organizationId, orgId), eq(serviceReceipts.idempotencyKey, idempotencyKey)));
     return row;
   }
-  async createServiceReceipt(receipt: InsertServiceReceipt): Promise<ServiceReceipt> {
-    const tdb = await getDbForOrg(receipt.organizationId);
+  async createServiceReceipt(receipt: InsertServiceReceipt, tx?: OrgDataDb): Promise<ServiceReceipt> {
+    const tdb = tx ?? await getDbForOrg(receipt.organizationId);
     // No idempotency key → plain insert.
     if (!receipt.idempotencyKey) {
       const [created] = await tdb.insert(serviceReceipts).values(receipt).returning();
@@ -7154,20 +7161,23 @@ export class DatabaseStorage implements IStorage {
     await tdb.delete(parlourPersonnel).where(and(eq(parlourPersonnel.id, id), eq(parlourPersonnel.organizationId, orgId)));
   }
 
-  async recordStoragePayment(intakeId: string, orgId: string, data: { storageFeePaidBy: string; storageFeePaidAt: Date; storageFeeStatus: string }): Promise<MortuaryIntake> {
-    const tdb = await getDbForOrg(orgId);
+  // status='unpaid' below is a compare-and-swap, not just a filter — see the matching comment on
+  // recordCaseServiceChargePayment above for why this is what makes concurrent payment requests
+  // for the same fee safe.
+  async recordStoragePayment(intakeId: string, orgId: string, data: { storageFeePaidBy: string; storageFeePaidAt: Date; storageFeeStatus: string }, tx?: OrgDataDb): Promise<MortuaryIntake | undefined> {
+    const tdb = tx ?? await getDbForOrg(orgId);
     const [row] = await tdb.update(mortuaryIntakes)
       .set(data)
-      .where(and(eq(mortuaryIntakes.id, intakeId), eq(mortuaryIntakes.organizationId, orgId)))
+      .where(and(eq(mortuaryIntakes.id, intakeId), eq(mortuaryIntakes.organizationId, orgId), eq(mortuaryIntakes.storageFeeStatus, "unpaid")))
       .returning();
     return row;
   }
 
-  async recordChapelWashBayPayment(intakeId: string, orgId: string, data: { chapelWashBayFeePaidBy: string; chapelWashBayFeePaidAt: Date; chapelWashBayFeeStatus: string }): Promise<MortuaryDispatch> {
-    const tdb = await getDbForOrg(orgId);
+  async recordChapelWashBayPayment(intakeId: string, orgId: string, data: { chapelWashBayFeePaidBy: string; chapelWashBayFeePaidAt: Date; chapelWashBayFeeStatus: string }, tx?: OrgDataDb): Promise<MortuaryDispatch | undefined> {
+    const tdb = tx ?? await getDbForOrg(orgId);
     const [row] = await tdb.update(mortuaryDispatches)
       .set(data)
-      .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId)))
+      .where(and(eq(mortuaryDispatches.intakeId, intakeId), eq(mortuaryDispatches.organizationId, orgId), eq(mortuaryDispatches.chapelWashBayFeeStatus, "unpaid")))
       .returning();
     return row;
   }

@@ -3717,7 +3717,14 @@ export const receiptAdverts = pgTable(
     organizationId: uuid("organization_id").notNull().references(() => organizations.id),
     title: text("title"),
     body: text("body"),
+    /** The A4 (full-page) receipt image — wide banner shape, see shared/receipt-advert-specs.ts. */
     imageUrl: text("image_url"),
+    /** The thermal roll (48/58/80mm) receipt image — less elongated shape, shared across all
+     *  three roll widths (server/receipt-pdf.ts scales it proportionally). Nullable: falls back
+     *  to `imageUrl` in the renderer when unset, so an advert created before this column existed
+     *  keeps rendering exactly as before on thermal receipts until a thermal-specific image is
+     *  uploaded — zero behavior change for existing data. */
+    imageUrlThermal: text("image_url_thermal"),
     isActive: boolean("is_active").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
