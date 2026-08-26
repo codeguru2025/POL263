@@ -135,6 +135,43 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
     if (amt > 0.005) add(incurredClaimsLiability, r.currency, amt);
   }
 
+  // ── In-kind claims (no cashInLieuAmount recorded — the service was delivered directly, not
+  // paid out in cash) previously contributed nothing to the liability above, understating it for
+  // any tenant whose claims are mostly in-kind funeral services rather than cash-in-lieu payouts.
+  // Valued at the policy's own product-version cash-in-lieu rate (cashInLieuAdult/cashInLieuChild)
+  // — the same "what would this have cost as a cash payout" figure the claim form itself
+  // auto-suggests when creating a claim — as a retail-equivalent stand-in for the in-kind
+  // service's value. Adult/child is inferred from deceasedRelationship (claims don't store the
+  // deceased's age directly); a claim with no configured rate for its inferred category, or no
+  // productVersionId (legacy policies), still contributes nothing — same as before, not a guess.
+  const inKindConds: any[] = [
+    eq(claims.organizationId, orgId),
+    sql`${claims.status} IN ('submitted', 'verified', 'approved')`,
+    sql`${claims.cashInLieuAmount} IS NULL`,
+  ];
+  if (branchId) inKindConds.push(eq(claims.branchId, branchId));
+  const inKindRows = await tdb
+    .select({
+      currency: claims.currency,
+      deceasedRelationship: claims.deceasedRelationship,
+      cashInLieuAdult: productVersions.cashInLieuAdult,
+      cashInLieuChild: productVersions.cashInLieuChild,
+    })
+    .from(claims)
+    .innerJoin(policies, eq(claims.policyId, policies.id))
+    .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+    .where(and(...inKindConds));
+  const isChildRelationship = (rel: string | null) => /\b(child|son|daughter|minor)\b/i.test(rel || "");
+  let inKindClaimsEstimated = 0;
+  for (const r of inKindRows) {
+    const rate = isChildRelationship(r.deceasedRelationship) ? r.cashInLieuChild : r.cashInLieuAdult;
+    const amt = parseFloat(String(rate ?? ""));
+    if (Number.isFinite(amt) && amt > 0.005) {
+      add(incurredClaimsLiability, r.currency, amt);
+      inKindClaimsEstimated++;
+    }
+  }
+
   // ── Classification coverage — how much of the active book this report actually speaks for ──
   const classConds: any[] = [eq(policies.organizationId, orgId), sql`${policies.status} != 'inactive'`];
   if (branchId) classConds.push(eq(policies.branchId, branchId));
@@ -184,7 +221,11 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
       consolidatedUsd: cClaims.usd,
       unconvertible: cClaims.unconvertible,
       excludesIbnr: true,
-      note: "Reported claims only (submitted/verified/approved). Excludes IBNR — no actuarial IBNR loading has been configured for this tenant yet.",
+      inKindClaimsEstimated,
+      note: "Reported claims only (submitted/verified/approved). Excludes IBNR — no actuarial IBNR loading has been configured for this tenant yet. " +
+        (inKindClaimsEstimated > 0
+          ? `Includes ${inKindClaimsEstimated} in-kind claim(s) valued at their product's cash-in-lieu rate (retail-equivalent estimate, not an actual cash payout).`
+          : "No in-kind claims with a configured cash-in-lieu rate this period."),
     },
     classification: {
       paaPolicyCount,

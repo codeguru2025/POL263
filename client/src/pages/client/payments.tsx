@@ -89,6 +89,9 @@ export default function ClientPayments() {
   const [lookedUp, setLookedUp] = useState<{ clientName: string; policies: Policy[] } | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
+  const [challenge, setChallenge] = useState<{ challengeType: "dob" | "nationalIdLast4"; challengeLabel: string } | null>(null);
+  const [challengeAnswer, setChallengeAnswer] = useState("");
+  const [verifyLoading, setVerifyLoading] = useState(false);
 
   const { data: me, isFetched: meFetched, isError: meError } = useQuery<{ client: { id: string } }>({ queryKey: ["/api/client-auth/me"], retry: false });
   const { data: policies } = useQuery<Policy[]>({ queryKey: ["/api/client-auth/policies"], enabled: !!me?.client });
@@ -289,6 +292,9 @@ export default function ClientPayments() {
       return;
     }
     setLookupError("");
+    setLookedUp(null);
+    setChallenge(null);
+    setChallengeAnswer("");
     setLookupLoading(true);
     try {
       const base = getApiBase();
@@ -296,15 +302,42 @@ export default function ClientPayments() {
       const res = await fetch(base + `/api/client-auth/lookup-by-phone?${params}`, { credentials: "include" });
       const data = await res.json().catch(() => ({ message: "Lookup failed" }));
       if (!res.ok) {
-        setLookedUp(null);
         setLookupError(data.message || "Lookup failed");
         return;
       }
+      setChallenge({ challengeType: data.challengeType, challengeLabel: data.challengeLabel });
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const handleVerify = async () => {
+    if (!challengeAnswer.trim()) {
+      setLookupError("Enter an answer");
+      return;
+    }
+    setLookupError("");
+    setVerifyLoading(true);
+    try {
+      const base = getApiBase();
+      const res = await fetch(base + "/api/client-auth/lookup-by-phone/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ answer: challengeAnswer.trim() }),
+      });
+      const data = await res.json().catch(() => ({ message: "Verification failed" }));
+      if (!res.ok) {
+        setLookupError(data.message || "Verification failed");
+        return;
+      }
       setLookedUp({ clientName: data.clientName, policies: data.policies });
+      setChallenge(null);
+      setChallengeAnswer("");
       if (data.policies?.length >= 1) setSelectedPolicyId(data.policies[0].id);
       else setSelectedPolicyId("");
     } finally {
-      setLookupLoading(false);
+      setVerifyLoading(false);
     }
   };
 
@@ -386,6 +419,24 @@ export default function ClientPayments() {
                   {lookupLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Look up"}
                 </Button>
               </div>
+              {challenge && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    To confirm you're authorized, please enter {challenge.challengeLabel} on file.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type={challenge.challengeType === "dob" ? "date" : "text"}
+                      placeholder={challenge.challengeType === "dob" ? undefined : "e.g. 6789"}
+                      value={challengeAnswer}
+                      onChange={(e) => { setChallengeAnswer(e.target.value); setLookupError(""); }}
+                    />
+                    <Button type="button" variant="secondary" onClick={handleVerify} disabled={verifyLoading}>
+                      {verifyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify"}
+                    </Button>
+                  </div>
+                </div>
+              )}
               {lookupError && <p className="text-sm text-destructive">{lookupError}</p>}
               {lookedUp && lookedUp.clientName && (
                 <p className="text-sm text-green-700">Found: {lookedUp.clientName}. Select their policy above.</p>

@@ -17,7 +17,8 @@ import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "./
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { streamPolicyDocumentToResponse } from "./policy-document";
 import { insertClaimSchema, insertClientFeedbackSchema, claims, claimStatusHistory } from "@shared/schema";
-import { withOrgTransaction } from "./tenant-db";
+import { withOrgTransaction, getDbForOrg } from "./tenant-db";
+import { logPolicyView } from "./policy-activity-log";
 import { sql } from "drizzle-orm";
 import { sendEmail } from "./email-service";
 import { hasModule } from "./module-gate";
@@ -441,9 +442,17 @@ export function setupClientAuth(app: Express) {
     return res.json(await enrichWithBalance(clientPolicies, clientOrgId));
   });
 
-  /** Look up another client to pay for their policy. Supports phone, policy number, and national ID lookup. */
+  /**
+   * Look up another client to pay for their policy. Supports phone, policy number, and national
+   * ID lookup — but a bare phone/policy-number/ID match alone isn't proof the requester actually
+   * knows the target (all three are effectively-public/guessable identifiers, and this endpoint
+   * previously returned full name + policy + premium data on a single correct guess). This is now
+   * step 1 of a two-step flow: a match returns only a masked verification challenge (never the
+   * target's name or policy data); POST .../verify below checks a second factor — something only
+   * someone with a real relationship to the target (family paying their policy) would plausibly
+   * know — before granting the pay-on-behalf session. Rate-limited separately (see server/index.ts).
+   */
   app.get("/api/client-auth/lookup-by-phone", requireClientAuth, async (req: Request, res: Response) => {
-    const clientId = req.client!.id;
     const clientOrgId = req.client!.organizationId;
 
     const searchType = typeof req.query.type === "string" ? req.query.type : "phone";
@@ -452,13 +461,11 @@ export function setupClientAuth(app: Express) {
     if (!q) return res.status(400).json({ message: "Search query is required" });
 
     let client: any = null;
-    let matchedPolicies: any[] = [];
 
     if (searchType === "policy") {
       const policy = await storage.getPolicyByNumber(q, clientOrgId);
       if (policy && policy.clientId) {
         client = await storage.getClient(policy.clientId, clientOrgId);
-        matchedPolicies = [policy];
       }
     } else if (searchType === "id") {
       client = await storage.getClientByNationalId(clientOrgId, q);
@@ -471,16 +478,69 @@ export function setupClientAuth(app: Express) {
       return res.status(404).json({ message: "No client found" });
     }
 
-    if (matchedPolicies.length === 0) {
-      const allPolicies = await storage.getPoliciesByClient(client.id, clientOrgId);
-      matchedPolicies = allPolicies;
+    // Prefer date of birth as the second factor (a real relative plausibly knows it, a blind
+    // enumerator guessing phone numbers doesn't); fall back to the last 4 of national ID if DOB
+    // isn't on file. If neither is on file, there's no safe second factor to check — refuse the
+    // lookup rather than silently falling back to the old no-gate behavior.
+    const challengeType: "dob" | "nationalIdLast4" | null =
+      client.dateOfBirth ? "dob" : client.nationalId ? "nationalIdLast4" : null;
+    if (!challengeType) {
+      return res.status(404).json({ message: "No client found" });
     }
+
+    const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes to complete the challenge
+    (req.session as any).pendingLookupClientId = client.id;
+    (req.session as any).pendingLookupOrgId = clientOrgId;
+    (req.session as any).pendingLookupExpiry = Date.now() + PENDING_TTL_MS;
+    (req.session as any).pendingLookupAttempts = 0;
+    (req.session as any).pendingLookupChallengeType = challengeType;
+    return res.json({
+      verificationRequired: true,
+      challengeType,
+      challengeLabel: challengeType === "dob" ? "their date of birth" : "the last 4 digits of their national ID",
+    });
+  });
+
+  /** Step 2 of lookup-by-phone: check the second factor, then grant the pay-on-behalf session. */
+  app.post("/api/client-auth/lookup-by-phone/verify", requireClientAuth, async (req: Request, res: Response) => {
+    const clientOrgId = req.client!.organizationId;
+    const session = req.session as any;
+
+    const pendingId = session.pendingLookupClientId;
+    const pendingExpiry = session.pendingLookupExpiry;
+    const challengeType = session.pendingLookupChallengeType;
+    if (!pendingId || !pendingExpiry || Date.now() > pendingExpiry || session.pendingLookupOrgId !== clientOrgId) {
+      return res.status(400).json({ message: "Lookup expired, please search again" });
+    }
+    if ((session.pendingLookupAttempts ?? 0) >= 5) {
+      session.pendingLookupClientId = null;
+      return res.status(429).json({ message: "Too many attempts, please search again" });
+    }
+
+    const answer = typeof req.body?.answer === "string" ? req.body.answer.trim() : "";
+    if (!answer) return res.status(400).json({ message: "An answer is required" });
+
+    const client = await storage.getClient(pendingId, clientOrgId);
+    if (!client) return res.status(404).json({ message: "No client found" });
+
+    const correct = challengeType === "dob"
+      ? client.dateOfBirth && String(client.dateOfBirth).slice(0, 10) === answer.slice(0, 10)
+      : client.nationalId && String(client.nationalId).slice(-4).toLowerCase() === answer.slice(-4).toLowerCase();
+
+    if (!correct) {
+      session.pendingLookupAttempts = (session.pendingLookupAttempts ?? 0) + 1;
+      return res.status(400).json({ message: "That doesn't match our records" });
+    }
+
+    session.pendingLookupClientId = null;
+
+    const matchedPolicies = await storage.getPoliciesByClient(client.id, clientOrgId);
     const payables = matchedPolicies.filter((p: any) => p.policyNumber != null && String(p.policyNumber).trim() !== "");
     const LOOKUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
-    (req.session as any).lookedUpClientId = client.id;
-    (req.session as any).lookedUpClientIdAt = Date.now();
-    (req.session as any).lookedUpClientOrgId = clientOrgId;
-    (req.session as any).lookedUpClientIdExpiry = Date.now() + LOOKUP_TTL_MS;
+    session.lookedUpClientId = client.id;
+    session.lookedUpClientIdAt = Date.now();
+    session.lookedUpClientOrgId = clientOrgId;
+    session.lookedUpClientIdExpiry = Date.now() + LOOKUP_TTL_MS;
     return res.json({
       clientId: client.id,
       clientName: [client.title, client.firstName, client.lastName].filter(Boolean).join(" "),
@@ -501,6 +561,20 @@ export function setupClientAuth(app: Express) {
     if (!policy || policy.clientId !== clientId) {
       return res.status(403).json({ message: "Access denied" });
     }
+    // The client portal only fetches this once a policy card is expanded (dashboard.tsx,
+    // `enabled: isExpanded`) — the closest real signal to "the client opened this policy" the
+    // portal has, so this is where that gets logged for the policy's activity timeline.
+    (async () => {
+      const [tdb, viewingClient] = await Promise.all([getDbForOrg(clientOrgId), storage.getClient(clientId, clientOrgId)]);
+      await logPolicyView(tdb, {
+        organizationId: clientOrgId,
+        policyId: policy.id,
+        actorType: "client",
+        actorId: clientId,
+        actorLabel: viewingClient ? [viewingClient.firstName, viewingClient.lastName].filter(Boolean).join(" ") || viewingClient.email : null,
+        action: "viewed",
+      });
+    })();
     return res.json(await storage.getPaymentsByPolicy(policy.id, clientOrgId));
   });
 
@@ -524,6 +598,17 @@ export function setupClientAuth(app: Express) {
       req.query.download === "true" ||
       req.query.attachment === "1" ||
       req.query.attachment === "true";
+    (async () => {
+      const [tdb, viewingClient] = await Promise.all([getDbForOrg(clientOrgId), storage.getClient(clientId, clientOrgId)]);
+      await logPolicyView(tdb, {
+        organizationId: clientOrgId,
+        policyId: policy.id,
+        actorType: "client",
+        actorId: clientId,
+        actorLabel: viewingClient ? [viewingClient.firstName, viewingClient.lastName].filter(Boolean).join(" ") || viewingClient.email : null,
+        action: "downloaded_document",
+      });
+    })();
     await streamPolicyDocumentToResponse(policy.id, clientOrgId, res, { attachment });
   });
 

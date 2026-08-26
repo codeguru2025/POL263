@@ -32,6 +32,11 @@ export const organizations = pgTable("organizations", {
   website: text("website"),
   policyNumberPrefix: text("policy_number_prefix"),
   policyNumberPadding: integer("policy_number_padding").default(5).notNull(),
+  /** Prefix for legacy-group backdated receipt numbers (format: `{prefix}-{YYYYMMDD}-{seq}`).
+   *  Defaults to "LGR" — the hardcoded value every existing receipt already uses — so this is a
+   *  configurable-but-zero-behavior-change default, same pattern as policyNumberPrefix above. */
+  legacyReceiptNumberPrefix: text("legacy_receipt_number_prefix").default("LGR").notNull(),
+  legacyReceiptNumberPadding: integer("legacy_receipt_number_padding").default(3).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   /** Optional: when set, this tenant's data can use a dedicated database (see server/tenant-db). */
   databaseUrl: text("database_url"),
@@ -3022,6 +3027,35 @@ export const auditLogs = pgTable(
   ]
 );
 
+/**
+ * Read/view-level activity on a policy — audit_logs above only ever captures mutations (an edit,
+ * a payment, a member being added); it has no concept of someone merely opening a policy,
+ * downloading a document, or a client viewing their own cover, none of which write anything.
+ * Feeds the per-policy "Policy Logs" timeline (server/policy-activity-log.ts) alongside
+ * audit_logs, not as a replacement for it — every mutation still goes through audit_logs exactly
+ * as before.
+ */
+export const policyViewLog = pgTable(
+  "policy_view_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id, { onDelete: "cascade" }),
+    actorType: text("actor_type").notNull(), // 'staff' | 'client'
+    actorId: text("actor_id"), // users.id or clients.id depending on actorType — no single FK target
+    actorLabel: text("actor_label"), // denormalized name/email at the time, survives the actor being later renamed/removed
+    action: text("action").notNull(), // 'viewed' | 'downloaded_document' | ...
+    detail: jsonb("detail"), // free-form context, e.g. { documentType: "policy_certificate" }
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("pvl_policy_idx").on(t.policyId),
+    index("pvl_org_idx").on(t.organizationId),
+  ]
+);
+export type PolicyViewLog = typeof policyViewLog.$inferSelect;
+export type InsertPolicyViewLog = typeof policyViewLog.$inferInsert;
+
 // ─── LEGACY DATA IMPORT ─────────────────────────────────────
 // Control-panel-only bulk import of a tenant's historical data from legacy systems
 // (POL360, Easipol, etc.) — see docs/BUGFIX-LOG.md-adjacent plan notes. Column mapping is
@@ -4032,6 +4066,40 @@ export const groupPoolPayouts = pgTable(
 export const insertGroupPoolPayoutSchema = createInsertSchema(groupPoolPayouts).omit({ id: true, createdAt: true });
 export type GroupPoolPayout = typeof groupPoolPayouts.$inferSelect;
 export type InsertGroupPoolPayout = z.infer<typeof insertGroupPoolPayoutSchema>;
+
+/**
+ * Backdated lump-sum receipts for a legacy burial society/group being onboarded from paper
+ * records — captures what a group already paid before its digitization, so its ledger/receipt
+ * history isn't missing that history. Was a hand-created, Falakhe-only table with no Drizzle
+ * entry (see scripts/setup-falakhe-legacy-groups.mjs); gated behind the "legacy_records" module
+ * so any tenant with paper records to digitize can use it, not just Falakhe. Column shape here
+ * must exactly match the pre-existing hand-created table (including recorded_at's default) so
+ * the migration that formalizes it is a true no-op on Falakhe's DB.
+ */
+export const legacyGroupReceipts = pgTable(
+  "legacy_group_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    groupId: uuid("group_id").notNull().references(() => groups.id),
+    groupName: text("group_name").notNull(),
+    receiptNumber: text("receipt_number"),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    paymentDate: date("payment_date").notNull(),
+    notes: text("notes"),
+    /** Free-text {name, amount}[] — a brand-new legacy group has no formal client records yet. */
+    memberBreakdown: jsonb("member_breakdown"),
+    recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("lgr_org_idx").on(t.organizationId),
+    index("lgr_group_idx").on(t.groupId),
+  ]
+);
+export const insertLegacyGroupReceiptSchema = createInsertSchema(legacyGroupReceipts).omit({ id: true, recordedAt: true });
+export type LegacyGroupReceipt = typeof legacyGroupReceipts.$inferSelect;
+export type InsertLegacyGroupReceipt = z.infer<typeof insertLegacyGroupReceiptSchema>;
 
 /**
  * Group ledger — a running premium-in/claim-out balance per group, distinct from the

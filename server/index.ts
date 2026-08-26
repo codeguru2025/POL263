@@ -177,7 +177,7 @@ if (enableCsrf) {
   // needs its own throttle rather than inheriting the generic 200 req/min "/api" limit, which would
   // let a low-privilege account enumerate PII at scale.
   app.use(
-    "/api/client-auth/lookup-by-phone",
+    ["/api/client-auth/lookup-by-phone", "/api/client-auth/lookup-by-phone/verify"],
     rateLimit({
       ...limiterOpts,
       store: getRedisStore?.("lookup"),

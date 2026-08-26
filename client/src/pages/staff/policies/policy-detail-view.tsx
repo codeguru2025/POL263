@@ -26,6 +26,7 @@ import { MembersTab } from "./detail/members-tab";
 import { PaymentsTab } from "./detail/payments-tab";
 import { DocumentsTab } from "./detail/documents-tab";
 import { WaiversTab } from "./detail/waivers-tab";
+import { PolicyLogsTab } from "./detail/policy-logs-tab";
 import { useDetailDialogs } from "./detail/dialogs";
 import { useReceiptDialogs } from "./detail/receipt-dialogs";
 import { EditPolicyDialog, type EditPolicyForm } from "./detail/edit-policy-dialog";
@@ -56,6 +57,7 @@ interface PolicyDetailViewProps {
   canEditReceipt: boolean;
   canDeleteReceipt: boolean;
   canManageApprovals: boolean;
+  canReadAuditLog: boolean;
   isAgent: boolean;
   showEditDialog: boolean;
   setShowEditDialog: (open: boolean) => void;
@@ -92,7 +94,7 @@ export function PolicyDetailView({
   selectedPolicy, setSelectedPolicy, onBack, getClientName, countryFlagSettings, languages,
   branches, agents, groups, products, addOns,
   canWritePolicy, canWriteFinance, canEditPremium, canDeletePolicy, canEditPayment, canDeletePayment,
-  canEditReceipt, canDeleteReceipt, canManageApprovals, isAgent,
+  canEditReceipt, canDeleteReceipt, canManageApprovals, canReadAuditLog, isAgent,
   showEditDialog, setShowEditDialog, editForm, setEditForm, openEditDialog,
   showUpgradeDialog, setShowUpgradeDialog, upgradeForm, setUpgradeForm, openUpgradeDialog,
   onOpenTransition, onOpenDelete, todayISO,
@@ -297,6 +299,7 @@ export function PolicyDetailView({
             Waivers
             {policyWaiver?.status === "pending" && <span className="ml-1.5 inline-flex h-2 w-2 rounded-full bg-amber-500" />}
           </TabsTrigger>
+          {canReadAuditLog && <TabsTrigger value="logs" data-testid="tab-policy-logs">Logs</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -354,6 +357,12 @@ export function PolicyDetailView({
             canManageApprovals={canManageApprovals}
           />
         </TabsContent>
+
+        {canReadAuditLog && (
+          <TabsContent value="logs" className="space-y-4 mt-4">
+            <PolicyLogsTab selectedPolicy={selectedPolicy} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {dialogs.node}

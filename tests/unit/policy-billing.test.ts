@@ -7,7 +7,7 @@ vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
 import { periodsBetween, computePolicyOutstanding } from "../../server/route-helpers";
-import { monthsFromPeriod } from "../../server/policy-status-on-payment";
+import { monthsFromPeriod, advancePolicyCycle } from "../../server/policy-status-on-payment";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -122,5 +122,52 @@ describe("monthsFromPeriod", () => {
   it("counts weekly and biweekly cycles by their own cycle length", () => {
     expect(monthsFromPeriod("2026-07-01", "2026-07-07", "weekly")).toBe(1);
     expect(monthsFromPeriod("2026-07-01", "2026-07-14", "biweekly")).toBe(1);
+  });
+});
+
+// Regression coverage: yearly cycles previously used a flat 365-day offset, drifting a policy's
+// cover period off its real calendar anniversary by a day on every leap year crossed. Fixed to
+// anchor on the real calendar anniversary (advancePolicyCycle, server/policy-status-on-payment.ts).
+describe("advancePolicyCycle — yearly cycle anchors to the calendar anniversary", () => {
+  const mockDb = () => ({
+    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(() => Promise.resolve([])) })) })) })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => Promise.resolve()) })) })),
+  });
+  const policy = (over: Record<string, any> = {}) => ({
+    id: "p1", organizationId: "org1", paymentSchedule: "yearly",
+    productVersionId: null, currentCycleEnd: null, graceUsedDays: 0,
+    ...over,
+  } as any);
+
+  it("first payment: one year later lands on the same calendar date, leap year included", async () => {
+    const { periodTo, periodFrom } = await advancePolicyCycle(mockDb(), "p1", policy(), "2028-02-15");
+    expect(periodFrom).toBe("2028-02-15");
+    expect(periodTo).toBe("2029-02-14"); // 2028-02-15 → 2029-02-15 exclusive, not +365 days flat
+  });
+
+  it("a cycle spanning a leap day doesn't drift the anniversary", async () => {
+    // Old flat-365 behavior: 2027-03-01 + 365 = 2028-02-29 (drifts a day early off the real
+    // anniversary because 2028 is a leap year). Fixed: real calendar year → 2028-03-01.
+    const { periodTo, periodFrom } = await advancePolicyCycle(
+      mockDb(), "p1", policy({ currentCycleEnd: "2027-02-28" }), "2027-03-01"
+    );
+    expect(periodFrom).toBe("2027-03-01");
+    expect(periodTo).toBe("2028-02-29"); // last day before the 2028-03-01 anniversary
+  });
+
+  it("a Feb-29 anniversary falls back to Feb 28 in a non-leap target year", async () => {
+    // currentCycleEnd 2028-02-28 → due date (periodFrom) 2028-02-29 (2028 is a leap year, valid).
+    // One calendar year later is 2029, not a leap year — Feb 29 doesn't exist, so the anniversary
+    // falls back to Feb 28 rather than overflowing into March 1.
+    const { periodTo, periodFrom } = await advancePolicyCycle(
+      mockDb(), "p1", policy({ currentCycleEnd: "2028-02-28" }), "2028-02-29"
+    );
+    expect(periodFrom).toBe("2028-02-29");
+    expect(periodTo).toBe("2029-02-27"); // last day before the (clamped) 2029-02-28 anniversary
+  });
+
+  it("non-yearly schedules are unaffected (still flat-day cycles)", async () => {
+    const { periodTo } = await advancePolicyCycle(mockDb(), "p1", policy({ paymentSchedule: "monthly" }), "2028-01-01");
+    expect(periodTo).toBe("2028-01-30"); // 30-day flat cycle, unchanged
   });
 });

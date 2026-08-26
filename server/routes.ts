@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -46,10 +46,12 @@ import { registerBillingPublicRoutes } from "./billing-public-routes";
 import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes";
 import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
-import { requireModule, hasModule } from "./module-gate";
+import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
+import { resolveAuditRefs } from "./audit-ref-resolver";
+import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { sendEmail, escapeHtml } from "./email-service";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
-import { tenantSubscriptions, billingPlans, tenantInvoices } from "@shared/control-plane-schema";
+import { tenantSubscriptions, billingPlans, tenantInvoices, tenantFeatureFlags } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
 import { registerHrFleetFormRoutes } from "./routes-pdf-hr-fleet";
 import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPaynowStatus, applyPaymentToPolicy, initiatePaynowForGroup, pollGroupPaynowStatus, generateGroupMerchantReference } from "./payment-service";
@@ -1547,6 +1549,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!version || !buildNumber || !downloadUrl) return res.status(400).json({ message: "version, buildNumber and downloadUrl are required" });
     await db.insert(appReleases).values({ version: String(version), buildNumber: Number(buildNumber), minVersion: minVersion || "1.0.0", minBuildNumber: Number(minBuildNumber) || 1, downloadUrl: String(downloadUrl), releaseNotes: releaseNotes || null, isActive: true });
     const [created] = await db.select().from(appReleases).orderBy(sql`${appReleases.createdAt} desc`).limit(1);
+    await platformAuditLog(req, "CREATE_APP_RELEASE", "AppRelease", created?.id, null, created);
     return res.status(201).json(created);
   });
 
@@ -1562,8 +1565,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (downloadUrl !== undefined) updates.downloadUrl = String(downloadUrl);
     if (releaseNotes !== undefined) updates.releaseNotes = releaseNotes;
     if (isActive !== undefined) updates.isActive = Boolean(isActive);
+    const before = (await db.select().from(appReleases).where(eq(appReleases.id, req.params.id as string)))[0];
     const [updated] = await db.update(appReleases).set(updates).where(eq(appReleases.id, req.params.id as string)).returning();
     if (!updated) return res.status(404).json({ message: "Release not found" });
+    await platformAuditLog(req, "UPDATE_APP_RELEASE", "AppRelease", updated.id, before, updated);
     return res.json(updated);
   });
 
@@ -1576,6 +1581,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const { runBackupSync } = await import("./backup-sync");
+      await platformAuditLog(req, "TRIGGER_MANUAL_BACKUP", "BackupSync", undefined, null, null);
       // Run async — don't block the response
       runBackupSync("manual").catch((err) => structuredLog("error", "Manual backup failed", { error: (err as Error).message }));
       return res.json({ message: "Backup sync triggered. Check logs for progress." });
@@ -1882,6 +1888,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.status(400).json({ message: `enabledCurrencies must be a non-empty array of currency codes from: ${SUPPORTED_CURRENCIES.join(", ")}.` });
         }
         sanitizedOrg.enabledCurrencies = normalizeEnabledCurrencies(value);
+      } else if (key === "legacyReceiptNumberPrefix") {
+        if (typeof value !== "string" || !value.trim() || value.trim().length > 12) {
+          return res.status(400).json({ message: "legacyReceiptNumberPrefix must be a non-empty string up to 12 characters." });
+        }
+        sanitizedOrg.legacyReceiptNumberPrefix = value.trim().toUpperCase();
+      } else if (key === "legacyReceiptNumberPadding") {
+        const padding = Number(value);
+        if (!Number.isInteger(padding) || padding < 1 || padding > 10) {
+          return res.status(400).json({ message: "legacyReceiptNumberPadding must be an integer between 1 and 10." });
+        }
+        sanitizedOrg.legacyReceiptNumberPadding = padding;
       } else {
         rejectedFields.push(key);
       }
@@ -1903,6 +1920,77 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
     return res.json({ ...updated, ...sanitizedTenant });
+  });
+
+  /**
+   * Self-service module toggles — previously the module/feature-flag system
+   * (server/module-gate.ts) was platform-owner-only via the Platform Tenant Console. A tenant
+   * admin can now see and toggle their own org's modules directly, but can only ever turn ON a
+   * module their billing plan actually includes (no self-granting something they're not paying
+   * for) — turning OFF is always allowed, even for a plan-included module, to hide a feature the
+   * tenant isn't using from their own nav/UI. Writes the same tenantFeatureFlags override row the
+   * platform console's per-tenant toggle already uses, so a platform-owner override always still
+   * wins if one exists (this only writes when the tenant explicitly acts, never on page load).
+   */
+  app.get("/api/organization-modules", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId as string;
+    const [subRow] = await cpDb
+      .select({ modules: billingPlans.modules, status: tenantSubscriptions.status })
+      .from(tenantSubscriptions)
+      .innerJoin(billingPlans, eq(billingPlans.id, tenantSubscriptions.planId))
+      .where(eq(tenantSubscriptions.tenantId, orgId))
+      .limit(1);
+    // No subscription row, or a trialing one, gets every module on their plan-check (matches
+    // hasModule/getTenantModuleSet's own fail-open convention) — but self-service toggle-OFF
+    // should still work in that case, so this only affects what counts as "in plan" for the
+    // enable-guard below, not what's editable.
+    const planModules = !subRow || subRow.status === "trialing"
+      ? new Set<string>(ALL_KNOWN_MODULES)
+      : new Set((subRow.modules as string[] | undefined) ?? []);
+    const overrides = await cpDb.select().from(tenantFeatureFlags).where(eq(tenantFeatureFlags.tenantId, orgId));
+    const overrideMap = new Map(overrides.map((o) => [o.flag, o.enabled]));
+    const modules = ALL_KNOWN_MODULES.map((key) => ({
+      key,
+      inPlan: planModules.has(key),
+      enabled: overrideMap.has(key) ? overrideMap.get(key)! : planModules.has(key),
+    }));
+    return res.json({ modules });
+  });
+
+  app.patch("/api/organization-modules/:module", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId as string;
+    const moduleKey = req.params.module as string;
+    if (!(ALL_KNOWN_MODULES as readonly string[]).includes(moduleKey)) {
+      return res.status(400).json({ message: "Unknown module" });
+    }
+    if (typeof req.body.enabled !== "boolean") {
+      return res.status(400).json({ message: "enabled (boolean) is required" });
+    }
+    if (req.body.enabled) {
+      const [subRow] = await cpDb
+        .select({ modules: billingPlans.modules, status: tenantSubscriptions.status })
+        .from(tenantSubscriptions)
+        .innerJoin(billingPlans, eq(billingPlans.id, tenantSubscriptions.planId))
+        .where(eq(tenantSubscriptions.tenantId, orgId))
+        .limit(1);
+      const inPlan = !subRow || subRow.status === "trialing" || (subRow.modules as string[] | undefined)?.includes(moduleKey);
+      if (!inPlan) {
+        return res.status(403).json({ message: "This feature isn't included in your current plan. Contact support to upgrade." });
+      }
+    }
+    const [existing] = await cpDb.select({ tenantId: tenantFeatureFlags.tenantId }).from(tenantFeatureFlags)
+      .where(and(eq(tenantFeatureFlags.tenantId, orgId), eq(tenantFeatureFlags.flag, moduleKey))).limit(1);
+    if (existing) {
+      await cpDb.update(tenantFeatureFlags).set({ enabled: req.body.enabled, setAt: new Date() })
+        .where(and(eq(tenantFeatureFlags.tenantId, orgId), eq(tenantFeatureFlags.flag, moduleKey)));
+    } else {
+      await cpDb.insert(tenantFeatureFlags).values({ tenantId: orgId, flag: moduleKey, enabled: req.body.enabled });
+    }
+    await auditLog(req, "SET_ORG_MODULE", "TenantFeatureFlag", orgId, null, { module: moduleKey, enabled: req.body.enabled });
+    invalidateTenantModuleCache(orgId);
+    return res.json({ module: moduleKey, enabled: req.body.enabled });
   });
 
   app.post("/api/organizations", requireAuth, requirePermission("create:tenant"), async (req, res) => {
@@ -2346,7 +2434,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.action) filters.action = String(req.query.action);
     if (req.query.from) filters.from = String(req.query.from);
     if (req.query.to) filters.to = String(req.query.to);
-    return res.json(await storage.getAuditLogs(user.organizationId, limit, offset, filters));
+    const result = await storage.getAuditLogs(user.organizationId, limit, offset, filters);
+    const tdb = await getDbForOrg(user.organizationId);
+    const refs = await resolveAuditRefs(tdb, result.rows);
+    return res.json({ ...result, refs });
   });
 
   // ─── Dashboard Stats ───────────────────────────────────────
@@ -3403,6 +3494,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
     const { totalDue, balance, outstanding, periodsElapsed } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
 
+    // Fire-and-forget — a view is worth recording on the policy's activity timeline, but must
+    // never slow down or fail the page load it's describing (logPolicyView never throws).
+    getDbForOrg(user.organizationId).then((tdb) => logPolicyView(tdb, {
+      organizationId: user.organizationId,
+      policyId: policy.id,
+      actorType: "staff",
+      actorId: user.id,
+      actorLabel: user.displayName || user.email,
+      action: "viewed",
+    }));
+
     return res.json({
       ...policy,
       waitingPeriodEndDate: resolvedWaitingEnd ?? policy.waitingPeriodEndDate ?? null,
@@ -3420,6 +3522,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       walletBalance: walletBalance.toFixed(2),
       periodsElapsed,
     });
+  });
+
+  /**
+   * "Policy Logs" — everything on this policy in one timeline: edits, payments, members, claims,
+   * documents (all via audit_logs), plus pure views/downloads that write nothing on their own
+   * (policy_view_log) — including client-portal views. Gated on read:audit_log, not read:policy —
+   * this is fundamentally an audit-trail view (who did what, when), same sensitivity as the
+   * platform-wide /api/audit-logs, not a policy-data view.
+   */
+  app.get("/api/policies/:id/activity-log", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
+    const user = req.user as any;
+    const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
+    if (!policy) return res.status(404).json({ message: "Not found" });
+    const tdb = await getDbForOrg(user.organizationId);
+    const { entries, refs } = await getPolicyActivityLog(tdb, user.organizationId, policy.id);
+    return res.json({ entries, refs });
   });
 
   app.post("/api/policies", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -7391,10 +7509,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const uid of userIdsToMirrorIntake) {
         await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, uid);
       }
-      // Auto-calculate storage fee for partner parlour intakes
+      // Auto-calculate storage fee for partner parlour intakes — reads from this org's own
+      // rate card (mortuaryServiceRates, serviceKey "storage_adult"/"storage_child") when
+      // configured, same as every other ancillary mortuary charge (chapel, body wash, removal);
+      // falls back to the original hardcoded $10/$20 flat rate only when no such rate has been
+      // set up yet, so an org that's never touched its rate card sees zero behavior change.
       if (body.partnerParlourId) {
-        body.storageFeeAmount = body.storageCategory === "child" ? "10.00" : "20.00";
-        body.storageFeeCurrency = "USD";
+        const storageServiceKey = body.storageCategory === "child" ? "storage_child" : "storage_adult";
+        const rates = await storage.getMortuaryServiceRates(user.organizationId);
+        const configuredRate = rates.find((r) =>
+          r.serviceKey === storageServiceKey && r.clientType === "partner_parlour" && r.isActive
+        );
+        if (configuredRate) {
+          body.storageFeeAmount = configuredRate.baseAmount;
+          body.storageFeeCurrency = configuredRate.currency;
+        } else {
+          body.storageFeeAmount = body.storageCategory === "child" ? "10.00" : "20.00";
+          body.storageFeeCurrency = "USD";
+        }
         if (!body.storageFeeStatus) body.storageFeeStatus = "unpaid";
         if (body.storageFeeStatus === "paid_at_admission" && !body.storageFeePaidAt) {
           body.storageFeePaidAt = new Date();
@@ -11981,7 +12113,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), requireModule("legacy_records"), async (req, res) => {
     const user = req.user as any;
     const { from, to, groupId } = req.query as Record<string, string>;
     try {
@@ -12003,7 +12135,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), requireModule("legacy_records"), async (req, res) => {
     const user = req.user as any;
     const { groupId, amount, currency, paymentDate, notes, memberBreakdown } = req.body;
     if (!groupId || !amount || !currency || !paymentDate) {
@@ -12029,7 +12161,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       );
       const cnt = parseInt((countRow.rows ?? countRow)[0].cnt as string, 10) + 1;
       const datePart = paymentDate.replace(/-/g, "");
-      const receiptNumber = `LGR-${datePart}-${String(cnt).padStart(3, "0")}`;
+      const org = await storage.getOrganization(user.organizationId);
+      const receiptPrefix = org?.legacyReceiptNumberPrefix || "LGR";
+      const receiptPadding = Math.max(1, org?.legacyReceiptNumberPadding ?? 3);
+      const receiptNumber = `${receiptPrefix}-${datePart}-${String(cnt).padStart(receiptPadding, "0")}`;
       const rows = await tdb.execute(sql`
         INSERT INTO legacy_group_receipts
           (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes, member_breakdown)

@@ -14,7 +14,7 @@
  */
 
 import { structuredLog } from "./logger";
-import { getOrgSmsConfig } from "./sms-config";
+import { getOrgSmsConfig, platformConfig } from "./sms-config";
 
 export interface SendSmsOptions {
   to: string;
@@ -143,6 +143,23 @@ export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<{ ok
   const creds = await getOrgSmsConfig(orgId);
   if (!provider.isConfigured(creds)) {
     return { ok: false, message: `SMS is not configured for provider "${provider.name}" for this organization. Set an API token and Sender ID in Settings.` };
+  }
+  return provider.send(creds, opts);
+}
+
+/**
+ * Sends using only the platform-level fallback credentials, bypassing per-org resolution
+ * entirely. For platform-owner accounts, which have no organizationId to resolve a tenant's own
+ * SMS config from — currently only used by the staff MFA SMS-fallback flow (server/auth.ts).
+ */
+export async function sendPlatformSms(opts: SendSmsOptions): Promise<{ ok: boolean; message: string; providerMessageId?: string }> {
+  const provider = getProvider();
+  if (!provider) {
+    return { ok: false, message: `SMS provider "${process.env.SMS_PROVIDER || "africala"}" is not recognized.` };
+  }
+  const creds = platformConfig();
+  if (!provider.isConfigured(creds)) {
+    return { ok: false, message: "SMS is not configured at the platform level." };
   }
   return provider.send(creds, opts);
 }

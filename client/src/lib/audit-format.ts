@@ -37,10 +37,16 @@ function pastTense(word: string): string {
   return `${lower}ed`;
 }
 
-/** Lowercases only the first character — preserves any acronym elsewhere in the string (unlike
- *  a blanket .toLowerCase(), which would also flatten "MFA" down to "mfa"). */
+/** Lowercases every word for mid-sentence placement, except a word that's already all-uppercase
+ *  (an acronym like "MFA") — a blanket .toLowerCase() would flatten those too. Word-by-word,
+ *  not just the first character: humanizeEntityType title-cases every word of a multi-word
+ *  entity type ("Policy Member"), so only fixing the first character left "policy Member" —
+ *  correct on the first word, wrong on every word after it. */
 function decapitalize(s: string): string {
-  return s.length === 0 ? s : s.charAt(0).toLowerCase() + s.slice(1);
+  return s
+    .split(" ")
+    .map((w) => (w.length > 1 && w === w.toUpperCase() ? w : w.charAt(0).toLowerCase() + w.slice(1)))
+    .join(" ");
 }
 
 function titleCaseWord(word: string): string {
@@ -73,13 +79,22 @@ export function humanizeEntityType(entityType: string | null | undefined): strin
     .join(" ");
 }
 
-/** "storageFeeStatus" -> "Storage fee status" */
+/** "storageFeeStatus" -> "Storage fee status". Trailing "Id"/"By" is stripped first — a resolved
+ *  reference reads as "Removal driver: Tendai Moyo", not the jargon-y "Removal driver ID: Tendai
+ *  Moyo" (the "ID"/"By" was only ever there to describe the raw UUID it used to hold). */
 function humanizeFieldName(field: string): string {
-  const spaced = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+  const stripped = field.replace(/(Id|By)$/, "") || field;
+  const spaced = stripped.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
   const words = spaced.split(" ");
   return words
     .map((w, i) => (ACRONYMS.has(w) ? w.toUpperCase() : i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(" ");
+}
+
+/** Swaps a raw UUID for its resolved label (see server/audit-ref-resolver.ts) when one was sent
+ *  back for this value; otherwise falls through unchanged. */
+function resolveRef(value: unknown, refs: Record<string, string>): unknown {
+  return typeof value === "string" && refs[value] ? refs[value] : value;
 }
 
 // Technical/internal fields that mean nothing to a reader — never shown in the diff summary.
@@ -104,28 +119,84 @@ function formatValue(value: unknown): string {
 
 export interface FieldChange {
   field: string;
+  /** "diff" = a field changed value (from -> to); "snapshot" = a create/delete, `to` is the
+   *  record's value at that moment and `from` is unused. The UI renders each shape differently
+   *  (an arrow doesn't make sense for "this is what was created"). */
+  kind: "diff" | "snapshot";
   from: string;
   to: string;
 }
 
-/** Up to `limit` human-readable field changes between before/after — skips technical/internal
- *  fields and fields that didn't actually change. Empty array for a create (before is null) or
- *  delete (after is null), since "everything changed" isn't a useful list to a reader. */
-export function summarizeChanges(before: unknown, after: unknown, limit = 4): FieldChange[] {
-  if (!before || !after || typeof before !== "object" || typeof after !== "object") return [];
-  const b = before as Record<string, unknown>;
-  const a = after as Record<string, unknown>;
+/**
+ * Up to `limit` human-readable fields describing what happened to a record — a diff (field: old
+ * -> new) for an update, or a full snapshot of the record's own fields for a create/delete
+ * (before was previously left blank here entirely: "created a new dependant" with zero detail on
+ * WHICH dependant or what their details were is not enough to reconstruct what happened from the
+ * trail alone). `refs` (see server/audit-ref-resolver.ts) swaps any raw foreign-key UUID for its
+ * resolved human label.
+ */
+export function summarizeChanges(
+  before: unknown,
+  after: unknown,
+  refs: Record<string, string> = {},
+  limit = 8
+): FieldChange[] {
+  const b = before && typeof before === "object" ? (before as Record<string, unknown>) : null;
+  const a = after && typeof after === "object" ? (after as Record<string, unknown>) : null;
+  if (!b && !a) return [];
+
+  // Create or delete: no diff to compute, just show the record's own fields as a snapshot.
+  if (!b !== !a) {
+    const snapshot = (b ?? a)!;
+    const changes: FieldChange[] = [];
+    for (const key of Object.keys(snapshot)) {
+      if (SKIP_FIELDS.has(key)) continue;
+      const val = resolveRef(snapshot[key], refs);
+      const formatted = formatValue(val);
+      if (formatted === "—") continue; // an unset field on the created/deleted record isn't worth a line
+      changes.push({ field: humanizeFieldName(key), kind: "snapshot", from: "", to: formatted });
+      if (changes.length >= limit) break;
+    }
+    return changes;
+  }
+
   const changes: FieldChange[] = [];
-  const keys = Array.from(new Set([...Object.keys(b), ...Object.keys(a)]));
+  const keys = Array.from(new Set([...Object.keys(b!), ...Object.keys(a!)]));
   for (const key of keys) {
     if (SKIP_FIELDS.has(key)) continue;
-    const fromVal = b[key];
-    const toVal = a[key];
+    const fromVal = b![key];
+    const toVal = a![key];
     if (JSON.stringify(fromVal) === JSON.stringify(toVal)) continue;
-    changes.push({ field: humanizeFieldName(key), from: formatValue(fromVal), to: formatValue(toVal) });
+    changes.push({
+      field: humanizeFieldName(key),
+      kind: "diff",
+      from: formatValue(resolveRef(fromVal, refs)),
+      to: formatValue(resolveRef(toVal, refs)),
+    });
     if (changes.length >= limit) break;
   }
   return changes;
+}
+
+// Checked in priority order against a created/deleted record's own fields to name it inline —
+// e.g. "created a new policy member (Jane Moyo)" instead of just "created a new policy member",
+// which forces a reader to open the field list below just to know WHICH record this was.
+const LABEL_FIELD_PRIORITY = [
+  "policyNumber", "memberName", "deceasedName", "receiptNumber", "claimNumber",
+  "name", "clientName", "groupName", "email",
+];
+
+function guessRecordLabel(payload: Record<string, unknown> | null, refs: Record<string, string>): string | null {
+  if (!payload) return null;
+  for (const field of LABEL_FIELD_PRIORITY) {
+    const val = resolveRef(payload[field], refs);
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  if (typeof payload.firstName === "string" || typeof payload.lastName === "string") {
+    const full = [payload.firstName, payload.lastName].filter(Boolean).join(" ").trim();
+    if (full) return full;
+  }
+  return null;
 }
 
 /**
@@ -133,7 +204,9 @@ export function summarizeChanges(before: unknown, after: unknown, limit = 4): Fi
  * Deliberately doesn't fold the entity type into this sentence — action names are usually
  * already descriptive on their own (e.g. "recorded case service charge payment"), and
  * concatenating "— Case Service Charge" on top reads as redundant. The entity type/id renders
- * as its own smaller line in the UI instead.
+ * as its own smaller line in the UI instead. A create/delete sentence names the specific record
+ * inline (see guessRecordLabel) when a recognizable identifying field is present — the full field
+ * list from summarizeChanges is still shown underneath for everything else.
  */
 export function summarizeAuditEntry(log: {
   action?: string | null;
@@ -141,14 +214,20 @@ export function summarizeAuditEntry(log: {
   actorEmail?: string | null;
   before?: unknown;
   after?: unknown;
-}): string {
+}, refs: Record<string, string> = {}): string {
   const actor = log.actorEmail || "The system";
   // Only the first character is lowercased for mid-sentence placement — a blanket .toLowerCase()
   // would also flatten any preserved acronym (e.g. "Disabled MFA" -> "disabled mfa").
   const entity = decapitalize(humanizeEntityType(log.entityType));
   const isCreate = !log.before && !!log.after;
   const isDelete = !!log.before && !log.after;
-  if (isCreate) return `${actor} created a new ${entity || "record"}.`;
-  if (isDelete) return `${actor} deleted a ${entity || "record"}.`;
+  if (isCreate) {
+    const label = guessRecordLabel(log.after as Record<string, unknown>, refs);
+    return `${actor} created a new ${entity || "record"}${label ? ` (${label})` : ""}.`;
+  }
+  if (isDelete) {
+    const label = guessRecordLabel(log.before as Record<string, unknown>, refs);
+    return `${actor} deleted a ${entity || "record"}${label ? ` (${label})` : ""}.`;
+  }
   return `${actor} ${decapitalize(humanizeAction(log.action))}.`;
 }

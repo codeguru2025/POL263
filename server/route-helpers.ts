@@ -82,6 +82,35 @@ export async function auditLog(req: any, action: string, entityType: string, ent
   }
 }
 
+/**
+ * Audit trail for platform-owner actions that have no tenant to attach to (app-release CRUD,
+ * manual backup trigger) — auditLog() above requires an organizationId and silently skips (with
+ * just a warning log) when there isn't one, which made these actions invisible to any audit trail
+ * at all. Writes into the control-plane DB's platform_audit_logs table instead — the one database
+ * every platform-owner request reaches regardless of which tenant (if any) is selected. Deferred
+ * import for the same test-isolation reason as invalidateOtherSessions above.
+ */
+export async function platformAuditLog(req: any, action: string, entityType: string, entityId: string | undefined, before: any, after: any) {
+  const user = req.user as any;
+  try {
+    const { cpDb } = await import("./control-plane-db");
+    const { platformAuditLogs } = await import("@shared/control-plane-schema");
+    await cpDb.insert(platformAuditLogs).values({
+      actorId: user?.id,
+      actorEmail: user?.email,
+      action,
+      entityType,
+      entityId,
+      before,
+      after,
+      requestId: req.requestId,
+      ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
+    });
+  } catch (err) {
+    structuredLog("error", "platformAuditLog write failed", { error: (err as Error).message, action, entityType, entityId });
+  }
+}
+
 export function safeError(err: any): string {
   if (process.env.NODE_ENV === "production") return "Internal server error";
   return err?.message || "Internal server error";

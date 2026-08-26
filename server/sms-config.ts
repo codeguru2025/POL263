@@ -34,8 +34,10 @@ interface SmsIntegrationConfigShape {
 
 const PROVIDER_KEY = "sms_africala";
 
-/** Platform-level fallback (env vars) — used when a tenant has no control-plane row yet. */
-function platformConfig(): OrgSmsConfig {
+/** Platform-level fallback (env vars) — used when a tenant has no control-plane row yet, and
+ *  directly (bypassing any per-org lookup) for platform-owner accounts, which have no
+ *  organizationId to resolve a tenant's own config from — see sms-service.ts's sendPlatformSms. */
+export function platformConfig(): OrgSmsConfig {
   const apiToken = process.env.AFRICALA_API_TOKEN || "";
   const senderId = process.env.SMS_SENDER_ID || "";
   return {

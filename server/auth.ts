@@ -375,10 +375,7 @@ async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | 
   }
   const attempts = (sessionAny.pendingMfaFailedAttempts as number) || 0;
   if (attempts >= MFA_PENDING_MAX_ATTEMPTS) {
-    delete sessionAny.pendingMfaUserId;
-    delete sessionAny.pendingMfaOrgId;
-    delete sessionAny.pendingMfaExpiresAt;
-    delete sessionAny.pendingMfaFailedAttempts;
+    clearPendingMfa(sessionAny);
     res.status(429).json({ message: "Too many failed attempts — please log in again" });
     return null;
   }
@@ -403,11 +400,33 @@ async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | 
     res.status(400).json({ message: "Invalid code" });
     return null;
   }
+  clearPendingMfa(sessionAny);
+  return user;
+}
+
+/** Fully clears a pending-MFA session, including the alt-channel fields below — shared by every
+ *  exit path (success, expiry, too-many-attempts) so none of them can leave a stale challenge. */
+function clearPendingMfa(sessionAny: any) {
   delete sessionAny.pendingMfaUserId;
   delete sessionAny.pendingMfaOrgId;
   delete sessionAny.pendingMfaExpiresAt;
   delete sessionAny.pendingMfaFailedAttempts;
-  return user;
+  delete sessionAny.pendingMfaAltCodeHash;
+  delete sessionAny.pendingMfaAltChannel;
+  delete sessionAny.pendingMfaAltLastSentAt;
+}
+
+/** Shows only the last 4 digits — a hint so the legitimate user recognizes their own number
+ *  without this response ever exposing enough of it to be useful to someone who doesn't already
+ *  know it. Digit count is deliberately not reflected in the mask length either. */
+function maskPhoneForDisplay(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  const last4 = digits.slice(-4);
+  return `${raw.trim().startsWith("+") ? "+" : ""}•••••${last4}`;
+}
+
+function normalizePhoneForCompare(raw: string): string {
+  return raw.replace(/\D/g, "");
 }
 
 export function setupAuth(app: Express) {
@@ -829,6 +848,107 @@ export function setupAuth(app: Express) {
   app.post("/api/auth/mfa/verify-login", async (req: Request, res: Response, next: NextFunction) => {
     const user = await verifyPendingMfaCode(req, res);
     if (!user) return;
+    return completeGoogleLogin(req, res, next, user, { asJson: true });
+  });
+
+  /**
+   * MFA fallback — "Try another way" from the authenticator-code screen. Three-step flow:
+   * (1) this endpoint lists which channels the pending user has a number on file for, masked;
+   * (2) POST .../challenge-alt requires the user to re-type the full number shown masked here
+   *     (proves they actually know it — stops a hijacked-but-not-yet-completed login session
+   *     from silently redirecting the code to an attacker-chosen number) before a code is sent;
+   * (3) POST .../verify-alt-code checks the code and completes login, same as verify-login above.
+   */
+  app.get("/api/auth/mfa/alt-channels", async (req: Request, res: Response) => {
+    const user = await resolvePendingMfaUser(req);
+    if (!user) return res.status(401).json({ message: "MFA challenge expired — please log in again" });
+    const channels: { channel: "sms" | "whatsapp"; maskedNumber: string }[] = [];
+    if (user.phone) channels.push({ channel: "sms", maskedNumber: maskPhoneForDisplay(user.phone) });
+    if (user.whatsapp) channels.push({ channel: "whatsapp", maskedNumber: maskPhoneForDisplay(user.whatsapp) });
+    return res.json({ channels });
+  });
+
+  app.post("/api/auth/mfa/challenge-alt", async (req: Request, res: Response) => {
+    const sessionAny = req.session as any;
+    const user = await resolvePendingMfaUser(req);
+    if (!user) return res.status(401).json({ message: "MFA challenge expired — please log in again" });
+
+    const attempts = (sessionAny.pendingMfaFailedAttempts as number) || 0;
+    if (attempts >= MFA_PENDING_MAX_ATTEMPTS) {
+      clearPendingMfa(sessionAny);
+      return res.status(429).json({ message: "Too many failed attempts — please log in again" });
+    }
+
+    const channel = req.body?.channel === "sms" || req.body?.channel === "whatsapp" ? req.body.channel : null;
+    const confirmedNumber = typeof req.body?.confirmedNumber === "string" ? req.body.confirmedNumber.trim() : "";
+    if (!channel || !confirmedNumber) {
+      return res.status(400).json({ message: "channel and confirmedNumber are required" });
+    }
+
+    const storedNumber: string | null = channel === "sms" ? user.phone : user.whatsapp;
+    if (!storedNumber) return res.status(400).json({ message: "No number on file for this channel" });
+
+    if (normalizePhoneForCompare(confirmedNumber) !== normalizePhoneForCompare(storedNumber)) {
+      sessionAny.pendingMfaFailedAttempts = attempts + 1;
+      return res.status(400).json({ message: "That doesn't match our records" });
+    }
+
+    const lastSentAt = sessionAny.pendingMfaAltLastSentAt as number | undefined;
+    if (lastSentAt && Date.now() - lastSentAt < 30_000) {
+      return res.status(429).json({ message: "Please wait before requesting another code" });
+    }
+
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    let sendResult: { ok: boolean; message: string };
+    if (channel === "sms") {
+      const { sendSms, sendPlatformSms } = await import("./sms-service");
+      const message = `Your POL263 verification code is ${otp}. It expires shortly — do not share it.`;
+      sendResult = user.organizationId
+        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp" })
+        : await sendPlatformSms({ to: storedNumber, message, kind: "otp" });
+    } else {
+      const { sendWhatsAppOtp } = await import("./whatsapp-service");
+      sendResult = await sendWhatsAppOtp({ to: storedNumber, code: otp });
+    }
+    if (!sendResult.ok) {
+      structuredLog("error", "MFA alt-channel send failed", { userId: user.id, channel, error: sendResult.message });
+      return res.status(503).json({
+        message: `Couldn't send a code via ${channel === "sms" ? "SMS" : "WhatsApp"} right now. Try your authenticator app or a backup code instead.`,
+      });
+    }
+
+    sessionAny.pendingMfaAltCodeHash = await argon2.hash(otp);
+    sessionAny.pendingMfaAltChannel = channel;
+    sessionAny.pendingMfaAltLastSentAt = Date.now();
+    sessionAny.save((err: Error | null) => {
+      if (err) return res.status(500).json({ message: "Internal server error" });
+      return res.json({ sent: true, channel });
+    });
+  });
+
+  app.post("/api/auth/mfa/verify-alt-code", async (req: Request, res: Response, next: NextFunction) => {
+    const sessionAny = req.session as any;
+    const user = await resolvePendingMfaUser(req);
+    if (!user) return res.status(401).json({ message: "MFA challenge expired — please log in again" });
+
+    const attempts = (sessionAny.pendingMfaFailedAttempts as number) || 0;
+    if (attempts >= MFA_PENDING_MAX_ATTEMPTS) {
+      clearPendingMfa(sessionAny);
+      return res.status(429).json({ message: "Too many failed attempts — please log in again" });
+    }
+
+    const codeHash = sessionAny.pendingMfaAltCodeHash as string | undefined;
+    if (!codeHash) return res.status(400).json({ message: "No code was sent — request one first" });
+
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    const ok = !!code && (await argon2.verify(codeHash, code));
+    if (!ok) {
+      sessionAny.pendingMfaFailedAttempts = attempts + 1;
+      return res.status(400).json({ message: "Invalid code" });
+    }
+
+    structuredLog("info", "MFA verified via alt channel", { userId: user.id, channel: sessionAny.pendingMfaAltChannel });
+    clearPendingMfa(sessionAny);
     return completeGoogleLogin(req, res, next, user, { asJson: true });
   });
 

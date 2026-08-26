@@ -37,6 +37,7 @@ export default function StaffPolicies() {
   const canEditReceipt = safePermissions.includes("edit:receipt");
   const canDeleteReceipt = safePermissions.includes("delete:receipt");
   const canManageApprovals = safePermissions.includes("approve:waivers");
+  const canReadAuditLog = safePermissions.includes("read:audit_log");
   const policyWizardFlag = useFlag("policyWizard");
 
   const { data: languages } = useQuery<{ code: string; name: string }[]>({ queryKey: ["/api/languages"] });
@@ -234,6 +235,7 @@ export default function StaffPolicies() {
           canEditReceipt={canEditReceipt}
           canDeleteReceipt={canDeleteReceipt}
           canManageApprovals={canManageApprovals}
+          canReadAuditLog={canReadAuditLog}
           isAgent={isAgent}
           showEditDialog={showEditDialog}
           setShowEditDialog={setShowEditDialog}

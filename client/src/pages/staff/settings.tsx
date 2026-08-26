@@ -54,6 +54,20 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { resolveAssetUrl } from "@/lib/assetUrl";
 
+/** Mirrors server/module-gate.ts's ALL_KNOWN_MODULES — human labels for the self-service toggle list. */
+const MODULE_TOGGLE_LABELS: Record<string, string> = {
+  claims: "Claims",
+  funeral_ops: "Funeral Operations",
+  fleet: "Fleet Tracking",
+  payroll: "Payroll & Attendance",
+  whatsapp_notifications: "WhatsApp Notifications",
+  mobile_payments: "Mobile Payments",
+  email_notifications: "Email Notifications",
+  email_inbound: "Inbound Email",
+  sms_notifications: "SMS Notifications",
+  legacy_records: "Legacy Records Import",
+};
+
 export default function StaffSettings() {
   const { user, permissions: userPerms, isPlatformOwner } = useAuth();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
@@ -235,6 +249,20 @@ export default function StaffSettings() {
       toast({ title: "SMS settings saved" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // ── Self-service module toggles — see server/module-gate.ts. `inPlan: false` modules render
+  // disabled (can't self-grant something not on the billing plan); anything currently on can
+  // always be switched off. ──────────────────────────────────────
+  const { data: orgModulesData } = useQuery<{ modules: { key: string; inPlan: boolean; enabled: boolean }[] }>({
+    queryKey: ["/api/organization-modules"],
+    enabled: !isControlPlaneMode && canManageSettings,
+  });
+  const toggleModuleMutation = useMutation({
+    mutationFn: async ({ key, enabled }: { key: string; enabled: boolean }) =>
+      apiRequest("PATCH", `/api/organization-modules/${key}`, { enabled }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/organization-modules"] }),
+    onError: (e: any) => toast({ title: "Couldn't update module", description: e.message, variant: "destructive" }),
   });
 
   // ── Agent Content Posts (vCard training/education feed) ──────
@@ -847,6 +875,31 @@ export default function StaffSettings() {
                     {saveSmsConfigMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Save
                   </Button>
+                </div>
+              </CardSection>
+              <CardSection
+                title="Modules"
+                description="Turn features on or off for your organization. A greyed-out module isn't included in your current billing plan — contact us to upgrade."
+                icon={Check}
+                className="mt-6"
+              >
+                <div className="space-y-3 max-w-md">
+                  {(orgModulesData?.modules ?? []).map((m) => (
+                    <div key={m.key} className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className={`text-sm font-medium ${m.inPlan ? "" : "text-muted-foreground"}`}>
+                          {MODULE_TOGGLE_LABELS[m.key] ?? m.key}
+                        </p>
+                        {!m.inPlan && <p className="text-xs text-muted-foreground">Not in your plan</p>}
+                      </div>
+                      <Switch
+                        checked={m.enabled}
+                        disabled={(!m.inPlan && !m.enabled) || toggleModuleMutation.isPending}
+                        onCheckedChange={(checked) => toggleModuleMutation.mutate({ key: m.key, enabled: checked })}
+                        data-testid={`switch-module-${m.key}`}
+                      />
+                    </div>
+                  ))}
                 </div>
               </CardSection>
             </TabsContent>

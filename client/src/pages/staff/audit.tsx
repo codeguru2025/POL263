@@ -69,7 +69,7 @@ export default function AuditLogs() {
     return params.toString();
   }, [page, debouncedSearch, action, from, to]);
 
-  const { data, isLoading } = useQuery<{ rows: any[]; total: number }>({
+  const { data, isLoading } = useQuery<{ rows: any[]; total: number; refs?: Record<string, string> }>({
     queryKey: ["/api/audit-logs", page, debouncedSearch, action, from, to],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/audit-logs?${buildParams()}`, { credentials: "include" });
@@ -80,6 +80,7 @@ export default function AuditLogs() {
   });
 
   const logs = data?.rows ?? [];
+  const refs = data?.refs ?? {};
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const showingFrom = total === 0 ? 0 : page * PAGE_SIZE + 1;
@@ -98,12 +99,12 @@ export default function AuditLogs() {
       id: "summary",
       header: "What happened",
       sortable: false,
-      accessor: (log) => summarizeAuditEntry(log),
+      accessor: (log) => summarizeAuditEntry(log, refs),
       cell: (log) => {
-        const changes = summarizeChanges(log.before, log.after);
+        const changes = summarizeChanges(log.before, log.after, refs);
         return (
           <div className="space-y-1 max-w-md">
-            <p className="text-sm leading-snug">{summarizeAuditEntry(log)}</p>
+            <p className="text-sm leading-snug">{summarizeAuditEntry(log, refs)}</p>
             {log.entityType && (
               <p className="text-xs text-muted-foreground">
                 {humanizeEntityType(log.entityType)}
@@ -115,7 +116,11 @@ export default function AuditLogs() {
                 {changes.map((c) => (
                   <li key={c.field}>
                     <span className="font-medium text-foreground/80">{c.field}:</span>{" "}
-                    {c.from} <span aria-hidden>→</span> {c.to}
+                    {c.kind === "diff" ? (
+                      <>{c.from} <span aria-hidden>→</span> {c.to}</>
+                    ) : (
+                      c.to
+                    )}
                   </li>
                 ))}
               </ul>

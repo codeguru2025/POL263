@@ -41,6 +41,26 @@ export function cycleDays(schedule: string): number {
   return 30; // monthly
 }
 
+/** True if `year` is a leap year (Gregorian calendar). */
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/**
+ * Adds exactly `years` calendar years to a YYYY-MM-DD date-only string, anchored to the calendar
+ * anniversary rather than a fixed day count — a flat `addDays(x, 365)` drifts a yearly policy's
+ * cover period off its real anniversary date by a day on every leap year it crosses (365 days is
+ * one short of a leap year). A Feb-29 anniversary lands on Feb 28 in a non-leap target year rather
+ * than overflowing into March 1 (JS Date's default normalization), matching how anniversary
+ * billing is conventionally handled.
+ */
+function addCalendarYears(dateStr: string, years: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const targetYear = y + years;
+  const day = m === 2 && d === 29 && !isLeapYear(targetYear) ? 28 : d;
+  return new Date(Date.UTC(targetYear, m - 1, day)).toISOString().split("T")[0];
+}
+
 /**
  * Number of pay-cycles covered by an inclusive [periodFrom, periodTo] range, e.g. one produced
  * by advancePolicyCycle below. Cycles are anchored to a fixed length in days, not calendar
@@ -104,9 +124,19 @@ export async function advancePolicyCycle(
     periodFrom = dueDate; // always anchored to due date, even if paid late or early
   }
 
-  const len = cycleDays(schedule);
-  const periodTo = addDays(periodFrom, len - 1);   // last covered day
-  const nextDueDate = addDays(periodFrom, len);     // when next payment is due
+  // Yearly cycles anchor to the real calendar anniversary (leap-year-correct) instead of a flat
+  // 365-day offset; every other schedule keeps the fixed-day-length model (weekly/biweekly/
+  // monthly cycles don't have a "calendar anniversary" drift problem to correct).
+  let periodTo: string;
+  let nextDueDate: string;
+  if (schedule === "yearly") {
+    nextDueDate = addCalendarYears(periodFrom, 1);
+    periodTo = addDays(nextDueDate, -1);            // last covered day
+  } else {
+    const len = cycleDays(schedule);
+    periodTo = addDays(periodFrom, len - 1);         // last covered day
+    nextDueDate = addDays(periodFrom, len);           // when next payment is due
+  }
 
   const newGraceUsed = daysLate > 0
     ? Math.min(gracePeriodDays, currentGraceUsed + daysLate)

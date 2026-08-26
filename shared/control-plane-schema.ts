@@ -471,6 +471,29 @@ export const backupSyncRuns = pgTable("backup_sync_runs", {
   triggeredBy: text("triggered_by"), // 'scheduler' | 'manual'
 });
 
+/**
+ * Audit trail for platform-owner actions that have no tenant to attach to (app-release CRUD,
+ * manual backup trigger) — the per-tenant audit_logs table (shared/schema.ts, one per tenant DB)
+ * requires an organizationId, so these actions were previously invisible to any audit trail
+ * entirely (route-helpers.ts's auditLog() silently skips and logs a warning when organizationId
+ * is missing). Lives in the control-plane DB since it's the one database every platform-owner
+ * request already reaches, regardless of which tenant (if any) is selected.
+ */
+export const platformAuditLogs = pgTable("platform_audit_logs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorId: uuid("actor_id"),
+  actorEmail: text("actor_email"),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id"),
+  before: jsonb("before"),
+  after: jsonb("after"),
+  requestId: text("request_id"),
+  ipAddress: text("ip_address"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export type Tenant = typeof tenants.$inferSelect;

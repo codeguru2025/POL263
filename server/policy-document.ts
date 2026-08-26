@@ -3,6 +3,8 @@ import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import { requireAuth } from "./auth";
 import { todayForOrg } from "./date-utils";
+import { getDbForOrg } from "./tenant-db";
+import { logPolicyView } from "./policy-activity-log";
 
 const SUPPORTED_LANGUAGES: Record<string, string> = {
   en: "English", sn: "Shona", nd: "Ndebele", zu: "Zulu", xh: "Xhosa",
@@ -459,6 +461,17 @@ export function registerPolicyDocumentRoute(app: Express) {
       req.query.download === "true" ||
       req.query.attachment === "1" ||
       req.query.attachment === "true";
+
+    getDbForOrg(effectiveOrgId).then((tdb) => logPolicyView(tdb, {
+      organizationId: effectiveOrgId,
+      policyId: policy.id,
+      actorType: "staff",
+      actorId: user?.id,
+      actorLabel: user?.displayName || user?.email,
+      action: "downloaded_document",
+      detail: { documentType: "policy_certificate", attachment },
+    }));
+
     await streamPolicyDocumentToResponse(policy.id, policy.organizationId, res, { lang, attachment });
   });
 

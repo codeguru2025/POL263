@@ -35,7 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ImportWizard } from "@/components/legacy-import/ImportWizard";
 
 const SWATCHES = ["#0d9488","#D4AF37","#2563EB","#DC2626","#16A34A","#9333EA","#EA580C","#0891B2","#DB2777","#4F46E5","#CA8A04","#059669","#1E293B"];
-const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications", "email_notifications", "email_inbound"];
+const KNOWN_FLAGS = ["claims_enabled", "mobile_payments", "agent_portal", "whatsapp_notifications", "email_notifications", "email_inbound", "legacy_records"];
 
 interface TenantConfig {
   id: string;

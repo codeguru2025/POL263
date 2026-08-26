@@ -117,6 +117,28 @@ function extractRows(result: any): Record<string, any>[] {
   return [];
 }
 
+const SYNC_CHUNK_SIZE = 5000;
+
+/**
+ * Reads a table in bounded-size chunks instead of one full-table `SELECT *` — keeps a single
+ * query's result set (and this process's memory, on a 1GB instance) from scaling linearly with
+ * table size as tables like audit_logs/payment_transactions grow well past today's few-thousand-
+ * row scale. Plain OFFSET pagination can skip/duplicate a row that's concurrently inserted or
+ * deleted mid-scan — acceptable here since this is an idempotent upsert re-run daily, so a row
+ * missed by a pagination race this run is picked up the next one; not worth keyset pagination's
+ * complexity for a nightly background job.
+ */
+async function* readTableChunked(db: any, table: string): AsyncGenerator<Record<string, any>[]> {
+  let offset = 0;
+  while (true) {
+    const rows = extractRows(await db.execute(sql.raw(`SELECT * FROM "${table}" LIMIT ${SYNC_CHUNK_SIZE} OFFSET ${offset}`)));
+    if (rows.length === 0) return;
+    yield rows;
+    if (rows.length < SYNC_CHUNK_SIZE) return;
+    offset += SYNC_CHUNK_SIZE;
+  }
+}
+
 /**
  * Returns the best available ON CONFLICT target for a table: its formal PRIMARY KEY if it has
  * one, otherwise the columns of any unique index on it (Postgres accepts ON CONFLICT against
@@ -323,11 +345,13 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
       await reconcileSchemaForSource(cpDb, backupPool, cpTables, "cp");
       for (const { table, primaryKey } of cpTables) {
         try {
-          const rows = extractRows(await cpDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
-          if (rows.length === 0) continue;
-          await upsertRows(backupPool, table, primaryKey, rows);
-          totalRows += rows.length;
-          tableCount++;
+          let synced = false;
+          for await (const rows of readTableChunked(cpDb, table)) {
+            await upsertRows(backupPool, table, primaryKey, rows);
+            totalRows += rows.length;
+            synced = true;
+          }
+          if (synced) tableCount++;
         } catch (err) {
           const msg = (err as Error).message;
           if (!isMissingRelationError(err)) errors.push(`cp:${table}: ${msg}`);
@@ -348,11 +372,13 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
       await reconcileSchemaForSource(registryDb, backupPool, registryTables, "reg");
       for (const { table, primaryKey } of registryTables) {
         try {
-          const rows = extractRows(await registryDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
-          if (rows.length === 0) continue;
-          await upsertRows(backupPool, table, primaryKey, rows);
-          totalRows += rows.length;
-          tableCount++;
+          let synced = false;
+          for await (const rows of readTableChunked(registryDb, table)) {
+            await upsertRows(backupPool, table, primaryKey, rows);
+            totalRows += rows.length;
+            synced = true;
+          }
+          if (synced) tableCount++;
         } catch (err) {
           const msg = (err as Error).message;
           if (!isMissingRelationError(err)) errors.push(`reg:${table}: ${msg}`);
@@ -387,11 +413,13 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
 
       for (const { table, primaryKey } of tenantTables) {
         try {
-          const rows = extractRows(await tenantDb.execute(sql.raw(`SELECT * FROM "${table}"`)));
-          if (rows.length === 0) continue;
-          await upsertRows(backupPool, table, primaryKey, rows);
-          totalRows += rows.length;
-          tableCount++;
+          let synced = false;
+          for await (const rows of readTableChunked(tenantDb, table)) {
+            await upsertRows(backupPool, table, primaryKey, rows);
+            totalRows += rows.length;
+            synced = true;
+          }
+          if (synced) tableCount++;
         } catch (err) {
           const msg = (err as Error).message;
           if (!isMissingRelationError(err)) errors.push(`${org.name}:${table}: ${msg}`);

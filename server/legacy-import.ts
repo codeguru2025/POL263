@@ -6,7 +6,7 @@
 import { parse as parseCsvSync } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { randomUUID } from "crypto";
-import { eq, and, inArray, count, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, count, isNull, isNotNull, sql } from "drizzle-orm";
 import { normalizeNationalId, toUpperTrim, normalizeCurrency, parsePositiveAmount, type SupportedCurrency } from "../shared/validation";
 import {
   products, productVersions, importRecords, policies, paymentReceipts, claims, policyMembers,
@@ -684,6 +684,13 @@ export async function resolveExternalRef(
  *  real product version (see decision #1: productVersions requires premium-table/rules fields
  *  no legacy export will have, and policies.premiumAmount is stored directly regardless). */
 export async function getOrCreateLegacyProductVersion(orgId: string, tx: any): Promise<string> {
+  // Transaction-scoped advisory lock keyed per-org — serializes two concurrent import commits for
+  // the same org so they can't both pass the select-finds-nothing check below and each insert a
+  // separate LEGACY_IMPORT product (products.code has no unique constraint). Auto-releases at
+  // commit/rollback; runs on the same connection as the rest of `tx` so it's correctly scoped
+  // even for a tenant on its own dedicated database, not just the shared one.
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('legacy_import_product:' || ${orgId}::text)::bigint)`);
+
   let [product] = await tx.select().from(products).where(and(eq(products.organizationId, orgId), eq(products.code, "LEGACY_IMPORT")));
   if (!product) {
     [product] = await tx

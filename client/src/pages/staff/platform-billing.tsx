@@ -144,7 +144,8 @@ function SettingsCard() {
 const MODULE_LABELS: Record<string, string> = {
   claims: "Claims", funeral_ops: "Funeral Operations", fleet: "Fleet Tracking",
   payroll: "Payroll & Attendance", whatsapp_notifications: "WhatsApp Notifications", mobile_payments: "Mobile Payments",
-  email_notifications: "Email Notifications",
+  email_notifications: "Email Notifications", email_inbound: "Inbound Email", sms_notifications: "SMS Notifications",
+  legacy_records: "Legacy Records Import",
 };
 
 function emptyPlanForm() {
