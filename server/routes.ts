@@ -13,7 +13,7 @@ import {
   ensureRegistryUserMirroredToOrgDataDb,
   getPoolForOrg,
 } from "./tenant-db";
-import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache } from "./auth";
+import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
 import { auditLog, platformAuditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
@@ -1010,6 +1010,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Agent Content Posts (vCard training/education feed, org admin-authored) ──
+  // Thumbnail images and video files for agent content posts go straight to the object storage
+  // bucket, never a pasted external URL — a staff-managed upload, not a link that could rot or
+  // point somewhere uncontrolled. Video plays back inline on the vCard page (HTML5 <video>, not
+  // a YouTube/Vimeo iframe), so the size limit needs real headroom for a short training clip.
+  const agentContentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const allowed = /\.(jpg|jpeg|png|gif|webp|mp4|mov|webm|m4v)$/i;
+      if (allowed.test(path.extname(file.originalname))) cb(null, true);
+      else cb(new Error("File type not allowed. Supported: images (jpg, png, gif, webp) or video (mp4, mov, webm, m4v)"));
+    },
+  });
+
+  app.post("/api/agent-content-posts/upload", requireAuth, requireTenantScope, requirePermission("manage:settings"), agentContentUpload.single("file"), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    if (req.file.size === 0) return res.status(400).json({ message: "File is empty" });
+    try {
+      const { url } = await objectStorage.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype, "agent-content");
+      return res.json({ url });
+    } catch (err: any) {
+      structuredLog("error", "Agent content upload failed", { error: err?.message });
+      return res.status(500).json({ message: "Upload failed. Please try again." });
+    }
+  });
+  app.use("/api/agent-content-posts/upload", (err: any, _req: any, res: any, next: any) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ message: "File too large (max 50MB)" });
+      return res.status(400).json({ message: err.message });
+    }
+    if (err?.message) return res.status(400).json({ message: err.message });
+    next(err);
+  });
+
   app.get("/api/agent-content-posts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getAgentContentPosts(user.organizationId));
@@ -1053,12 +1087,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Public Agent vCard ─────────────────────────────────────
+  /**
+   * A regular agent's vCard is always scoped to their own organizationId. A platform-owner
+   * account has none (they aren't affiliated with any single tenant) — for them, "which tenant's
+   * vCard is this" is decided at share-time instead: staff-layout.tsx bakes the tenant they had
+   * active into the link as ?org=, when generating the "Copy my referral link"/"vCard" links, so
+   * the same static referralCode can represent a different tenant depending on which one was
+   * selected at share time. Never lets a query param override a REAL agent's own organizationId —
+   * only an org-less (platform-owner) account ever reads it.
+   */
+  async function resolveVcardOrgId(agent: { organizationId: string | null }, queryOrg: unknown): Promise<string | null> {
+    if (agent.organizationId) return agent.organizationId;
+    if (typeof queryOrg === "string" && queryOrg.trim()) {
+      const org = await storage.getOrganization(queryOrg.trim());
+      if (org) return org.id;
+    }
+    return null;
+  }
+
   app.get("/api/public/agent-card/:refCode", async (req, res) => {
     const refCode = req.params.refCode as string;
     const agent = await storage.getUserByReferralCode(refCode);
-    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
-    const org = await storage.getOrganization(agent.organizationId);
-    const posts = await storage.getAgentContentPosts(agent.organizationId, true);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(orgId);
+    const posts = await storage.getAgentContentPosts(orgId, true);
     return res.json({
       displayName: agent.displayName || agent.email,
       avatarUrl: agent.avatarUrl,
@@ -1074,13 +1127,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/public/agent-vcard/:refCode", async (req, res) => {
     const refCode = req.params.refCode as string;
     const agent = await storage.getUserByReferralCode(refCode);
-    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
-    const org = await storage.getOrganization(agent.organizationId);
-    const posts = await storage.getAgentContentPosts(agent.organizationId, true);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(orgId);
+    const posts = await storage.getAgentContentPosts(orgId, true);
     // Real, non-fabricated trust signals only — no invented ratings/regulatory claims. footerText
     // is the same field already used for compliance/legal boilerplate on documents & receipts, so
     // reusing it here never introduces a claim an admin didn't already choose to put in writing.
-    const stats = await storage.countCoveredLives(agent.organizationId).catch(() => null);
+    const stats = await storage.countCoveredLives(orgId).catch(() => null);
     return res.json({
       displayName: agent.displayName || agent.email,
       avatarUrl: agent.avatarUrl,
@@ -1111,9 +1165,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Invalid eventType" });
     }
     const agent = await storage.getUserByReferralCode(refCode);
-    if (!agent || !agent.organizationId) return res.status(204).end();
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(204).end();
     await storage.createAgentCardEvent({
-      organizationId: agent.organizationId,
+      organizationId: orgId,
       agentId: agent.id,
       refCode,
       eventType,
@@ -1137,9 +1192,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "Phone number is required" });
     }
     const agent = await storage.getUserByReferralCode(refCode);
-    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
     const lead = await storage.createLead({
-      organizationId: agent.organizationId,
+      organizationId: orgId,
       agentId: agent.id,
       firstName: firstName.trim(),
       lastName: lastName.trim(),
@@ -1152,7 +1208,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let quoteId: string | null = null;
     if (quote && typeof quote === "object" && quote.policyholderName && quote.policyholderDateOfBirth) {
       const saved = await storage.createQuote({
-        organizationId: agent.organizationId,
+        organizationId: orgId,
         agentId: agent.id,
         leadId: lead.id,
         refCode,
@@ -1174,7 +1230,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       quoteId = saved.id;
     }
     await storage.createAgentCardEvent({
-      organizationId: agent.organizationId,
+      organizationId: orgId,
       agentId: agent.id,
       refCode,
       eventType: "quote_request",
@@ -1236,8 +1292,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!user.referralCode) return res.status(404).json({ message: "No referral code set for this account" });
     const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
     if (!base) return res.status(503).json({ message: "APP_BASE_URL is not configured" });
+    // For a platform-owner account (no organizationId of their own), bake in whichever tenant
+    // they currently have active — same resolution /api/auth/me exposes as effectiveOrganizationId.
+    const effectiveOrgId = getEffectiveOrgId(req, user);
+    const orgSuffix = user.isPlatformOwner && effectiveOrgId ? `?org=${encodeURIComponent(effectiveOrgId)}` : "";
+    if (user.isPlatformOwner && !effectiveOrgId) {
+      return res.status(400).json({ message: "Select a tenant first to generate your vCard QR code" });
+    }
     const { buildVerifyQrBuffer } = await import("./pdf-utils");
-    const buf = await buildVerifyQrBuffer(`${base}/card/${user.referralCode}`, 300);
+    const buf = await buildVerifyQrBuffer(`${base}/card/${user.referralCode}${orgSuffix}`, 300);
     if (!buf) return res.status(500).json({ message: "Failed to generate QR code" });
     res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "private, max-age=3600");
@@ -1247,14 +1310,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/public/agent-card/:refCode/manifest.json", async (req, res) => {
     const refCode = req.params.refCode as string;
     const agent = await storage.getUserByReferralCode(refCode);
-    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
-    const org = await storage.getOrganization(agent.organizationId);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    const org = await storage.getOrganization(orgId);
     const icon = agent.avatarUrl || org?.logoUrl || "/assets/logo.png";
+    // For an org-less (platform-owner) agent, the org came from ?org= — bake it back into the
+    // installed-PWA start_url too, or reopening from the home screen would 404 with no query
+    // string to resolve it from.
+    const orgSuffix = req.query.org ? `?org=${encodeURIComponent(String(req.query.org))}` : "";
     res.setHeader("Content-Type", "application/manifest+json");
     return res.json({
       name: agent.displayName ? `${agent.displayName} — ${org?.name || "POL263"}` : (org?.name || "POL263"),
       short_name: agent.displayName || org?.name || "POL263",
-      start_url: `/join/${refCode}`,
+      start_url: `/join/${refCode}${orgSuffix}`,
       scope: `/join/${refCode}`,
       display: "standalone",
       theme_color: org?.primaryColor || "#0d9488",
@@ -1269,11 +1337,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ranked product recommendation (server/quote-engine.ts) rather than a single plan's price —
   // this is the vCard's "suggest the most appropriate product" flow.
   app.post("/api/public/quote", async (req, res) => {
-    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth } = req.body;
+    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth, org: bodyOrg } = req.body;
     if (typeof refCode !== "string" || !refCode.trim()) return res.status(400).json({ message: "refCode is required" });
     const agent = await storage.getUserByReferralCode(refCode.trim());
-    if (!agent || !agent.organizationId) return res.status(404).json({ message: "Agent not found" });
-    const orgId = agent.organizationId;
+    const orgId = agent ? await resolveVcardOrgId(agent, bodyOrg ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
     const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
     const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
 
@@ -3552,10 +3620,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let agentId = req.body.agentId || null;
     if (!agentId && req.body.referralCode) {
       const agent = await storage.getUserByReferralCode(req.body.referralCode);
-      if (agent && agent.organizationId === user.organizationId) {
+      // A regular agent's own org must match the policy's org (no cross-tenant attribution). An
+      // org-less agent (platform owner — see resolveVcardOrgId) has no "own org" to check against,
+      // so any tenant may attribute a sale to them.
+      if (agent && (agent.organizationId === user.organizationId || !agent.organizationId)) {
         agentId = agent.id;
       }
     }
+    // Mirrors the referring agent into this org's own database if it's on a dedicated one and
+    // they've never been mirrored there before — same hardening as the public referral-link
+    // registration route (handlePublicPolicyRegistration) below, same underlying bug class.
+    if (agentId) agentId = await resolveOrSyncTenantUserId(user.organizationId, agentId);
 
     const members = Array.isArray(req.body.members) ? req.body.members : [];
     const addOnIds = Array.isArray(req.body.addOnIds) ? req.body.addOnIds : [];
@@ -11267,8 +11342,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!ref) return res.status(400).json({ message: "Referral code (ref) required" });
     const agent = await storage.getUserByReferralCode(ref);
     if (!agent) return res.status(404).json({ message: "Agent not found" });
-    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
-    const orgId = agent.organizationId;
+    const orgId = await resolveVcardOrgId(agent, req.query.org);
+    if (!orgId) return res.status(400).json({ message: "Agent has no organization" });
     const products = await storage.getProductsByOrg(orgId);
     const allVersions = await storage.getAllProductVersions(orgId);
     const versionsByProduct: Record<string, typeof allVersions> = {};
@@ -11302,6 +11377,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // who/what initiated this (the referring agent's email, or a "walk-in" marker) instead.
     actorLabel: string,
   ): Promise<void> {
+    // agentId is a raw registry user id — for an org on its own dedicated database, that id has
+    // never necessarily been mirrored into that database's own `users` table (policies.agentId's
+    // FK target), so a first-ever referral for a given agent against a dedicated-DB tenant could
+    // fail the insert below. resolveOrSyncTenantUserId mirrors the row if needed and is a no-op
+    // for a shared-DB org — same pattern used everywhere else a cross-context user id becomes a
+    // tenant-DB foreign key (see feedback_debugging_patterns memory: this exact bug class).
+    if (agentId) agentId = await resolveOrSyncTenantUserId(orgId, agentId);
     const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt } = req.body;
     const nationalIdNorm = normalizeNationalId(nationalId)!;
     // Best-effort — a missing/malformed value just means consent wasn't recorded, not a
@@ -11476,17 +11558,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
     const agent = await storage.getUserByReferralCode(referralCode);
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
-    if (!agent.organizationId) return res.status(400).json({ message: "Agent has no organization" });
+    const orgId = await resolveVcardOrgId(agent, req.body.org ?? req.query.org);
+    if (!orgId) return res.status(400).json({ message: "Agent has no organization" });
     // Org resolved above (not after validation) so the national ID check below can use this org's
     // configured format instead of always assuming the "zimbabwe" default.
-    const registerPolicyNationalIdFormat = await resolveOrgNationalIdFormat(agent.organizationId);
+    const registerPolicyNationalIdFormat = await resolveOrgNationalIdFormat(orgId);
     const nationalIdNorm = normalizeNationalId(nationalId);
     if (!nationalIdNorm) return res.status(400).json({ message: "National ID is required (format: digits + check letter + 2 digits, e.g. 08833089H38)." });
     if (!isValidNationalId(nationalId, registerPolicyNationalIdFormat)) return res.status(400).json({ message: `National ID ${nationalIdFormatHint(registerPolicyNationalIdFormat)}.` });
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
-    return handlePublicPolicyRegistration(req, res, agent.organizationId, agent.id, req.body.branchId || agent.branchId || null, agent.email ? `${agent.email} (agent referral link)` : "Agent referral link");
+    return handlePublicPolicyRegistration(req, res, orgId, agent.id, req.body.branchId || agent.branchId || null, agent.email ? `${agent.email} (agent referral link)` : "Agent referral link");
   });
 
   // ─── (legacy unused block — kept for diff continuity, removed below) ─────

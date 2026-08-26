@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, useSearch } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Loader2, Phone, ArrowRight, Play, Plus, X } from "lucide-react";
+import { Loader2, Phone, ArrowRight, Plus, X } from "lucide-react";
 import { getApiBase, apiFetch } from "@/lib/queryClient";
 import { getDefaultLogoUrl } from "@/lib/assetUrl";
 import { AppChrome, APP_SHELL_MAX } from "@/components/layout/app-chrome";
@@ -35,6 +35,11 @@ export default function AgentCardPage() {
   const [, params] = useRoute("/join/:refCode");
   const refCode = params?.refCode as string;
   const [, setLocation] = useLocation();
+  // Only meaningful for a platform-owner's org-less link (see resolveVcardOrgId,
+  // server/routes.ts) — bakes in whichever tenant they had active when the link was shared.
+  // Ignored server-side for a regular agent, whose own organizationId is already authoritative.
+  const orgParam = new URLSearchParams(useSearch()).get("org") || undefined;
+  const orgQs = orgParam ? `${orgParam.includes("?") ? "&" : "?"}org=${encodeURIComponent(orgParam)}` : "";
 
   const [card, setCard] = useState<AgentCard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,7 +48,7 @@ export default function AgentCardPage() {
   useEffect(() => {
     if (!refCode) return;
     sessionStorage.setItem("agent_referral_code", refCode);
-    fetch(getApiBase() + `/api/public/agent-card/${refCode}`)
+    fetch(getApiBase() + `/api/public/agent-card/${refCode}${orgQs}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data) => setCard(data))
       .catch(() => setNotFound(true))
@@ -58,9 +63,9 @@ export default function AgentCardPage() {
       document.head.appendChild(manifestLink);
     }
     const originalHref = manifestLink.href;
-    manifestLink.href = getApiBase() + `/api/public/agent-card/${refCode}/manifest.json`;
+    manifestLink.href = getApiBase() + `/api/public/agent-card/${refCode}/manifest.json${orgQs}`;
     return () => { manifestLink!.href = originalHref; };
-  }, [refCode]);
+  }, [refCode, orgParam]);
 
   // ── Quote calculator ──────────────────────────────────────────
   const [options, setOptions] = useState<RegistrationOptions | null>(null);
@@ -71,7 +76,7 @@ export default function AgentCardPage() {
 
   useEffect(() => {
     if (!refCode) return;
-    fetch(getApiBase() + `/api/public/registration-options?ref=${encodeURIComponent(refCode)}`)
+    fetch(getApiBase() + `/api/public/registration-options?ref=${encodeURIComponent(refCode)}${orgQs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.products?.length) {
@@ -80,7 +85,7 @@ export default function AgentCardPage() {
         }
       })
       .catch(() => {});
-  }, [refCode]);
+  }, [refCode, orgParam]);
 
   const getQuote = async () => {
     if (!productVersionId) return;
@@ -90,7 +95,7 @@ export default function AgentCardPage() {
       const res = await apiFetch("/api/public/quote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refCode, productVersionId, memberCount }),
+        body: JSON.stringify({ refCode, productVersionId, memberCount, ...(orgParam ? { org: orgParam } : {}) }),
       });
       if (res.ok) setQuote(await res.json());
     } finally {
@@ -201,6 +206,8 @@ export default function AgentCardPage() {
             {card.posts.map((post) => (
               <Card key={post.id} className="overflow-hidden">
                 {post.type === "video" && post.videoUrl && youtubeEmbedUrl(post.videoUrl) ? (
+                  // Legacy posts only — new video content is always an uploaded file (see below),
+                  // but an older post may still have a YouTube/Vimeo link saved from before.
                   <div className="aspect-video bg-black">
                     <iframe
                       src={youtubeEmbedUrl(post.videoUrl)!}
@@ -211,9 +218,14 @@ export default function AgentCardPage() {
                     />
                   </div>
                 ) : post.type === "video" && post.videoUrl ? (
-                  <a href={post.videoUrl} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 bg-muted aspect-video text-sm text-muted-foreground hover:bg-muted/70">
-                    <Play className="h-5 w-5" /> Watch video
-                  </a>
+                  <video
+                    controls
+                    playsInline
+                    preload="metadata"
+                    poster={post.thumbnailUrl || undefined}
+                    className="w-full aspect-video bg-black"
+                    src={post.videoUrl}
+                  />
                 ) : post.thumbnailUrl ? (
                   <img src={post.thumbnailUrl} alt="" className="w-full aspect-video object-cover" />
                 ) : null}

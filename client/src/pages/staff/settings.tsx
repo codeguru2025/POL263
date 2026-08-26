@@ -307,6 +307,38 @@ export default function StaffSettings() {
     else createContentMutation.mutate(contentForm);
   };
 
+  // Thumbnail and video always go straight to the bucket via upload, never a pasted external
+  // URL — matches handleAdvertImageUpload's pattern above. Video plays back inline on the vCard
+  // (client/src/pages/public/agent-vcard.tsx), so the 50MB cap (server/routes.ts) has real
+  // headroom for a short clip, not just a still image.
+  const [uploadingContentThumb, setUploadingContentThumb] = useState(false);
+  const [uploadingContentVideo, setUploadingContentVideo] = useState(false);
+  async function handleContentFileUpload(e: ChangeEvent<HTMLInputElement>, field: "videoUrl" | "thumbnailUrl") {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const setUploading = field === "videoUrl" ? setUploadingContentVideo : setUploadingContentThumb;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const csrf = getCsrfToken();
+      const res = await fetch("/api/agent-content-posts/upload", {
+        method: "POST",
+        headers: csrf ? { "x-csrf-token": csrf } : {},
+        credentials: "include",
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || "Upload failed");
+      setContentForm((p) => ({ ...p, [field]: json.url }));
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
   const createAdvertMutation = useMutation({
     mutationFn: async (data: { title: string; body: string; imageUrl: string }) => {
       return apiRequest("POST", "/api/receipt-adverts", data);
@@ -1036,18 +1068,42 @@ export default function StaffSettings() {
                     </div>
                     {contentForm.type === "video" && (
                       <div className="space-y-2">
-                        <Label htmlFor="content-video">Video URL <span className="text-muted-foreground text-xs">(YouTube / Vimeo link)</span></Label>
-                        <Input id="content-video" value={contentForm.videoUrl} onChange={(e) => setContentForm({ ...contentForm, videoUrl: e.target.value })} placeholder="https://youtube.com/watch?v=…" />
+                        <Label htmlFor="content-video">Video file</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="content-video"
+                            type="file"
+                            accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v"
+                            onChange={(e) => handleContentFileUpload(e, "videoUrl")}
+                            disabled={uploadingContentVideo}
+                          />
+                          {uploadingContentVideo && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+                        </div>
+                        {contentForm.videoUrl && !uploadingContentVideo && (
+                          <video src={contentForm.videoUrl} controls className="mt-1 max-h-40 rounded border" />
+                        )}
                       </div>
                     )}
                     <div className="space-y-2">
-                      <Label htmlFor="content-thumb">Thumbnail URL <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                      <Input id="content-thumb" value={contentForm.thumbnailUrl} onChange={(e) => setContentForm({ ...contentForm, thumbnailUrl: e.target.value })} placeholder="https://…" />
+                      <Label htmlFor="content-thumb">Thumbnail image <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="content-thumb"
+                          type="file"
+                          accept="image/jpeg,image/png,image/gif,image/webp,.jpg,.jpeg,.png,.gif,.webp"
+                          onChange={(e) => handleContentFileUpload(e, "thumbnailUrl")}
+                          disabled={uploadingContentThumb}
+                        />
+                        {uploadingContentThumb && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+                      </div>
+                      {contentForm.thumbnailUrl && !uploadingContentThumb && (
+                        <img src={contentForm.thumbnailUrl} alt="" className="mt-1 h-20 rounded border object-cover" />
+                      )}
                     </div>
                   </div>
                   <DialogFooter>
                     <Button variant="outline" onClick={() => { setContentDialogOpen(false); resetContentForm(); }}>Cancel</Button>
-                    <Button onClick={handleSaveContent} disabled={!contentForm.title.trim() || createContentMutation.isPending || updateContentMutation.isPending}>
+                    <Button onClick={handleSaveContent} disabled={!contentForm.title.trim() || createContentMutation.isPending || updateContentMutation.isPending || uploadingContentVideo || uploadingContentThumb}>
                       {(createContentMutation.isPending || updateContentMutation.isPending) ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving…</> : "Save Post"}
                     </Button>
                   </DialogFooter>

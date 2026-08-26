@@ -1282,7 +1282,7 @@ function sanitizeUser(user: any) {
   };
 }
 
-function getEffectiveOrgId(req: Request, user: any): string | null {
+export function getEffectiveOrgId(req: Request, user: any): string | null {
   const session = req.session as any;
   if (user?.isPlatformOwner) {
     return (session?.activeTenantId ?? user.organizationId ?? null) as string | null;

@@ -147,10 +147,21 @@ function StaffNavDropdown({
   );
 }
 
-function ReferralLinkBox({ referralCode }: { referralCode: string }) {
+/**
+ * Bakes the platform owner's currently-active tenant into a vCard/referral link. A regular
+ * staff/agent's own organizationId is already authoritative server-side (see resolveVcardOrgId,
+ * server/routes.ts) — this only matters for a platform-owner account, which has none of its own,
+ * so the tenant is decided at share-time from whichever one they had selected instead.
+ */
+function buildVcardPath(base: "/join" | "/card", refCode: string, user: { isPlatformOwner?: boolean; effectiveOrganizationId?: string | null }): string {
+  const orgSuffix = user.isPlatformOwner && user.effectiveOrganizationId ? `?org=${encodeURIComponent(user.effectiveOrganizationId)}` : "";
+  return `${base}/${refCode}${orgSuffix}`;
+}
+
+function ReferralLinkBox({ referralCode, user }: { referralCode: string; user: { isPlatformOwner?: boolean; effectiveOrganizationId?: string | null } }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const referralUrl = `${window.location.origin}/join/${referralCode}`;
+  const referralUrl = `${window.location.origin}${buildVcardPath("/join", referralCode, user)}`;
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -655,10 +666,16 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                 <div className="px-2 py-1.5 text-xs text-muted-foreground border-b mb-1 truncate">{user?.email}</div>
                 {user?.referralCode && (
                   <>
+                    {user.isPlatformOwner && !user.effectiveOrganizationId && (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        Select a tenant to generate your vCard/referral link for it.
+                      </div>
+                    )}
                     <DropdownMenuItem
                       className="cursor-pointer"
+                      disabled={user.isPlatformOwner && !user.effectiveOrganizationId}
                       onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/join/${user.referralCode}`);
+                        navigator.clipboard.writeText(`${window.location.origin}${buildVcardPath("/join", user.referralCode!, user)}`);
                         toast({ title: "Referral link copied" });
                       }}
                       data-testid="menuitem-copy-referral-link"
@@ -667,16 +684,17 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="cursor-pointer"
+                      disabled={user.isPlatformOwner && !user.effectiveOrganizationId}
                       onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/card/${user.referralCode}`);
+                        navigator.clipboard.writeText(`${window.location.origin}${buildVcardPath("/card", user.referralCode!, user)}`);
                         toast({ title: "vCard link copied" });
                       }}
                       data-testid="menuitem-copy-vcard-link"
                     >
                       <Link2 className="h-4 w-4 mr-2" /> Copy my vCard link
                     </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                      <a href={`/card/${user.referralCode}`} target="_blank" rel="noopener noreferrer" className="cursor-pointer" data-testid="menuitem-view-vcard">
+                    <DropdownMenuItem asChild disabled={user.isPlatformOwner && !user.effectiveOrganizationId}>
+                      <a href={buildVcardPath("/card", user.referralCode!, user)} target="_blank" rel="noopener noreferrer" className="cursor-pointer" data-testid="menuitem-view-vcard">
                         <ExternalLink className="h-4 w-4 mr-2" /> View my vCard page
                       </a>
                     </DropdownMenuItem>
@@ -817,7 +835,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                   ))}
                 </div>
                 <div className="border-t p-3 space-y-2 bg-muted/30">
-                  {user?.referralCode && <ReferralLinkBox referralCode={user.referralCode} />}
+                  {user?.referralCode && <ReferralLinkBox referralCode={user.referralCode} user={user} />}
                   {appInfo?.available && (
                     <a href={appInfo.downloadUrl} target="_blank" rel="noopener noreferrer" download className="block">
                       <Button variant="outline" className="w-full gap-2">
