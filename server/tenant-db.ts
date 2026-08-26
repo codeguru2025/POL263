@@ -234,6 +234,16 @@ async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, reg
     nextOfKinName: registryUser.nextOfKinName,
     nextOfKinPhone: registryUser.nextOfKinPhone,
     createdAt: registryUser.createdAt,
+    // MFA fields — deserializeUser (server/auth.ts) re-reads the user from a dedicated-DB
+    // tenant's own mirrored row on every request, not the registry row these are enrolled/
+    // confirmed against. Omitting them here meant enroll wrote the new secret to the registry
+    // DB only, so /api/auth/mfa/confirm's verifyTotp always checked against a stale/null secret
+    // on the tenant's own row — every code looked "invalid" no matter what was entered. Same
+    // reasoning applies to disabling MFA (mfaSecret/mfaBackupCodes cleared) and backup-code
+    // single-use consumption (server/auth.ts's verifyPendingMfaCode) — both must reach here too.
+    mfaSecret: registryUser.mfaSecret,
+    mfaEnabled: registryUser.mfaEnabled,
+    mfaBackupCodes: registryUser.mfaBackupCodes,
   };
   const [existById] = await tdb.select({ id: users.id }).from(users).where(eq(users.id, registryUser.id)).limit(1);
   if (existById) {
@@ -257,6 +267,9 @@ async function upsertRegistryUserIntoTenantDb(tdb: OrgDataDb, orgId: string, reg
         maritalStatus: row.maritalStatus,
         nextOfKinName: row.nextOfKinName,
         nextOfKinPhone: row.nextOfKinPhone,
+        mfaSecret: row.mfaSecret,
+        mfaEnabled: row.mfaEnabled,
+        mfaBackupCodes: row.mfaBackupCodes,
       })
       .where(eq(users.id, registryUser.id));
   } else {
