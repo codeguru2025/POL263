@@ -220,6 +220,22 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("trialBalance"),
   });
+  const { data: bankRec, isLoading: loadingBankRec } = useQuery<any>({
+    queryKey: ["reports", "bank-reconciliation", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/bank-reconciliation" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("bankReconciliation"),
+  });
+  const { data: ifrs17, isLoading: loadingIfrs17 } = useQuery<any>({
+    queryKey: ["reports", "ifrs17-movement", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/ifrs17-movement" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("ifrs17Movement"),
+  });
   const [glAccount, setGlAccount] = useState<string>("");
   const IPEC_MANUAL_KEYS = ["insurerClass", "investmentIncome", "technicalProvisions", "prescribedAssetsHeld", "otherLiabilities", "riskBasedCapitalRequirement"] as const;
   const [ipecManual, setIpecManual] = useState<Record<string, string>>(() => {
@@ -585,6 +601,116 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               </div>
             )}
           </div>
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="bank-reconciliation">
+        <CardSection
+          title="Bank Reconciliation"
+          description="Each bank account's statement movement over the period vs deposits recorded in the system. The system stores periodic statement closing balances (not individual lines) and disbursements aren't linked to an account, so the 'unreconciled movement' is the amount for finance to explain from bank-method payments, charges and interest."
+          icon={Building}
+          headerRight={<ExportButton reportType="bank-reconciliation" filters={filters} />}
+          flush
+        >
+          {loadingBankRec ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !bankRec || bankRec.accounts.length === 0 ? (
+            <EmptyState title="No active bank accounts" description="Add bank accounts and statement balances under Finance to use this reconciliation." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="p-4 space-y-4">
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm min-w-[820px]">
+                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                    <tr>{["Account", "Currency", "Opening", "Closing", "Statement movement", "Deposits recorded", "Unreconciled"].map((h) => <th key={h} className="text-left px-3 py-2 whitespace-nowrap">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {bankRec.accounts.map((a: any, i: number) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-3 py-1.5 whitespace-nowrap">{a.accountName} <span className="text-xs text-muted-foreground">{a.bankName}</span></td>
+                        <td className="px-3 py-1.5">{a.currency}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.openingBalance != null ? a.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.openingDate || ""}</div></td>
+                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.closingBalance != null ? a.closingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.closingDate || ""}</div></td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{a.statementMovement != null ? a.statementMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{a.depositsRecorded.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] text-muted-foreground">({a.depositCount})</span></td>
+                        <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${a.unreconciledMovement && Math.abs(a.unreconciledMovement) > 0.01 ? "text-amber-600" : ""}`}>{a.unreconciledMovement != null ? a.unreconciledMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                <p className="font-semibold mb-1">Bank-method payments recorded in the period</p>
+                {Object.keys(bankRec.bankPaymentsRecorded).length === 0 ? (
+                  <p className="text-muted-foreground text-xs">None.</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{Object.entries(bankRec.bankPaymentsRecorded).map(([c, v]: any) => `${c} ${v.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${v.count})`).join("  ·  ")}</p>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">{bankRec.note}</p>
+            </div>
+          )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="ifrs17-movement">
+        <CardSection
+          title="IFRS 17 Movement Analysis (PAA)"
+          description="The roll-forward of the two insurance-contract liabilities over the period: LRC (opening + premiums received − revenue recognised = closing) and LIC (opening + claims incurred − claims paid = closing). PAA-classified business only; LIC excludes IBNR."
+          icon={Shield}
+          headerRight={<ExportButton reportType="ifrs17-movement" filters={filters} />}
+          flush
+        >
+          {loadingIfrs17 ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !ifrs17 ? (
+            <EmptyState title="No PAA-classified business in the period" description="Classify product versions as 'PAA' under Products to include them in IFRS 17 reporting." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (() => {
+            const curs: string[] = ifrs17.currencies?.length ? ifrs17.currencies : ["USD"];
+            const m = (obj: any, c: string) => (obj?.[c] != null ? Number(obj[c]).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+            const block = (title: string, L: any, lines: [string, string][]) => (
+              <div className="mb-5">
+                <p className="text-sm font-semibold mb-2">{title}</p>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border rounded-md min-w-[420px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow><TableHead>Line</TableHead>{curs.map((c) => <TableHead key={c} className="text-right">{c}</TableHead>)}</TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {lines.map(([key, label], i) => (
+                        <TableRow key={i} className={key === "opening" || key === "closing" ? "font-semibold" : ""}>
+                          <TableCell>{label}</TableCell>
+                          {curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{m(L[key], c)}</TableCell>)}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
+              </div>
+            );
+            return (
+              <div className="p-4">
+                {block("Liability for Remaining Coverage (LRC)", ifrs17.lrc, [
+                  ["opening", "Opening balance"],
+                  ["premiumsReceived", "Add: premiums received"],
+                  ["revenueRecognised", "Less: insurance revenue recognised"],
+                  ["closing", "Closing balance"],
+                  ["residual", "Residual (straddling receipts)"],
+                ])}
+                {block("Liability for Incurred Claims (LIC)", ifrs17.lic, [
+                  ["opening", "Opening balance"],
+                  ["claimsIncurred", "Add: claims incurred (reported)"],
+                  ["claimsPaid", "Less: claims paid / settled"],
+                  ["closing", "Closing balance"],
+                  ["residual", "Residual"],
+                ])}
+                <p className="text-xs text-muted-foreground">
+                  {ifrs17.classification.paaPolicyCount} PAA-classified {ifrs17.classification.paaPolicyCount === 1 ? "policy" : "policies"} included.
+                  {ifrs17.classification.excludedActivePolicyCount > 0 ? ` ${ifrs17.classification.excludedActivePolicyCount} excluded (unclassified / GMM / VFA).` : ""}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">{ifrs17.note}</p>
+              </div>
+            );
+          })()}
         </CardSection>
       </TabsContent>
 

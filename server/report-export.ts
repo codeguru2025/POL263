@@ -34,6 +34,7 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "insurance-contract-summary": "read:finance", "collection-efficiency": "read:finance",
   "trial-balance": "read:finance", "general-ledger": "read:finance",
   "premium-bordereau": "read:finance", "claims-bordereau": "read:finance",
+  "ifrs17-movement": "read:finance", "bank-reconciliation": "read:finance",
   "data-integrity": "read:report",
   // ── Claims / funerals / fleet ──
   "claims": "read:claim", "claims-aging": "read:claim", "claims-analytics": "read:claim",
@@ -99,6 +100,8 @@ export function reportExportLabel(type: string): string {
     "general-ledger": "General Ledger",
     "premium-bordereau": "Reinsurance Premium Bordereau",
     "claims-bordereau": "Reinsurance Claims Bordereau",
+    "ifrs17-movement": "IFRS 17 Movement Analysis (PAA)",
+    "bank-reconciliation": "Bank Reconciliation",
   };
   return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
