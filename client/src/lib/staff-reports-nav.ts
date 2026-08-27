@@ -34,6 +34,8 @@ export type ReportDatasetId =
   | "transactionLedger"
   | "balanceSheet"
   | "underwriterPayable"
+  | "premiumBordereau"
+  | "claimsBordereau"
   | "cashups"
   | "receiptReport"
   | "claimsReport"
@@ -86,6 +88,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "balance-sheet", label: "Balance Sheet", testId: "tab-balance-sheet" },
     { value: "finance", label: "Finance", testId: "tab-finance-report" },
     { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
+    { value: "reinsurance", label: "Reinsurance bordereaux", testId: "tab-reinsurance" },
     { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
     { value: "payments", label: "Payments", testId: "tab-payments-report" },
     { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
@@ -177,6 +180,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   "balance-sheet": ["balanceSheet"],
   finance: ["financeReport"],
   "underwriter-payable": ["underwriterPayable"],
+  reinsurance: ["premiumBordereau", "claimsBordereau"],
   receipts: ["receiptReport"],
   payments: ["payments"],
   expenditures: ["expenditures"],
