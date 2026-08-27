@@ -262,6 +262,7 @@ export interface UnderwriterPayableRow {
   policyId: string;
   policyNumber: string;
   status: string;
+  currency: string;
   clientId: string;
   clientFirstName: string;
   clientLastName: string;
@@ -282,7 +283,12 @@ export interface UnderwriterPayableRow {
 
 export interface UnderwriterPayableReportResult {
   rows: UnderwriterPayableRow[];
-  summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number };
+  summary: {
+    totalMonthlyPayable: number;
+    totalPayableIncludingAdvance: number;
+    policyCount: number;
+    byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }>;
+  };
 }
 
 export interface ActivationEntry {
@@ -631,6 +637,9 @@ export interface IStorage {
   getPayrollRuns(orgId: string): Promise<PayrollRun[]>;
   createPayrollRun(run: InsertPayrollRun): Promise<PayrollRun>;
   getPayslipsForRun(runId: string, orgId: string): Promise<(Payslip & { employee: PayrollEmployee })[]>;
+  /** All payslips whose payroll run's period starts in the given calendar (tax) year, with the
+   *  employee's display name + number attached — for the payroll-tax (ITF16) reconciliation. */
+  getPayslipsForTaxYear(orgId: string, year: number): Promise<(Payslip & { employeeName: string; employeeIdNumber: string })[]>;
   upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip>;
   updatePayrollRunTotals(runId: string, orgId: string): Promise<void>;
   getVehicleTripLogs(orgId: string, filters?: { vehicleId?: string; funeralCaseId?: string }): Promise<VehicleTripLog[]>;
@@ -1872,6 +1881,7 @@ export class DatabaseStorage implements IStorage {
         currency: policies.currency,
         premiumAmount: policies.premiumAmount,
         inceptionDate: policies.inceptionDate,
+        graceEndDate: policies.graceEndDate,
         policyCreatedAt: policies.createdAt,
         agentUserId: users.id,
         agentDisplayName: users.displayName,
@@ -1936,6 +1946,30 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => {
       const do_ = debitOrderMap[r.policyId];
       return {
+        // Friendly camelCase keys — the active-policies / awaiting-payments / overdue /
+        // pre-lapse / lapsed reports (screen + CSV) read these; they previously got undefined
+        // for every column because this method only returned the Easipol-format keys below.
+        policyId: r.policyId,
+        branchId: r.branchId ?? "",
+        policyNumber: r.policyNumber ?? "",
+        status: r.status ?? "",
+        currency: r.currency ?? "",
+        premiumAmount: r.premiumAmount ?? "",
+        inceptionDate: r.inceptionDate ? String(r.inceptionDate) : "",
+        graceEndDate: r.graceEndDate ? String(r.graceEndDate) : "",
+        policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
+        branchName: r.branchName ?? "",
+        productName: r.productName ?? "",
+        groupName: r.groupName ?? "",
+        agentDisplayName: r.agentDisplayName ?? "",
+        agentEmail: r.agentEmail ?? "",
+        clientTitle: r.clientTitle ?? "",
+        clientFirstName: r.clientFirstName ?? "",
+        clientLastName: r.clientLastName ?? "",
+        clientNationalId: r.clientNationalId ?? "",
+        clientPhone: r.clientPhone ?? "",
+        clientEmail: r.clientEmail ?? "",
+        // ── Easipol-format keys (policies / agent-portfolio / broker-policies / new-joinings) ──
         Branch_ID: r.branchId ?? "",
         BranchName: r.branchName ?? "",
         Member_ID: memberMap[r.policyId] ?? "",
@@ -2366,6 +2400,7 @@ export class DatabaseStorage implements IStorage {
         policyId: policies.id,
         policyNumber: policies.policyNumber,
         status: policies.status,
+        currency: policies.currency,
         clientId: clients.id,
         clientFirstName: clients.firstName,
         clientLastName: clients.lastName,
@@ -2426,6 +2461,7 @@ export class DatabaseStorage implements IStorage {
     const rows: UnderwriterPayableRow[] = [];
     let totalMonthlyPayable = 0;
     let totalPayableIncludingAdvance = 0;
+    const byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> = {};
 
     for (const r of baseRows) {
       const advanceMonths = Number(r.underwriterAdvanceMonths ?? 0);
@@ -2453,11 +2489,17 @@ export class DatabaseStorage implements IStorage {
       const totalPayable = monthlyPayable * (1 + advanceMonths);
       totalMonthlyPayable += monthlyPayable;
       totalPayableIncludingAdvance += totalPayable;
+      const cur = (r.currency || "USD").toUpperCase();
+      if (!byCurrency[cur]) byCurrency[cur] = { monthlyPayable: 0, totalPayable: 0, policyCount: 0 };
+      byCurrency[cur].monthlyPayable += monthlyPayable;
+      byCurrency[cur].totalPayable += totalPayable;
+      byCurrency[cur].policyCount += 1;
 
       rows.push({
         policyId: r.policyId,
         policyNumber: r.policyNumber,
         status: r.status,
+        currency: cur,
         clientId: r.clientId,
         clientFirstName: r.clientFirstName,
         clientLastName: r.clientLastName,
@@ -2483,6 +2525,7 @@ export class DatabaseStorage implements IStorage {
         totalMonthlyPayable,
         totalPayableIncludingAdvance,
         policyCount: rows.length,
+        byCurrency,
       },
     };
   }
@@ -4796,6 +4839,22 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
       .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
     return rows.map((r) => ({ ...r.payslips, employee: r.payroll_employees }));
+  }
+  async getPayslipsForTaxYear(orgId: string, year: number): Promise<(Payslip & { employeeName: string; employeeIdNumber: string })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(payslips)
+      .innerJoin(payrollRuns, eq(payslips.payrollRunId, payrollRuns.id))
+      .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
+      .where(and(
+        eq(payrollEmployees.organizationId, orgId),
+        gte(payrollRuns.periodStart, `${year}-01-01`),
+        lte(payrollRuns.periodStart, `${year}-12-31`),
+      ));
+    return rows.map((r) => ({
+      ...r.payslips,
+      employeeName: `${r.payroll_employees.firstName} ${r.payroll_employees.lastName}`.trim(),
+      employeeIdNumber: r.payroll_employees.employeeNumber,
+    }));
   }
   async upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip> {
     const tdb = await getDbForOrg(orgId);

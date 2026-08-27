@@ -88,50 +88,23 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
   { id: "totalPayable", header: "Total payable", align: "right", accessor: (r) => r.totalPayable, cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.totalPayable.toFixed(2)}</span> },
 ];
 
+// Curated default columns for the on-screen receipts table. The CSV export carries the fuller
+// Easipol-format column set; the screen view is for scanning, not spreadsheet work.
 const receiptsColumns: EdtColumn<any>[] = [
-  { id: "dtstamp", header: "DTSTAMP", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
-  { id: "agentsName", header: "agentsName", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
-  { id: "monthsPaidInAdvance", header: "MonthsPaidInAdvance", accessor: (r) => r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaidInAdvance ?? "—"}</span> },
-  { id: "policyNumber", header: "policy_number", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
-  { id: "surname", header: "surname", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
-  { id: "internalReferenceNumber", header: "InternalReferenceNumber", accessor: (r) => r.InternalReferenceNumber || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.InternalReferenceNumber}>{r.InternalReferenceNumber || "—"}</span> },
-  { id: "productName", header: "Product_Name", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
-  { id: "inceptionDate", header: "Inception_Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
-  { id: "monthNumber", header: "MonthNumber", accessor: (r) => r.MonthNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthNumber ?? "—"}</span> },
-  { id: "yearNumber", header: "YearNumber", accessor: (r) => r.YearNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.YearNumber ?? "—"}</span> },
-  { id: "receiptCount", header: "ReceiptCount", accessor: (r) => r.ReceiptCount ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptCount ?? "—"}</span> },
-  { id: "fdate", header: "fdate", accessor: (r) => r.fdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fdate || "—"}</span> },
-  { id: "tdate", header: "tdate", accessor: (r) => r.tdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.tdate || "—"}</span> },
-  { id: "paymentBy", header: "PaymentBy", accessor: (r) => r.PaymentBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.PaymentBy}>{r.PaymentBy || "—"}</span> },
-  { id: "receiptNumber", header: "ReceiptNumber", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
-  { id: "manualUser", header: "ManualUser", accessor: (r) => r.ManualUser || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.ManualUser}>{r.ManualUser || "—"}</span> },
-  { id: "datePaid", header: "DatePaid", accessor: (r) => r.DatePaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || "—"}</span> },
-  { id: "transaction", header: "Transaction", accessor: (r) => r.Transaction || "", cell: (r) => <span className="text-xs font-mono max-w-[160px] truncate block" title={r.Transaction}>{r.Transaction || "—"}</span> },
-  { id: "premiumDue", header: "PremiumDue", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.PremiumDue || "—"}</span> },
+  { id: "receiptNumber", header: "Receipt #", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
+  { id: "datePaid", header: "Date Paid", accessor: (r) => r.DatePaid || r.datepaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || r.datepaid || "—"}</span> },
+  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
+  { id: "surname", header: "Member", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
+  { id: "productName", header: "Product", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
   { id: "currency", header: "Currency", accessor: (r) => r.Currency || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Currency || "—"}</span> },
-  { id: "amountCollected", header: "AmountCollected", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
-  { id: "monthsPaid", header: "MonthsPaid", accessor: (r) => r.MonthsPaid ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? "—"}</span> },
-  { id: "remarks", header: "Remarks", accessor: (r) => r.Remarks || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Remarks}>{r.Remarks || "—"}</span> },
-  { id: "paymentMethod", header: "PaymentMethod", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
-  { id: "defaultPay", header: "DefaultPay", accessor: (r) => r.DefaultPay || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DefaultPay || "—"}</span> },
-  { id: "debitMethod", header: "DebitMethod", accessor: (r) => r.DebitMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DebitMethod || "—"}</span> },
-  { id: "receiptMonth", header: "ReceiptMonth", accessor: (r) => r.ReceiptMonth ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptMonth ?? "—"}</span> },
-  { id: "receiptYear", header: "ReceiptYear", accessor: (r) => r.ReceiptYear ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptYear ?? "—"}</span> },
-  { id: "policyNum", header: "policy_num", accessor: (r) => r.policy_num || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_num || "—"}</span> },
-  { id: "policyBranch", header: "PolicyBranch", accessor: (r) => r.PolicyBranch || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.PolicyBranch}>{r.PolicyBranch || "—"}</span> },
-  { id: "inceptionUnderscore", header: "Inception_", accessor: (r) => r.Inception_ || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_ || "—"}</span> },
-  { id: "sstatus", header: "Sstatus", accessor: (r) => r.Sstatus || "", cell: (r) => <span className="text-xs"><Badge variant="outline" className="text-[10px]">{r.Sstatus || "—"}</Badge></span> },
-  { id: "internalRe", header: "InternalRe", accessor: (r) => r.InternalRe || "", cell: (r) => <span className="text-xs font-mono max-w-[100px] truncate block" title={r.InternalRe}>{r.InternalRe || "—"}</span> },
-  { id: "productN", header: "Product_N", accessor: (r) => r.Product_N || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.Product_N}>{r.Product_N || "—"}</span> },
-  { id: "collectedBy", header: "CollectedBy", accessor: (r) => r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CollectedBy}>{r.CollectedBy || "—"}</span> },
-  { id: "fromDate", header: "fromDate", accessor: (r) => r.fromDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fromDate || "—"}</span> },
-  { id: "toDate", header: "toDate", accessor: (r) => r.toDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.toDate || "—"}</span> },
-  { id: "groupName", header: "GroupName", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
-  { id: "inceptionD", header: "InceptionD", accessor: (r) => r.InceptionD || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.InceptionD || "—"}</span> },
-  { id: "memberId", header: "MemberID", accessor: (r) => r.MemberID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.MemberID || "—"}</span> },
-  { id: "actualPen", header: "ActualPen", accessor: (r) => r.ActualPen || "", cell: (r) => <span className="text-xs tabular-nums">{r.ActualPen || "—"}</span> },
-  { id: "receiptId", header: "ReceiptID", accessor: (r) => r.ReceiptID || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.ReceiptID}>{r.ReceiptID || "—"}</span> },
-  { id: "capturedBy", header: "CapturedBy", accessor: (r) => r.CapturedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CapturedBy}>{r.CapturedBy || "—"}</span> },
+  { id: "amountCollected", header: "Amount Collected", align: "right", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap tabular-nums">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
+  { id: "premiumDue", header: "Premium Due", align: "right", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap tabular-nums">{r.PremiumDue || "—"}</span> },
+  { id: "monthsPaid", header: "Months Paid", align: "right", accessor: (r) => r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "—"}</span> },
+  { id: "paymentMethod", header: "Method", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
+  { id: "agentsName", header: "Agent", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
+  { id: "capturedBy", header: "Captured By", accessor: (r) => r.CapturedBy || r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.CapturedBy || r.CollectedBy}>{r.CapturedBy || r.CollectedBy || "—"}</span> },
+  { id: "groupName", header: "Group", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
+  { id: "dtstamp", header: "Timestamp (UTC)", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
 ];
 
 const paymentsColumns: EdtColumn<any>[] = [
@@ -257,11 +230,11 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("insuranceContractSummary"),
   });
-  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
+  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number; byCurrency?: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/underwriter-payable?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0 } };
+      if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0, byCurrency: {} } };
       return res.json();
     },
     enabled: need("underwriterPayable"),
@@ -509,31 +482,33 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
             />
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <KpiStatCard
-                  label="Policies"
-                  value={<span data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</span>}
-                  icon={FolderOpen}
-                />
-                <KpiStatCard
-                  label="Total monthly payable"
-                  value={
-                    <span className="tabular-nums" data-testid="text-underwriter-monthly">
-                      {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}
-                    </span>
-                  }
-                  icon={DollarSign}
-                />
-                <KpiStatCard
-                  label="Total (incl. advance months)"
-                  value={
-                    <span className="tabular-nums" data-testid="text-underwriter-total">
-                      {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}
-                    </span>
-                  }
-                  icon={TrendingUp}
-                />
-              </div>
+              {(() => {
+                const bc = underwriterPayableResult.summary.byCurrency ?? {};
+                const curs = Object.keys(bc);
+                const fmtByCur = (pick: (v: { monthlyPayable: number; totalPayable: number }) => number) =>
+                  curs.length
+                    ? curs.map((c) => `${c} ${pick(bc[c]).toFixed(2)}`).join("  ·  ")
+                    : "—";
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <KpiStatCard
+                      label="Policies"
+                      value={<span data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</span>}
+                      icon={FolderOpen}
+                    />
+                    <KpiStatCard
+                      label="Total monthly payable"
+                      value={<span className="tabular-nums" data-testid="text-underwriter-monthly">{fmtByCur((v) => v.monthlyPayable)}</span>}
+                      icon={DollarSign}
+                    />
+                    <KpiStatCard
+                      label="Total (incl. advance months)"
+                      value={<span className="tabular-nums" data-testid="text-underwriter-total">{fmtByCur((v) => v.totalPayable)}</span>}
+                      icon={TrendingUp}
+                    />
+                  </div>
+                );
+              })()}
               <EnhancedDataTable
                 columns={underwriterPayableColumns}
                 rows={underwriterPayableResult.rows}

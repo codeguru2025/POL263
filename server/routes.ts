@@ -48,6 +48,7 @@ import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes"
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
+import { REPORT_EXPORT_PERMISSIONS, csvEscape } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { sendEmail, escapeHtml } from "./email-service";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -12986,6 +12987,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
   };
 
+
   app.get("/api/reports/policy-details", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -13056,7 +13058,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+    // Grace policies whose grace period ends within the pre-lapse window (default 7 days) — the
+    // actionable retention list, distinct from /overdue which is every grace policy.
+    const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
+    const cutoff = Date.now() + windowDays * 86400000;
+    const graceRows = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" });
+    return res.json(graceRows.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff));
   });
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -13065,7 +13072,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.get("/api/reports/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const status = req.query.status ? String(req.query.status) : undefined;
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
@@ -13352,9 +13359,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
-  app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+  app.get("/api/reports/export/:type", requireAuth, requireTenantScope,
+    requireAnyPermission("read:policy", "read:finance", "read:commission", "read:payroll", "read:claim", "read:report", "read:audit_log", "read:funeral_ops", "read:fleet", "read:user"),
+    async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
+
+    // Gate on the same permission the report's JSON sibling uses (see REPORT_EXPORT_PERMISSIONS).
+    const requiredPerm = REPORT_EXPORT_PERMISSIONS[reportType];
+    if (!requiredPerm) return res.status(400).json({ message: `Unknown report type: ${reportType}` });
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    if (!effPerms.includes(requiredPerm)) {
+      return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
+    }
+
     const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
     const CURRENCIES = ["USD", "ZAR", "ZIG"] as const;
@@ -13572,34 +13590,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } else {
             const payrollRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
             headers = [
-              "AGENT NAME",
-              "",
-              "NUMBER OF POLICIES",
-              "Groups",
-              "Groups",
-              "individ",
-              "Individ",
-              "Investm",
-              "Clawb",
-              "Call Cen",
+              "Agent Name",
+              "Number Of Policies",
+              "Groups Count",
+              "Groups Commission",
+              "Individuals Count",
+              "Individuals Commission",
+              "Investment Commission",
+              "Clawback",
+              "Call Centre",
               "Trips",
-              "Cash se",
+              "Cash Settlement",
               "Basic",
-              "Overtim",
-              "TOTAL",
-              "PA",
-              "TAX LE",
-              "CRED",
-              "ADVAN",
-              "POLICY DEDUCTI",
-              "MEDICAL AID DEDUCTI",
-              "UNPAID M",
-              "NET P",
+              "Overtime",
+              "Total",
+              "PAYE",
+              "Tax Levy",
+              "Credit",
+              "Advance",
+              "Policy Deduction",
+              "Medical Aid Deduction",
+              "Unpaid Months",
+              "Net Pay",
             ];
             currencyTotals = null;
             rows = payrollRows.map((r: any) => [
               r.agentName,
-              "",
               r.numberOfPolicies,
               r.groupsCount,
               r.groupsCommission,
@@ -13698,7 +13714,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "overdue":
         case "pre-lapse": {
-          const grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          let grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          // "Pre-lapse" is the actionable subset: in grace AND grace ends within the pre-lapse
+          // window (default 7 days) — not a synonym for "overdue" (every grace policy).
+          if (reportType === "pre-lapse") {
+            const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
+            const cutoff = Date.now() + windowDays * 86400000;
+            grace = grace.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff);
+          }
           headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = grace.map((r: any) => {
@@ -13949,23 +13972,95 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             from: reportFilters.fromDate,
             to: reportFilters.toDate,
           });
-          headers = ["Action", "Entity Type", "Entity ID", "User", "IP Address", "Timestamp"];
-          rows = auditRows.map((r: any) => [r.action, r.entityType, r.entityId, r.userName || r.userId || "", r.ipAddress || "", r.createdAt]);
+          const tdbAudit = await getDbForOrg(user.organizationId);
+          const { refs: auditRefs, policyNumbers: auditPolicyNos } = await resolveAuditRefs(tdbAudit, auditRows);
+          const changeSummary = (before: any, after: any): string => {
+            if (!before || !after || typeof before !== "object" || typeof after !== "object") return "";
+            const parts: string[] = [];
+            for (const k of Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))) {
+              if (["id", "organizationId", "createdAt", "updatedAt"].includes(k)) continue;
+              if (JSON.stringify(before[k]) === JSON.stringify(after[k])) continue;
+              parts.push(`${k}: ${before[k] ?? "—"} → ${after[k] ?? "—"}`);
+              if (parts.length >= 6) break;
+            }
+            return parts.join("; ");
+          };
+          headers = ["Timestamp", "Action", "Entity Type", "Entity", "Policy", "Actor", "IP Address", "Changes"];
+          rows = auditRows.map((r: any) => [
+            r.timestamp ? new Date(r.timestamp).toISOString() : "",
+            r.action, r.entityType,
+            r.entityId ? (auditRefs[r.entityId] || r.entityId) : "",
+            auditPolicyNos[r.id] || "",
+            r.actorEmail || "System",
+            r.ipAddress || "",
+            changeSummary(r.before, r.after),
+          ]);
           break;
         }
         case "irp5-reconciliation": {
-          const employees = await storage.getPayrollEmployees(user.organizationId);
-          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", "Status", "Tax Year"];
-          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, r.status, new Date().getFullYear()]);
+          // Payroll-tax reconciliation for a tax year, from finalised payslips (deductionsDetail
+          // JSON). Replaces the previous stub, which dumped the employee list with the current
+          // calendar year literally in a "Tax Year" column.
+          const taxYear = parseInt(String(req.query.taxYear)) || new Date().getFullYear();
+          const slips = await storage.getPayslipsForTaxYear(user.organizationId, taxYear);
+          const byEmp = new Map<string, { name: string; idNo: string; gross: number; paye: number; aidsLevy: number; nssa: number; net: number; currency: string; months: number }>();
+          for (const s of slips as any[]) {
+            const d = (s.deductionsDetail || {}) as any;
+            const e = (s.earnings || {}) as any;
+            const key = s.employeeId;
+            if (!byEmp.has(key)) byEmp.set(key, { name: s.employeeName || "—", idNo: s.employeeIdNumber || "—", gross: 0, paye: 0, aidsLevy: 0, nssa: 0, net: 0, currency: s.currency || "USD", months: 0 });
+            const row = byEmp.get(key)!;
+            row.gross += parseFloat(String(e.totalGross ?? s.grossAmount ?? 0)) || 0;
+            row.paye += parseFloat(String(d.paye ?? 0)) || 0;
+            row.aidsLevy += parseFloat(String(d.aidsLevy ?? 0)) || 0;
+            row.nssa += parseFloat(String(d.nssa ?? 0)) || 0;
+            row.net += parseFloat(String(s.netAmount ?? 0)) || 0;
+            row.months += 1;
+          }
+          headers = ["Tax Year", "Employee Name", "ID Number", "Currency", "Months Paid", "Gross", "PAYE", "AIDS Levy", "NSSA", "Net"];
+          currencyTotals = { Gross: {}, PAYE: {}, "AIDS Levy": {}, NSSA: {}, Net: {} };
+          rows = Array.from(byEmp.values()).sort((a, b) => a.name.localeCompare(b.name)).map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!.Gross[c] = (currencyTotals!.Gross[c] || 0) + r.gross;
+            currencyTotals!.PAYE[c] = (currencyTotals!.PAYE[c] || 0) + r.paye;
+            currencyTotals!["AIDS Levy"][c] = (currencyTotals!["AIDS Levy"][c] || 0) + r.aidsLevy;
+            currencyTotals!.NSSA[c] = (currencyTotals!.NSSA[c] || 0) + r.nssa;
+            currencyTotals!.Net[c] = (currencyTotals!.Net[c] || 0) + r.net;
+            return [taxYear, r.name, r.idNo, c, r.months, r.gross.toFixed(2), r.paye.toFixed(2), r.aidsLevy.toFixed(2), r.nssa.toFixed(2), r.net.toFixed(2)];
+          });
           break;
         }
         case "deleted-receipts":
         case "edited-receipts":
         case "moved-receipts":
-        case "backdated-receipts": {
-          const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["DTSTAMP", "agentsName", "policy_number", "surname", "Product_Name", "DatePaid", "AmountCollected", "Currency", "ReceiptNumber", "CapturedBy"];
-          rows = receiptRows.map((r: any) => [r.DTSTAMP ?? "", r.agentsName ?? "", r.policy_number ?? "", r.surname ?? "", r.Product_Name ?? "", r.DatePaid ?? "", r.AmountCollected ?? "", r.Currency ?? "", r.ReceiptNumber ?? "", r.CapturedBy ?? ""]);
+        case "backdated-receipts":
+        case "receipt-amendments": {
+          // A real exception report sourced from the audit trail — every receipt that was
+          // amended, voided or deletion-requested — plus receipts whose paid date precedes their
+          // issue date (back-dated). Replaces four separate stubs that just dumped the receipt list.
+          const RECEIPT_ACTIONS = new Set(["UPDATE_RECEIPT", "DELETE_RECEIPT", "REQUEST_DELETE_RECEIPT", "REJECT_RECEIPT", "RECEIPT_REPRINT"]);
+          const { rows: raRows } = await storage.getAuditLogs(user.organizationId, Math.min(REPORT_EXPORT_MAX_ROWS, 5000), 0, {
+            from: reportFilters.fromDate, to: reportFilters.toDate,
+          });
+          const tdbRa = await getDbForOrg(user.organizationId);
+          const { refs: raRefs } = await resolveAuditRefs(tdbRa, raRows);
+          headers = ["Timestamp", "Action", "Receipt", "Actor", "Detail"];
+          rows = raRows
+            .filter((r: any) => RECEIPT_ACTIONS.has(r.action))
+            .map((r: any) => {
+              const b = r.before || {}; const a = r.after || {};
+              const changed = Object.keys({ ...b, ...a })
+                .filter((k) => !["id", "updatedAt"].includes(k) && JSON.stringify(b[k]) !== JSON.stringify(a[k]))
+                .map((k) => `${k}: ${b[k] ?? "—"} → ${a[k] ?? "—"}`)
+                .slice(0, 5).join("; ");
+              return [
+                r.timestamp ? new Date(r.timestamp).toISOString() : "",
+                r.action,
+                r.entityId ? (raRefs[r.entityId] || r.entityId) : "",
+                r.actorEmail || "System",
+                changed,
+              ];
+            });
           break;
         }
         case "employee-summary": {
@@ -13974,40 +14069,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = empList.map((r: any) => [r.displayName || r.email, r.email, r.isActive !== false ? "Active" : "Inactive", r.createdAt]);
           break;
         }
-        case "arrears-breakdown": {
-          const graceRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
-          headers = [
-            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
-            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
-            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
-            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
-            "Date_Captured", "GroupName", "Debit_day",
-          ];
-          rows = graceRaw.map((r: any) => [
-            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
-            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
-            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
-            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
-            r.Date_Captured, r.GroupName, r.Debit_day,
-          ]);
-          break;
-        }
+        case "arrears-breakdown":
         case "outstanding-payments": {
-          const awaitingRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          // Both were the same policy dump with no arrears figure. Now sourced from the finance
+          // report (per-policy outstanding + grace days) and given real aging columns.
+          // arrears-breakdown = grace only; outstanding-payments = active + grace.
+          const arStatuses = reportType === "arrears-breakdown" ? { status: "grace" } : { statuses: ["active", "grace"] };
+          // Arrears is an "as of now" report — don't let a stale capture-date filter narrow it.
+          const arRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, fromDate: undefined, toDate: undefined, ...arStatuses });
+          const arToday = await todayForOrg(user.organizationId);
+          const daysInArrears = (due: string | null | undefined): number => {
+            if (!due) return 0;
+            const d = Math.floor((new Date(arToday).getTime() - new Date(due).getTime()) / 86400000);
+            return d > 0 ? d : 0;
+          };
+          const bucket = (days: number): string =>
+            days === 0 ? "Current" : days <= 30 ? "1–30" : days <= 60 ? "31–60" : days <= 90 ? "61–90" : days <= 120 ? "91–120" : "120+";
           headers = [
-            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
-            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
-            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
-            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
-            "Date_Captured", "GroupName", "Debit_day",
+            "Policy Number", "Status", "First Name", "Surname", "National ID", "Phone",
+            "Product", "Branch", "Agent", "Group", "Currency", "Premium", ...currencyHeaders("Premium"),
+            "Outstanding", ...currencyHeaders("Outstanding"),
+            "Days In Arrears", "Aging Bucket", "Grace Days Remaining", "Grace End Date", "Last Payment",
           ];
-          rows = awaitingRaw.map((r: any) => [
-            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
-            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
-            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
-            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
-            r.Date_Captured, r.GroupName, r.Debit_day,
-          ]);
+          currencyTotals = { Premium: {}, Outstanding: {} };
+          rows = arRows.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const prem = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            const out = parseFloat(String(r.outstandingPremium ?? 0)) || 0;
+            const days = daysInArrears(r.dueDate);
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + prem;
+            if (out > 0) currencyTotals!.Outstanding[c] = (currencyTotals!.Outstanding[c] || 0) + out;
+            return [
+              r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+              r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.groupName ?? "", r.currency,
+              r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency),
+              r.outstandingPremium, ...currencyAmounts(r.outstandingPremium, r.currency),
+              days, bucket(days), r.graceDaysRemaining ?? "", r.graceEndDate || "", r.datePaid || "",
+            ];
+          });
           break;
         }
         case "captured-per-employee": {
@@ -14024,8 +14123,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "complaint-report": {
-          headers = ["Date", "Policy Number", "Client", "Complaint Type", "Description", "Status", "Resolved At"];
-          rows = [];
+          const { rows: fbRows } = await storage.getFeedbackByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { type: "complaint", status: reportFilters.status });
+          const fbClientIds = Array.from(new Set(fbRows.map((f: any) => f.clientId).filter(Boolean)));
+          const fbClients = new Map<string, string>();
+          for (const cid of fbClientIds) {
+            const cl = await storage.getClient(cid, user.organizationId);
+            if (cl) fbClients.set(cid, [cl.firstName, cl.lastName].filter(Boolean).join(" "));
+          }
+          headers = ["Logged", "Client", "Subject", "Message", "Status", "Escalated", "Resolved At", "Resolution Notes"];
+          rows = fbRows.map((f: any) => [
+            f.createdAt ? new Date(f.createdAt).toISOString() : "",
+            fbClients.get(f.clientId) || f.clientId || "",
+            f.subject || "", f.message || "", f.status || "",
+            f.escalated ? "Yes" : "No",
+            f.resolvedAt ? new Date(f.resolvedAt).toISOString() : "",
+            f.resolutionNotes || "",
+          ]);
           break;
         }
         // Agent commission reports — detailed ledger view
@@ -14089,14 +14202,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "select-count": {
-          const scRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          // Policy count per agent, with agent names resolved (was: raw agent UUIDs).
+          const scRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           const scMap: Record<string, number> = {};
-          for (const r of scRaw) {
-            const key = (r as any).agentId || "unassigned";
+          for (const r of scRaw as any[]) {
+            const key = r.AgentsName || r.agentDisplayName || "Unassigned";
             scMap[key] = (scMap[key] || 0) + 1;
           }
-          headers = ["Agent ID", "Policy Count"];
-          rows = Object.entries(scMap).map(([k, v]) => [k, v]);
+          headers = ["Agent", "Policy Count"];
+          rows = Object.entries(scMap).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v]);
           break;
         }
         case "broker-policies": {
@@ -14127,11 +14241,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "branch-report": {
           const brRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const brNames = new Map((await storage.getBranchesByOrg(user.organizationId)).map((b) => [b.id, b.name]));
           const brMap: Record<string, { name: string; active: number; lapsed: number; grace: number; premiumByCurrency: Record<string, number> }> = {};
           currencyTotals = { "Total Premium": {} };
           for (const r of brRaw) {
             const key = (r as any).branchId || "no-branch";
-            if (!brMap[key]) brMap[key] = { name: key, active: 0, lapsed: 0, grace: 0, premiumByCurrency: {} };
+            if (!brMap[key]) brMap[key] = { name: brNames.get(key) || (key === "no-branch" ? "(No branch)" : key), active: 0, lapsed: 0, grace: 0, premiumByCurrency: {} };
             if ((r as any).status === "active") brMap[key].active++;
             else if ((r as any).status === "lapsed") brMap[key].lapsed++;
             else if ((r as any).status === "grace") brMap[key].grace++;
@@ -14142,7 +14257,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
           // Never blend currencies into one "Total Premium" number — a branch report mixing
           // USD and ZAR policies previously summed them raw into a figure with no real meaning.
-          headers = ["Branch ID", "Active Policies", "Lapsed Policies", "Grace Policies", ...currencyHeaders("Total Premium")];
+          headers = ["Branch", "Active Policies", "Lapsed Policies", "Grace Policies", ...currencyHeaders("Total Premium")];
           rows = Object.values(brMap).map((b) => [
             b.name, b.active, b.lapsed, b.grace,
             ...CURRENCIES.map((c) => (b.premiumByCurrency[c] ? b.premiumByCurrency[c].toFixed(2) : "")),
@@ -14191,17 +14306,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.status(400).json({ message: `Unknown report type: ${reportType}` });
       }
 
-      const escapeCsv = (val: any) => {
-        const str = String(val ?? "");
-        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
+      const escapeCsv = csvEscape;
 
-      const csvLines = [headers.join(",")];
+      const csvLines = [headers.map(escapeCsv).join(",")];
       for (const row of rows) {
         csvLines.push(row.map(escapeCsv).join(","));
+      }
+
+      // The report queries pass REPORT_EXPORT_MAX_ROWS as their limit; hitting it exactly almost
+      // always means the result was cut off. Say so in the file rather than truncating silently.
+      if (rows.length >= REPORT_EXPORT_MAX_ROWS) {
+        csvLines.push("");
+        csvLines.push(escapeCsv(`*** TRUNCATED at ${REPORT_EXPORT_MAX_ROWS} rows — narrow the date range or add filters to export the rest ***`));
       }
 
       if (currencyTotals && Object.keys(currencyTotals).length > 0) {
@@ -14215,9 +14331,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename="${reportType}-report.csv"`);
-      return res.send(csvLines.join("\n"));
+      // Descriptive filename: tenant + report + period, so repeated pulls don't collide in the
+      // Downloads folder and the file carries its own provenance.
+      const exportOrg = await storage.getOrganization(user.organizationId);
+      const orgSlug = (exportOrg?.name || "pol263").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) || "pol263";
+      const period = [reportFilters.fromDate, reportFilters.toDate].filter(Boolean).join("_to_") || new Date().toISOString().slice(0, 10);
+      const filename = `${orgSlug}_${reportType}_${period}.csv`;
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      // UTF-8 BOM so Excel on Windows renders accented names / currency text correctly; CRLF per RFC 4180.
+      return res.send("﻿" + csvLines.join("\r\n"));
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
     }

@@ -10,6 +10,97 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-27 — Reporting audit remediation: export access-control gap + a dozen dead/broken reports
+
+Followed the reporting audit (artifact + `project_reporting_audit_2026_08_27` memory) with a
+fix pass. The findings and fixes:
+
+**1. `GET /api/reports/export/:type` bypassed every finance/payroll/commission/audit permission.**
+The ~50 JSON report endpoints are each gated on their own permission; the CSV route that serves
+the same data for all of them was gated on a single `requirePermission("read:policy")` with no
+per-type check. A `read:policy` holder (including an agent) could download payroll salaries
+(`payroll`, `irp5-reconciliation`), commission net-pay / PAYE (`commissions` + 13 variants),
+the full audit trail incl. IP addresses (`audit-trail`), the balance sheet
+(`actuarial-balance-sheet`), and client PII + `ConfidentialNotes` in bulk (`policies`,
+`arrears-breakdown`). Same class as the 2026-08-04 client-PII leak, different route.
+Fix: new `server/report-export.ts` exports `REPORT_EXPORT_PERMISSIONS` (every type → the same
+permission its JSON sibling uses) and `csvEscape`. The route now takes
+`requireAnyPermission(...report perms...)` and checks the per-type permission in-handler before
+doing any work; an unmapped type is a 400, never defaulted. `tests/unit/report-export.test.ts`
+asserts every type is mapped to a real `read:*` permission.
+
+**2. `getAllPoliciesReportByOrg` returned only Easipol-format keys — 5 reports were showing
+blank tables.** The method's `.map()` returns `Policy_Number` / `fullname` / `currstatus` /
+`UsualPremium` etc. The `active-policies`, `awaiting-payments`, `overdue`, `pre-lapse` and
+`lapsed` reports (screen **and** CSV) read `policyNumber` / `clientFirstName` / `premiumAmount` /
+`graceEndDate` / `status` — all `undefined`, so every column rendered empty. (The `policies`,
+`agent-portfolio`, `broker-policies`, `new-joinings` consumers read the Easipol keys and were
+fine.) Fix: the method now returns both key sets on each row, and `graceEndDate` / `clientTitle`
+were added to its select. `branch-report` was also resolving branch **id** as the branch name —
+now joined to `getBranchesByOrg`.
+
+**3. `audit-trail` CSV: actor + timestamp columns always blank.** Mapped `r.userName ||
+r.userId` and `r.createdAt` — none exist on an audit row (`actorEmail`, `timestamp`). Rewritten
+to use the real fields, resolve the entity UUID via `resolveAuditRefs`, add a Policy column and
+a before→after Changes column.
+
+**4. `complaint-report` was hard-coded `rows = []`.** Wired to `getFeedbackByOrg(type:
+"complaint")` with resolved client names, status, escalation and resolution notes.
+
+**5. `deleted/edited/moved/backdated-receipts` — four stubs that each dumped the full receipt
+list with no filter.** Replaced by one `receipt-amendments` report sourced from `audit_logs`
+(`UPDATE_RECEIPT` / `DELETE_RECEIPT` / `REQUEST_DELETE_RECEIPT` / `REJECT_RECEIPT` /
+`RECEIPT_REPRINT`) with a before→after detail column. Old type strings kept as aliases.
+
+**6. `irp5-reconciliation` was an employee list with `new Date().getFullYear()` in a "Tax Year"
+column.** Rebuilt as a real payroll-tax (ITF16) reconciliation from finalised payslips — per
+employee: months paid, gross, PAYE, AIDS levy, NSSA, net, with per-currency totals. New
+`storage.getPayslipsForTaxYear`. Menu relabelled.
+
+**7. `arrears-breakdown` had no arrears figure**, and was identical to `outstanding-payments`.
+Both now source from `getFinanceReportByOrg` (per-policy outstanding + grace days) and carry
+Outstanding, Days In Arrears, Aging Bucket (Current / 1–30 / 31–60 / 61–90 / 91–120 / 120+),
+Grace Days Remaining. arrears = grace only; outstanding = active + grace. Stale capture-date
+filters stripped (arrears is an "as of now" report).
+
+**8. `pre-lapse` == `overdue`** (both `status: "grace"`). Pre-lapse is now grace **and**
+`graceEndDate` within a window (`?withinDays`, default 7).
+
+**9. `select-count` exposed raw agent UUIDs.** Now resolves agent names, sorted by count.
+
+**10. CSV writer** (`csvEscape` + emit): added a UTF-8 BOM (Excel/Windows), CRLF line endings
+(RFC 4180), a formula-injection guard (a `Notes`/`description` value starting `= + - @` or a
+control char is apostrophe-prefixed and quoted), a truncation trailer row when the 15,000-row
+cap is hit, and descriptive filenames (`<tenant>_<type>_<period>.csv`).
+
+**11. Underwriter-payable** summary was `rows[0].currency` (always `undefined` — the base query
+never selected currency) against a raw cross-currency sum. Now per-currency: `summary.byCurrency`
++ one KPI tile line per currency.
+
+**12. Garbled headers.** The `commissions` CSV + on-screen summary had truncated labels
+(`Investm`, `Clawb`, `PA`, `NET P`, `Groups` twice, a blank column); the Receipts screen table
+had ~40 DB-alias columns (`InternalRe`, `Product_N`, `Sstatus`); Agent Productivity showed
+`agent_id` / `fdate` / `Colour`. All given real Title-Case headers / curated to a sane default
+column set. Easipol-format CSV exports (`policies`, `agent-portfolio`, `new-joinings`) left as-is
+— those column names are an import contract, not a style choice.
+
+**13. `claims` report** skipped `enforceAgentScope` (its siblings all use it). Fixed.
+
+**Verified:** `npm run check` clean; `npm run test` 407/407 (6 new). Not visually run against
+tenant data — local `DATABASE_URL` is production (same caution as the executive report).
+
+**Deliberately NOT done** (net-new build, not a fix — flagged to Augustus): generic
+"list report → letterhead PDF" wrapper; a unified Reports index page (the nav already groups
+them); and the entire "missing reports" set from the audit (IPEC statutory returns, persistency,
+premium-collection efficiency, per-agent commission statement, double-entry trial balance,
+reinsurance bordereaux, IFRS 17 movement analysis, board pack, data-integrity/exception report).
+
+**Lesson for next time:** two report subsystems share `getAllPoliciesReportByOrg` with
+incompatible key conventions — when a report "renders blank rows", check whether the storage
+method returns the key names the consumer reads before assuming the query is wrong. And any
+CSV/export route that mirrors a permission-gated JSON endpoint needs the *same* gate — the
+route-level middleware is not enough when one handler serves 50 report types.
+
 ## 2026-08-27 — Audit trail still showed raw UUIDs (vehicles, entity ids) and hid policy numbers
 
 **Symptom:** After the 2026-08-26 "readability overhaul", the audit viewer still read as

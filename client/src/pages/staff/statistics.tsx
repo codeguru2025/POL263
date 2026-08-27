@@ -33,9 +33,13 @@ export default function StaffStatistics() {
           <KpiStatCard label="Active policies" icon={ShieldCheck} value={stats?.activePolicies ?? "—"} />
           <KpiStatCard label="Covered lives" icon={Users} value={coveredLives?.coveredLives ?? "—"} />
           <KpiStatCard label="Total clients" icon={Users} value={stats?.totalClients ?? "—"} />
-          <KpiStatCard label="Retention rate" icon={TrendingUp} value={retentionRate} />
-          <KpiStatCard label="Lapse rate" icon={Activity} value={lapseRate} />
+          <KpiStatCard label="Active share of book" icon={TrendingUp} value={retentionRate} />
+          <KpiStatCard label="Lapsed share of book" icon={Activity} value={lapseRate} />
         </div>
+        <p className="text-xs text-muted-foreground -mt-2">
+          &ldquo;Share of book&rdquo; is a point-in-time split of all policies by status, not a
+          cohort persistency or period lapse rate.
+        </p>
 
         {/* Policy status breakdown */}
         <CardSection title="Policies by status" icon={FileText}>
