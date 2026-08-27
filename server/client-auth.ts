@@ -8,7 +8,6 @@ declare global {
     }
   }
 }
-import { differenceInCalendarMonths } from "date-fns";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { z } from "zod";
@@ -16,10 +15,11 @@ import argon2 from "argon2";
 import { createPaymentIntent, initiatePaynowPayment, pollPaynowStatus } from "./payment-service";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { streamPolicyDocumentToResponse } from "./policy-document";
-import { insertClaimSchema, insertClientFeedbackSchema, claims, claimStatusHistory } from "@shared/schema";
-import { withOrgTransaction, getDbForOrg } from "./tenant-db";
+import { insertClientFeedbackSchema } from "@shared/schema";
+import { getDbForOrg } from "./tenant-db";
 import { logPolicyView } from "./policy-activity-log";
-import { sql } from "drizzle-orm";
+import { enrichPoliciesWithBalance } from "./policy-balance";
+import { submitClientClaim, setPolicyBeneficiary, CustomerInputError, CustomerForbiddenError } from "./customer-self-service";
 import { sendEmail } from "./email-service";
 import { hasModule } from "./module-gate";
 import { validatePasswordPolicy } from "@shared/validation";
@@ -381,65 +381,19 @@ export function setupClientAuth(app: Express) {
     const clientId = req.client!.id;
     const clientOrgId = req.client!.organizationId;
 
-    async function enrichWithBalance(policies: any[], orgId: string) {
-      const enriched = [];
-      for (const p of policies) {
-        const payments = await storage.getPaymentsByPolicy(p.id, orgId);
-        const totalPaid = payments
-          .filter((tx: any) => tx.status === "cleared")
-          .reduce((sum: number, tx: any) => sum + parseFloat(tx.amount || "0"), 0);
-        const premium = parseFloat(p.premiumAmount || "0");
-        const startDate = p.inceptionDate || p.effectiveDate;
-        let totalDue = 0;
-        let periodsElapsed = 0;
-        if (startDate && premium > 0) {
-          const start = new Date(startDate);
-          const now = new Date();
-          if (!isNaN(start.getTime()) && start <= now) {
-            const schedule = p.paymentSchedule || "monthly";
-            if (schedule === "monthly") {
-              periodsElapsed = Math.max(0, differenceInCalendarMonths(now, start));
-            } else if (schedule === "quarterly") {
-              periodsElapsed = Math.max(0, Math.floor(differenceInCalendarMonths(now, start) / 3));
-            } else if (schedule === "annually") {
-              periodsElapsed = Math.max(0, Math.floor(differenceInCalendarMonths(now, start) / 12));
-            } else {
-              const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
-              const periodDays = schedule === "weekly" ? 7 : 14;
-              periodsElapsed = Math.max(0, Math.ceil(daysElapsed / periodDays));
-            }
-            totalDue = periodsElapsed * premium;
-          }
-        }
-        // Fold in the signed credit-balance wallet (premium-change reconciliations + overpayments):
-        // positive = credit/paid ahead, negative = arrears owed.
-        const wallet = await storage.getPolicyCreditBalance(orgId, p.id);
-        const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
-        const balance = totalPaid + walletBalance - totalDue;
-        enriched.push({
-          ...p,
-          totalPaid: totalPaid.toFixed(2),
-          totalDue: totalDue.toFixed(2),
-          balance: balance.toFixed(2),
-          outstanding: Math.max(0, -balance).toFixed(2),
-          walletBalance: walletBalance.toFixed(2),
-          periodsElapsed,
-        });
-      }
-      return enriched;
-    }
-
+    // Balance/arrears enrichment now lives in server/policy-balance.ts (shared with the
+    // customer-service API) — same implementation, byte-for-byte (tests/unit/policy-balance.test.ts).
     if (!clientOrgId) {
       const orgs = await getCachedOrgIds();
       const foundClient = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-policies-fallback");
       if (foundClient) {
         const rawPolicies = await storage.getPoliciesByClient(clientId, foundClient.organizationId);
-        return res.json(await enrichWithBalance(rawPolicies, foundClient.organizationId));
+        return res.json(await enrichPoliciesWithBalance(rawPolicies, foundClient.organizationId));
       }
       return res.json([]);
     }
     const clientPolicies = await storage.getPoliciesByClient(clientId, clientOrgId);
-    return res.json(await enrichWithBalance(clientPolicies, clientOrgId));
+    return res.json(await enrichPoliciesWithBalance(clientPolicies, clientOrgId));
   });
 
   /**
@@ -622,40 +576,15 @@ export function setupClientAuth(app: Express) {
   app.post("/api/client-auth/claims", requireClientAuth, async (req: Request, res: Response) => {
     const clientId = req.client!.id;
     const clientOrgId = req.client!.organizationId;
-    const { policyId, claimType, deceasedName, deceasedRelationship, dateOfDeath, causeOfDeath } = req.body;
-    if (!policyId || !claimType) return res.status(400).json({ message: "Policy and claim type are required" });
-    const policy = await storage.getPolicy(policyId, clientOrgId);
-    if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
+    // Claim submission (sequence allocation, CLM-NNNNNN, claims + claim_status_history) now lives
+    // in server/customer-self-service.ts, shared with the customer-service API. Behaviour and the
+    // claim_status_history reason string ("Submitted via client portal") are unchanged.
     try {
-      const parsedBase = {
-        organizationId: clientOrgId,
-        policyId,
-        clientId,
-        claimType,
-        status: "submitted",
-        deceasedName: deceasedName || null,
-        deceasedRelationship: deceasedRelationship || null,
-        dateOfDeath: dateOfDeath || null,
-        causeOfDeath: causeOfDeath || null,
-      };
-      const claim = await withOrgTransaction(clientOrgId, async (txDb) => {
-        const seqResult = await txDb.execute(sql`
-          INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${clientOrgId}, 1)
-          ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1
-          RETURNING claim_next
-        `);
-        const nextVal = (seqResult as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
-        const claimNumber = `CLM-${String(nextVal).padStart(6, "0")}`;
-        const parsed = insertClaimSchema.parse({ ...parsedBase, claimNumber });
-        const [created] = await txDb.insert(claims).values(parsed).returning();
-        await txDb.insert(claimStatusHistory).values({
-          claimId: created.id, fromStatus: null, toStatus: "submitted", reason: "Submitted via client portal", changedBy: undefined,
-        });
-        return created;
-      });
+      const claim = await submitClientClaim(clientOrgId, clientId, req.body || {});
       return res.status(201).json(claim);
     } catch (err) {
-      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors?.[0]?.message || "Validation failed" });
+      if (err instanceof CustomerInputError) return res.status(400).json({ message: err.message });
+      if (err instanceof CustomerForbiddenError) return res.status(403).json({ message: "Access denied" });
       structuredLog("error", "Client claim submit error", { error: (err as Error).message });
       return res.status(500).json({ message: "Internal server error" });
     }
@@ -1252,36 +1181,15 @@ export function setupClientAuth(app: Express) {
     const clientOrgId = req.client!.organizationId;
     const policy = await storage.getPolicy(req.params.id as string, clientOrgId);
     if (!policy || policy.clientId !== clientId) return res.status(403).json({ message: "Access denied" });
-
-    const { dependentId, firstName, lastName, relationship, nationalId, phone } = req.body || {};
-
-    if (dependentId) {
-      const deps = await storage.getDependentsByClient(clientId, clientOrgId);
-      const dep = deps.find((d) => d.id === dependentId);
-      if (!dep) return res.status(400).json({ message: "Dependent not found" });
-      await storage.updatePolicy(policy.id, {
-        beneficiaryFirstName: dep.firstName,
-        beneficiaryLastName: dep.lastName,
-        beneficiaryRelationship: dep.relationship,
-        beneficiaryNationalId: dep.nationalId || null,
-        beneficiaryPhone: null,
-        beneficiaryDependentId: dep.id,
-      }, clientOrgId);
-      return res.json({ message: "Dependent appointed as beneficiary" });
+    // Beneficiary write logic now lives in server/customer-self-service.ts, shared with the
+    // customer-service API. Behaviour and messages are unchanged.
+    try {
+      const result = await setPolicyBeneficiary(clientOrgId, clientId, policy, req.body || {});
+      return res.json(result);
+    } catch (err) {
+      if (err instanceof CustomerInputError) return res.status(400).json({ message: err.message });
+      throw err;
     }
-
-    if (!firstName || !lastName) {
-      return res.status(400).json({ message: "Beneficiary first name and last name are required" });
-    }
-    await storage.updatePolicy(policy.id, {
-      beneficiaryFirstName: String(firstName).trim(),
-      beneficiaryLastName: String(lastName).trim(),
-      beneficiaryRelationship: relationship ? String(relationship).trim() : null,
-      beneficiaryNationalId: nationalId ? String(nationalId).trim() : null,
-      beneficiaryPhone: phone ? String(phone).trim() : null,
-      beneficiaryDependentId: null,
-    }, clientOrgId);
-    return res.json({ message: "Beneficiary set" });
   });
 
   app.delete("/api/client-auth/policies/:id/beneficiary", requireClientAuth, async (req: Request, res: Response) => {

@@ -93,12 +93,13 @@ if (enableCsrf) {
     "/api/auth/mobile-exchange",
     "/api/client-auth/login",
     "/api/client-auth/logout",
-    // Customer-service chatbot (SMSALA): server-to-server, authenticated by a per-tenant bearer
-    // shared secret (server/customer-service-integration.ts), never a browser session.
-    "/api/customer-service/verify",
   ];
+  // The whole customer-service API (server/customer-service-routes.ts) is server-to-server,
+  // authenticated by a per-tenant bearer shared secret + verification token — never a browser
+  // session — so it carries no CSRF token. Narrowly exempt just this one namespace.
+  const isCustomerServicePath = (p: string) => p === "/api/customer-service" || p.startsWith("/api/customer-service/");
   app.use((req, res, next) => {
-    if (CSRF_EXEMPT_PATHS.includes(req.path)) return next();
+    if (CSRF_EXEMPT_PATHS.includes(req.path) || isCustomerServicePath(req.path)) return next();
     return csrfProtection(req, res, next);
   });
 
@@ -267,16 +268,28 @@ if (enableCsrf) {
   app.use("/api/public/verify", publicLimiter);
   app.use("/api/public/tenant-context", publicLimiter);
 
-  // Customer-service chatbot (SMSALA, server-to-server, bearer-secret auth). Low legitimate
-  // volume — one verification per WhatsApp conversation start — so a tight budget also caps
-  // brute-force of the guessable (policy number, ID, phone) triple.
+  // Customer-service API (SMSALA WhatsApp bot, server-to-server, bearer-secret + token auth).
+  //  • /verify keeps the strict 20/min bucket — one verification per conversation start, and it
+  //    also caps brute-force of the guessable (policy number, ID, phone) triple.
+  //  • the authenticated endpoints get 60/min — a real WhatsApp conversation makes several calls.
+  // Both limiters run for /verify (mounted more-specific-first), so /verify stays at 20/min.
+  app.use(
+    "/api/customer-service/verify",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("customer-service-verify"),
+      windowMs: 60 * 1000,
+      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      message: { error: "rate_limited" },
+    })
+  );
   app.use(
     "/api/customer-service",
     rateLimit({
       ...limiterOpts,
       store: getRedisStore?.("customer-service"),
       windowMs: 60 * 1000,
-      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      max: process.env.NODE_ENV === "production" ? 60 : 600,
       message: { error: "rate_limited" },
     })
   );
