@@ -13326,6 +13326,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getAnniversaryReport((req.user as any).organizationId, withinDays));
   });
 
+  app.get("/api/reports/premium-bordereau", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getPremiumBordereau(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/claims-bordereau", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getClaimsBordereau(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
@@ -14514,6 +14530,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const an = await storage.getAnniversaryReport(user.organizationId, withinDays);
           headers = ["Policy #", "Client", "Phone", "Product", "Branch", "Currency", "Premium", "Inception Date", "Next Anniversary", "Days Until", "Years In Force"];
           rows = an.map((r) => [r.policyNumber, r.client, r.phone, r.product, r.branch, r.currency, r.premium, r.inceptionDate, r.nextAnniversary, r.daysUntil, r.yearsInForce]);
+          break;
+        }
+        case "premium-bordereau": {
+          const orgTodayPb = await todayForOrg(user.organizationId);
+          const bd = await storage.getPremiumBordereau(user.organizationId, reportFilters.fromDate || `${orgTodayPb.slice(0, 7)}-01`, reportFilters.toDate || orgTodayPb);
+          headers = ["Policy Number", "Insured", "National ID", "Product", "Branch", "Inception Date", "Sum Insured", "Sum Insured Currency", "Currency", "Gross Premium (monthly)", "Lives", "Premium Ceded (monthly)", "Retained Premium (monthly)", "Period From", "Period To"];
+          currencyTotals = { "Gross Premium (monthly)": {}, "Premium Ceded (monthly)": {} };
+          rows = bd.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!["Gross Premium (monthly)"][c] = (currencyTotals!["Gross Premium (monthly)"][c] || 0) + r.grossPremium;
+            currencyTotals!["Premium Ceded (monthly)"][c] = (currencyTotals!["Premium Ceded (monthly)"][c] || 0) + r.cededPremiumMonthly;
+            return [r.policyNumber, r.insured, r.nationalId, r.product, r.branch, r.inceptionDate, r.sumInsured ?? "", r.sumInsuredCurrency, r.currency, r.grossPremium.toFixed(2), r.lives, r.cededPremiumMonthly.toFixed(2), r.retainedPremiumMonthly.toFixed(2), r.periodFrom, r.periodTo];
+          });
+          break;
+        }
+        case "claims-bordereau": {
+          const orgTodayCb = await todayForOrg(user.organizationId);
+          const cb = await storage.getClaimsBordereau(user.organizationId, reportFilters.fromDate || `${orgTodayCb.slice(0, 7)}-01`, reportFilters.toDate || orgTodayCb);
+          headers = ["Claim Number", "Policy Number", "Insured", "Deceased", "Product", "Claim Type", "Date Of Death", "Date Reported", "Status", "Currency", "Sum Insured", "Gross Claim", "Period From", "Period To"];
+          currencyTotals = { "Gross Claim": {} };
+          rows = cb.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            if (r.grossClaim > 0) currencyTotals!["Gross Claim"][c] = (currencyTotals!["Gross Claim"][c] || 0) + r.grossClaim;
+            return [r.claimNumber, r.policyNumber, r.insured, r.deceased, r.product, r.claimType, r.dateOfDeath, r.dateReported, r.status, r.currency, r.sumInsured ?? "", r.grossClaim.toFixed(2), r.periodFrom, r.periodTo];
+          });
           break;
         }
         case "claims-aging": {

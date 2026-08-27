@@ -244,6 +244,22 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("ipecReturn"),
   });
+  const { data: premiumBordereau = [], isLoading: loadingPremBd } = useQuery<any[]>({
+    queryKey: ["reports", "premium-bordereau", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/premium-bordereau" + q, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("premiumBordereau"),
+  });
+  const { data: claimsBordereau = [], isLoading: loadingClaimsBd } = useQuery<any[]>({
+    queryKey: ["reports", "claims-bordereau", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/claims-bordereau" + q, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("claimsBordereau"),
+  });
   const { data: chartOfAccounts = [] } = useQuery<any[]>({
     queryKey: ["reports", "chart-of-accounts"],
     queryFn: async () => (await fetch(getApiBase() + "/api/reports/chart-of-accounts", { credentials: "include" })).json().catch(() => []),
@@ -761,6 +777,82 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               storageKey="reports-platform"
               emptyMessage="No POL263 Platform receivables recorded."
             />
+          )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="reinsurance">
+        <CardSection
+          title="Reinsurance premium bordereau"
+          description="Per-policy premium ceded to the underwriter / reinsurer for the period. The cession is the configured per-adult / per-child underwriter amount (same basis as Underwriter payable). Exchanged with the reinsurer as CSV."
+          icon={Truck}
+          headerRight={<ExportButton reportType="premium-bordereau" filters={filters} />}
+          flush
+        >
+          {loadingPremBd ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (premiumBordereau as any[]).length === 0 ? (
+            <EmptyState title="No policies with an underwriter cession" description="No active/grace policies on products that carry a configured underwriter amount." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-xs min-w-[900px]">
+                <thead className="bg-muted/40 uppercase text-[10px] text-muted-foreground">
+                  <tr>{["Policy", "Insured", "Product", "Inception", "Sum insured", "Gross prem (mo)", "Lives", "Ceded (mo)", "Retained (mo)"].map((h) => <th key={h} className="text-left px-2 py-1.5 whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(premiumBordereau as any[]).map((r, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.policyNumber}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[160px] truncate" title={r.insured}>{r.insured}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.product}>{r.product}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.inceptionDate || "—"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.sumInsured != null ? `${r.sumInsuredCurrency} ${Number(r.sumInsured).toLocaleString()}` : "—"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.currency} {r.grossPremium.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{r.lives}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium">{r.currency} {r.cededPremiumMonthly.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.currency} {r.retainedPremiumMonthly.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardSection>
+
+        <CardSection
+          title="Reinsurance claims bordereau"
+          description="Per-claim detail for the period for the reinsurer to apply the treaty cession. Reports the gross claim; the recoverable share depends on the treaty and is applied by the reinsurer."
+          icon={Shield}
+          headerRight={<ExportButton reportType="claims-bordereau" filters={filters} />}
+          flush
+        >
+          {loadingClaimsBd ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (claimsBordereau as any[]).length === 0 ? (
+            <EmptyState title="No claims in the selected period" className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-xs min-w-[820px]">
+                <thead className="bg-muted/40 uppercase text-[10px] text-muted-foreground">
+                  <tr>{["Claim", "Policy", "Insured", "Deceased", "Type", "Date of death", "Reported", "Status", "Gross claim"].map((h) => <th key={h} className="text-left px-2 py-1.5 whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(claimsBordereau as any[]).map((r, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.claimNumber}</td>
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.policyNumber}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.insured}>{r.insured}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.deceased}>{r.deceased || "—"}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.claimType}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.dateOfDeath || "—"}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.dateReported}</td>
+                      <td className="px-2 py-1 whitespace-nowrap capitalize">{r.status}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium">{r.grossClaim > 0 ? `${r.currency} ${r.grossClaim.toFixed(2)}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardSection>
       </TabsContent>

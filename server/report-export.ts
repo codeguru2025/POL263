@@ -33,6 +33,7 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "actuarial-exposure": "read:finance", "actuarial-balance-sheet": "read:finance",
   "insurance-contract-summary": "read:finance", "collection-efficiency": "read:finance",
   "trial-balance": "read:finance", "general-ledger": "read:finance",
+  "premium-bordereau": "read:finance", "claims-bordereau": "read:finance",
   "data-integrity": "read:report",
   // ── Claims / funerals / fleet ──
   "claims": "read:claim", "claims-aging": "read:claim", "claims-analytics": "read:claim",
@@ -96,6 +97,8 @@ export function reportExportLabel(type: string): string {
     "anniversary": "Policy Anniversary / Review List",
     "trial-balance": "Trial Balance & Financial Position",
     "general-ledger": "General Ledger",
+    "premium-bordereau": "Reinsurance Premium Bordereau",
+    "claims-bordereau": "Reinsurance Claims Bordereau",
   };
   return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

@@ -442,6 +442,10 @@ export interface IStorage {
   getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{ lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[]; repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[] }>;
   /** Active/grace policies whose inception anniversary falls within the next `withinDays` days. */
   getAnniversaryReport(organizationId: string, withinDays: number): Promise<{ policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number }[]>;
+  /** Per-policy reinsurance premium bordereau for a period. */
+  getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
+  /** Per-claim reinsurance claims bordereau for a period. */
+  getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2336,6 +2340,100 @@ export class DatabaseStorage implements IStorage {
       };
     }).filter((r) => r.daysUntil <= withinDays).sort((a, b) => a.daysUntil - b.daysUntil);
     return out;
+  }
+
+  /**
+   * Reinsurance premium bordereau — per-policy detail of premium ceded to the underwriter /
+   * reinsurer for a period. Standard proportional-treaty layout; the cession is the configured
+   * per-adult / per-child underwriter amount (product_versions), the same basis as the
+   * underwriter-payable report. Active + grace policies on products that carry an underwriter
+   * amount.
+   */
+  async getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT p.policy_number, p.currency, p.premium_amount, p.inception_date, p.status,
+             c.first_name, c.last_name, c.national_id,
+             prod.name AS product, prod.cover_amount, prod.cover_currency,
+             b.name AS branch,
+             pv.underwriter_amount_adult, pv.underwriter_amount_child, pv.underwriter_advance_months,
+             (SELECT COUNT(*) FROM policy_members pm WHERE pm.policy_id = p.id AND pm.is_active = true) AS lives
+      FROM policies p
+      JOIN clients c ON c.id = p.client_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      LEFT JOIN branches b ON b.id = p.branch_id
+      WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL
+        AND p.status IN ('active','grace')
+        AND (pv.underwriter_amount_adult IS NOT NULL OR pv.underwriter_amount_child IS NOT NULL)
+      ORDER BY p.policy_number`);
+    return rowsOf(res).map((r: any) => {
+      const lives = parseInt(r.lives) || 1;
+      const adultAmt = parseFloat(r.underwriter_amount_adult ?? "0") || 0;
+      const childAmt = parseFloat(r.underwriter_amount_child ?? r.underwriter_amount_adult ?? "0") || 0;
+      // Without a per-member adult/child split here, approximate cession as principal (adult) +
+      // (lives-1) at the child rate — matches the underwriter-payable report's fallback.
+      const cededMonthly = adultAmt + Math.max(0, lives - 1) * childAmt;
+      const grossPremium = parseFloat(r.premium_amount ?? "0") || 0;
+      return {
+        policyNumber: r.policy_number,
+        insured: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+        nationalId: r.national_id || "",
+        product: r.product || "",
+        branch: r.branch || "(No branch)",
+        inceptionDate: r.inception_date ? String(r.inception_date) : "",
+        sumInsured: r.cover_amount ? parseFloat(r.cover_amount) : null,
+        sumInsuredCurrency: r.cover_currency || r.currency || "USD",
+        currency: r.currency || "USD",
+        grossPremium,
+        lives,
+        cededPremiumMonthly: Number(cededMonthly.toFixed(2)),
+        retainedPremiumMonthly: Number(Math.max(0, grossPremium - cededMonthly).toFixed(2)),
+        periodFrom: from,
+        periodTo: to,
+      };
+    });
+  }
+
+  /**
+   * Reinsurance claims bordereau — per-claim detail for a period, for the reinsurer to apply the
+   * treaty cession. The recoverable amount depends on the treaty and is applied by the reinsurer,
+   * so this reports the gross claim; it does not compute a ceded share.
+   */
+  async getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT cl.claim_number, cl.claim_type, cl.status, cl.currency, cl.deceased_name,
+             cl.date_of_death, cl.created_at,
+             COALESCE(cl.cash_in_lieu_amount::numeric, 0) AS gross_claim,
+             p.policy_number, prod.cover_amount, prod.name AS product,
+             c.first_name, c.last_name
+      FROM claims cl
+      JOIN policies p ON p.id = cl.policy_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      JOIN clients c ON c.id = cl.client_id
+      WHERE cl.organization_id = ${organizationId}
+        AND cl.created_at >= ${new Date(from + "T00:00:00.000Z")} AND cl.created_at <= ${new Date(to + "T23:59:59.999Z")}
+      ORDER BY cl.created_at DESC`);
+    return rowsOf(res).map((r: any) => ({
+      claimNumber: r.claim_number,
+      policyNumber: r.policy_number,
+      insured: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+      deceased: r.deceased_name || "",
+      product: r.product || "",
+      claimType: r.claim_type,
+      dateOfDeath: r.date_of_death ? String(r.date_of_death) : "",
+      dateReported: r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : "",
+      status: r.status,
+      currency: r.currency || "USD",
+      sumInsured: r.cover_amount ? parseFloat(r.cover_amount) : null,
+      grossClaim: parseFloat(r.gross_claim),
+      periodFrom: from,
+      periodTo: to,
+    }));
   }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
