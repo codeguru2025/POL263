@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
-import { FolderOpen, Shield, UserCircle, Users, Wallet, Wrench } from "lucide-react";
+import { FolderOpen, Shield, ShieldAlert, UserCircle, Users, Wallet, Wrench } from "lucide-react";
 
-export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll";
+export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll" | "quality";
 
 /** Backend / client dataset keys used to gate report queries. */
 export type ReportDatasetId =
@@ -40,7 +40,9 @@ export type ReportDatasetId =
   | "branches"
   | "products"
   | "users"
-  | "insuranceContractSummary";
+  | "insuranceContractSummary"
+  | "dataIntegrity"
+  | "collectionEfficiency";
 
 export const SECTION_META: Record<ReportSectionId, { label: string; icon: LucideIcon }> = {
   policies: { label: "Policies", icon: FolderOpen },
@@ -49,6 +51,7 @@ export const SECTION_META: Record<ReportSectionId, { label: string; icon: Lucide
   claims: { label: "Claims", icon: Shield },
   operations: { label: "Operations", icon: Wrench },
   payroll: { label: "Payroll", icon: Users },
+  quality: { label: "Data Quality", icon: ShieldAlert },
 };
 
 export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: string; testId?: string }[]> = {
@@ -86,6 +89,10 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "commission-payments", label: "Commission by payment", testId: "tab-commission-payments" },
   ],
   claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
+  quality: [
+    { value: "data-integrity", label: "Data integrity", testId: "tab-data-integrity" },
+    { value: "collection-efficiency", label: "Collection efficiency", testId: "tab-collection-efficiency" },
+  ],
   operations: [
     { value: "funerals", label: "Funerals", testId: "tab-funerals-report" },
     { value: "fleet", label: "Fleet", testId: "tab-fleet-report" },
@@ -93,7 +100,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   payroll: [{ value: "payroll", label: "Payroll", testId: "tab-payroll-report" }],
 };
 
-const ALL_SECTIONS: ReportSectionId[] = ["policies", "finance", "agents", "claims", "operations", "payroll"];
+const ALL_SECTIONS: ReportSectionId[] = ["policies", "finance", "agents", "claims", "operations", "payroll", "quality"];
 
 export function tabsForSection(
   section: ReportSectionId,
@@ -125,6 +132,7 @@ export function visibleReportSections(opts: {
   if (opts.canReadClaim) out.push("claims");
   if (opts.canReadFuneralOps || opts.canReadFleet) out.push("operations");
   if (opts.canReadPayroll) out.push("payroll");
+  out.push("quality");
   return out;
 }
 
@@ -158,6 +166,8 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   commissions: ["commissionPlans", "commissionSummary"],
   "commission-payments": ["commissionPayments"],
   claims: ["claimsReport"],
+  "data-integrity": ["dataIntegrity"],
+  "collection-efficiency": ["collectionEfficiency"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
   payroll: ["payrollEmployees"],

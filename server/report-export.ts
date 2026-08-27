@@ -29,7 +29,8 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "receipt-amendments": "read:finance", "arrears-breakdown": "read:finance",
   "outstanding-payments": "read:finance",
   "actuarial-exposure": "read:finance", "actuarial-balance-sheet": "read:finance",
-  "insurance-contract-summary": "read:finance",
+  "insurance-contract-summary": "read:finance", "collection-efficiency": "read:finance",
+  "data-integrity": "read:report",
   // ── Claims / funerals / fleet ──
   "claims": "read:claim", "funerals": "read:funeral_ops", "fleet": "read:fleet",
   // ── Commission (read:commission) ──
@@ -49,6 +50,43 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "employee-summary": "read:user", "audit-trail": "read:audit_log",
   "complaint-report": "read:report",
 };
+
+/** Human-readable report title for the PDF header / filename. Falls back to a title-cased slug. */
+export function reportExportLabel(type: string): string {
+  const LABELS: Record<string, string> = {
+    "policy-details": "Policy Report — Full Details",
+    "active-policies": "Active Policies",
+    "awaiting-payments": "Policies Awaiting Payment",
+    "overdue": "Overdue Policies (In Grace)",
+    "pre-lapse": "Pre-Lapse Policies",
+    "lapsed": "Lapsed Policies",
+    "new-joinings": "New Joinings",
+    "finance": "Finance Report",
+    "underwriter-payable": "Underwriter Payable",
+    "receipts": "Policy Receipts Report",
+    "payments": "Payment Transactions",
+    "expenditures": "Expenditure Report",
+    "cashups": "Daily Cash-Ups",
+    "claims": "Claims Report",
+    "commission-payments": "Commission by Payment",
+    "commissions": "Monthly Commission Summary",
+    "agent-portfolio": "Agent Portfolio",
+    "agent-productivity": "Agent Productivity",
+    "arrears-breakdown": "Arrears Breakdown (with Aging)",
+    "outstanding-payments": "Clients with Outstanding Payments",
+    "audit-trail": "Audit Trail",
+    "receipt-amendments": "Receipt Amendments & Deletions",
+    "irp5-reconciliation": "Payroll Tax Reconciliation (ITF16)",
+    "complaint-report": "Complaints Report",
+    "branch-report": "Branch Report",
+    "reinstatements": "Reinstated Policies",
+    "conversions": "Policy Conversions",
+    "activations": "Policy Activations",
+    "data-integrity": "Data Integrity — Exceptions",
+    "collection-efficiency": "Premium Collection Efficiency",
+  };
+  return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 /**
  * Encode one CSV cell. RFC 4180 quoting for delimiter/quote/newline, plus a spreadsheet

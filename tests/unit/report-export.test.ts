@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { REPORT_EXPORT_PERMISSIONS, csvEscape } from "../../server/report-export";
+import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "../../server/report-export";
 
 describe("csvEscape", () => {
   it("passes a plain value through unquoted", () => {
@@ -37,6 +37,11 @@ describe("REPORT_EXPORT_PERMISSIONS", () => {
     expect(REPORT_EXPORT_PERMISSIONS["actuarial-balance-sheet"]).toBe("read:finance");
   });
 
+  it("gates the new data-quality reports correctly", () => {
+    expect(REPORT_EXPORT_PERMISSIONS["data-integrity"]).toBe("read:report");
+    expect(REPORT_EXPORT_PERMISSIONS["collection-efficiency"]).toBe("read:finance");
+  });
+
   it("every mapped permission is a real read:* permission", () => {
     const allowed = new Set([
       "read:policy", "read:finance", "read:commission", "read:payroll",
@@ -46,5 +51,15 @@ describe("REPORT_EXPORT_PERMISSIONS", () => {
     for (const [type, perm] of Object.entries(REPORT_EXPORT_PERMISSIONS)) {
       expect(allowed.has(perm), `${type} → ${perm}`).toBe(true);
     }
+  });
+});
+
+describe("reportExportLabel", () => {
+  it("uses the curated label when there is one", () => {
+    expect(reportExportLabel("arrears-breakdown")).toBe("Arrears Breakdown (with Aging)");
+    expect(reportExportLabel("irp5-reconciliation")).toBe("Payroll Tax Reconciliation (ITF16)");
+  });
+  it("title-cases the slug as a fallback", () => {
+    expect(reportExportLabel("some-new-report")).toBe("Some New Report");
   });
 });
