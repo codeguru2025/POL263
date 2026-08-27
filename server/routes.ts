@@ -13137,6 +13137,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, limit, offset, filters));
   });
 
+  app.get("/api/reports/commission-statement/pdf", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
+    const user = req.user as any;
+    const agentId = typeof req.query.agentId === "string" ? req.query.agentId : "";
+    if (!agentId) return res.status(400).json({ message: "agentId is required" });
+    const scoped = await enforceAgentScope(req, parseReportFilters(req.query));
+    if (scoped.agentId && scoped.agentId !== agentId) return res.status(403).json({ message: "Not permitted for this agent" });
+    const orgToday = await todayForOrg(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${orgToday.slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : orgToday;
+    const { streamCommissionStatementPdf } = await import("./commission-statement-pdf");
+    await streamCommissionStatementPdf(user.organizationId, agentId, from, to, res, { attachment: req.query.download === "1" });
+  });
+
   app.get("/api/reports/agent-portfolio/pdf", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));

@@ -253,24 +253,38 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
             <div className="flex flex-wrap items-center gap-2">
               <ExportButton reportType="commissions" filters={filters} />
               {agentId && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    const suffix = q ? `${q}&` : "?";
-                    const url = getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`;
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = "commissions-ledger.csv";
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                  }}
-                  data-testid="button-export-commission-ledger"
-                >
-                  <Download className="h-4 w-4 mr-1" />
-                  Agent ledger CSV
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const suffix = q ? `${q}&` : "?";
+                      const url = getApiBase() + `/api/reports/export/commissions${suffix}mode=ledger`;
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "commissions-ledger.csv";
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }}
+                    data-testid="button-export-commission-ledger"
+                  >
+                    <Download className="h-4 w-4 mr-1" />
+                    Agent ledger CSV
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const suffix = q ? `${q}&` : "?";
+                      window.open(getApiBase() + `/api/reports/commission-statement/pdf${suffix}agentId=${encodeURIComponent(agentId)}&download=1`, "_blank");
+                    }}
+                    data-testid="button-commission-statement-pdf"
+                  >
+                    <FileText className="h-4 w-4 mr-1" />
+                    Statement PDF
+                  </Button>
+                </>
               )}
             </div>
           }
