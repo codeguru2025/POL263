@@ -91,7 +91,7 @@ export default function StaffStatisticalGraphs() {
 
             {/* Retention vs lapse */}
             {retentionData.length > 0 && (
-              <CardSection title="Retention vs lapse rate" icon={BarChart3}>
+              <CardSection title="Book composition — active vs lapsed" icon={BarChart3}>
                 <ResponsiveContainer width="100%" height={220}>
                   <PieChart>
                     <Pie data={retentionData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, value }) => `${name} ${Number(value).toFixed(1)}%`} labelLine={false}>
