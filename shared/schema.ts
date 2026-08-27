@@ -3593,6 +3593,33 @@ export const insertBalanceSheetEntrySchema = createInsertSchema(balanceSheetEntr
 export type BalanceSheetEntry = typeof balanceSheetEntries.$inferSelect;
 export type InsertBalanceSheetEntry = z.infer<typeof insertBalanceSheetEntrySchema>;
 
+// ── Budgets: monthly targets by category, for actual-vs-budget-vs-variance reporting on the
+// income statement and the executive report. The executive report reads the headline keys
+// 'total_income' | 'total_expenses' | 'new_policies'. ──
+export const budgets = pgTable(
+  "budgets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    /** First day of the budgeted month. */
+    periodMonth: date("period_month").notNull(),
+    category: text("category").notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    currency: text("currency").default("USD").notNull(),
+    notes: text("notes"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("budgets_org_period_cat_cur_idx").on(t.organizationId, t.periodMonth, t.category, t.currency),
+    index("budgets_org_idx").on(t.organizationId),
+  ]
+);
+export const insertBudgetSchema = createInsertSchema(budgets).omit({ id: true, createdAt: true, updatedAt: true });
+export type Budget = typeof budgets.$inferSelect;
+export type InsertBudget = z.infer<typeof insertBudgetSchema>;
+
 // ── Debit Orders: recurring bank-debit mandates for premium collection ──
 export const DEBIT_ORDER_STATUSES = ["active", "paused", "cancelled"] as const;
 export const DEBIT_ORDER_FREQUENCIES = ["weekly", "biweekly", "monthly", "quarterly"] as const;

@@ -126,7 +126,7 @@ export default function StaffReports() {
                   <SelectItem value="rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
-            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "trial-balance", "general-ledger", "reinsurance", "ledger", "balance-sheet", "funerals", "payments", "actuarial", "ipec-return", "data-integrity", "collection-efficiency", "persistency", "lapse-analysis", "member-movement", "anniversary", "claims-aging", "claims-analytics"].includes(activeReport) ? (
+            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "trial-balance", "general-ledger", "reinsurance", "ledger", "balance-sheet", "funerals", "payments", "actuarial", "ipec-return", "budget", "data-integrity", "collection-efficiency", "persistency", "lapse-analysis", "member-movement", "anniversary", "claims-aging", "claims-analytics"].includes(activeReport) ? (
               <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
                 <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
                 <SelectContent>

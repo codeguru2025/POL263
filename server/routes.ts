@@ -13510,6 +13510,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
+  // ── Budgets (monthly targets by category) ──
+  app.get("/api/budgets", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const from = typeof req.query.from === "string" ? req.query.from : undefined;
+    const to = typeof req.query.to === "string" ? req.query.to : undefined;
+    return res.json(await storage.getBudgets(user.organizationId, { from, to }));
+  });
+
+  app.post("/api/budgets", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { periodMonth, category, amount, currency, notes } = req.body;
+    if (!periodMonth || !String(category || "").trim() || amount === undefined) {
+      return res.status(400).json({ message: "periodMonth, category and amount are required" });
+    }
+    const amt = parsePositiveAmount(amount);
+    if (!amt && amt !== 0) return res.status(400).json({ message: "amount must be a valid number" });
+    const month = String(periodMonth).slice(0, 7) + "-01";
+    const created = await storage.upsertBudget({
+      organizationId: user.organizationId,
+      periodMonth: month,
+      category: String(category).trim(),
+      amount: String(Number(amount).toFixed(2)),
+      currency: normalizeCurrency(currency) || "USD",
+      notes: notes ? String(notes).trim() : undefined,
+      createdByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
+    });
+    await auditLog(req, "UPSERT_BUDGET", "Budget", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.delete("/api/budgets/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    await storage.deleteBudget(id, user.organizationId);
+    await auditLog(req, "DELETE_BUDGET", "Budget", id, null, null);
+    return res.json({ success: true });
+  });
+
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope,
     requireAnyPermission("read:policy", "read:finance", "read:commission", "read:payroll", "read:claim", "read:report", "read:audit_log", "read:funeral_ops", "read:fleet", "read:user"),
     async (req, res) => {

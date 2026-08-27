@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getApiBase } from "@/lib/queryClient";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, type EdtColumn, EmptyState, KpiStatCard, StatusBadge } from "@/components/ds";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -244,6 +244,22 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("ipecReturn"),
   });
+  const qc = useQueryClient();
+  const budgetYear = (filters.toDate || new Date().toISOString().slice(0, 10)).slice(0, 4);
+  const { data: budgetRows = [] } = useQuery<any[]>({
+    queryKey: ["budgets", budgetYear],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/budgets?from=${budgetYear}-01-01&to=${budgetYear}-12-31`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("budget"),
+  });
+  const saveBudget = useMutation({
+    mutationFn: async (b: { periodMonth: string; category: string; amount: string }) =>
+      apiRequest("POST", "/api/budgets", { ...b, currency: "USD" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["budgets", budgetYear] }),
+  });
+
   const { data: premiumBordereau = [], isLoading: loadingPremBd } = useQuery<any[]>({
     queryKey: ["reports", "premium-bordereau", runKey, ...fk],
     queryFn: async () => {
@@ -778,6 +794,64 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               emptyMessage="No POL263 Platform receivables recorded."
             />
           )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="budget">
+        <CardSection
+          title={`Budget — ${budgetYear}`}
+          description="Monthly targets by category. The executive report shows actual vs budget vs variance for total income, total expenses and new policies. Amounts are USD; edit a cell and click away to save."
+          icon={Calendar}
+          flush
+        >
+          <div className="p-4 overflow-x-auto">
+            {(() => {
+              const cats = [
+                { key: "total_income", label: "Total income" },
+                { key: "total_expenses", label: "Total expenses" },
+                { key: "new_policies", label: "New policies" },
+              ];
+              const months = Array.from({ length: 12 }, (_, i) => `${budgetYear}-${String(i + 1).padStart(2, "0")}-01`);
+              const valueOf = (month: string, cat: string) => {
+                const r = (budgetRows as any[]).find((b) => String(b.periodMonth).slice(0, 10) === month && b.category === cat);
+                return r ? String(Number(r.amount)) : "";
+              };
+              return (
+                <table className="text-sm border-separate border-spacing-0 min-w-[760px]">
+                  <thead>
+                    <tr className="text-xs uppercase text-muted-foreground">
+                      <th className="text-left px-2 py-2 sticky left-0 bg-card">Month</th>
+                      {cats.map((c) => <th key={c.key} className="text-right px-2 py-2">{c.label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {months.map((month) => (
+                      <tr key={month} className="border-t">
+                        <td className="px-2 py-1 whitespace-nowrap font-mono text-xs sticky left-0 bg-card">{month.slice(0, 7)}</td>
+                        {cats.map((c) => (
+                          <td key={c.key} className="px-2 py-1">
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              defaultValue={valueOf(month, c.key)}
+                              className="w-28 h-8 rounded-md border border-input bg-background px-2 text-sm text-right tabular-nums"
+                              placeholder="—"
+                              onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                if (v === "" || v === valueOf(month, c.key)) return;
+                                saveBudget.mutate({ periodMonth: month, category: c.key, amount: String(Number(v).toFixed(2)) });
+                              }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()}
+            {saveBudget.isPending && <p className="text-xs text-muted-foreground mt-2">Saving…</p>}
+          </div>
         </CardSection>
       </TabsContent>
 

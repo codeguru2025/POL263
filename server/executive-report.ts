@@ -10,7 +10,7 @@ import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { getTenantCapabilities, hasModuleCapability } from "./org-capabilities";
-import { buildIncomeStatement, buildCashFlowStatement, buildIncomeTimeSeries, buildExecutiveSummary } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildIncomeTimeSeries, buildExecutiveSummary, fxMapFor } from "./financial-statements";
 import { computeClaimAgeDays, isClaimOverdue } from "./claims-sla";
 import { effectiveLeadStage, PIPELINE_STAGES } from "@shared/lead-pipeline";
 import { funeralCases, mortuaryIntakes, leads } from "@shared/schema";
@@ -63,6 +63,28 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
       newPoliciesCount: pctChange(execSummary.newPoliciesCount, prevSummary.newPoliciesCount),
     },
   };
+
+  // ── Budget vs actual (headline categories only — see the budgets table) ──
+  const fxMap = await fxMapFor(orgId);
+  const sumUsd = (m: Record<string, number>) => Object.entries(m).reduce((s, [c, v]) => s + v * (fxMap[c.toUpperCase()] ?? 0), 0);
+  const [budIncome, budExpenses, budNewPolicies] = await Promise.all([
+    storage.getBudgetForRange(orgId, from, to, "total_income"),
+    storage.getBudgetForRange(orgId, from, to, "total_expenses"),
+    storage.getBudgetForRange(orgId, from, to, "new_policies"),
+  ]);
+  const variance = (actual: number, budget: number) => ({
+    actual: Number(actual.toFixed(2)), budget: Number(budget.toFixed(2)),
+    variance: Number((actual - budget).toFixed(2)),
+    variancePct: budget === 0 ? null : Number((((actual - budget) / Math.abs(budget)) * 100).toFixed(1)),
+  });
+  const budIncomeUsd = sumUsd(budIncome), budExpensesUsd = sumUsd(budExpenses);
+  const budNewPoliciesTotal = Object.values(budNewPolicies).reduce((s, v) => s + v, 0);
+  const hasBudget = budIncomeUsd > 0 || budExpensesUsd > 0 || budNewPoliciesTotal > 0;
+  const budget = hasBudget ? {
+    totalIncomeUsd: variance(Number(incomeStatement.consolidatedUsd?.income ?? 0), budIncomeUsd),
+    totalExpensesUsd: variance(Number(incomeStatement.consolidatedUsd?.expenses ?? 0), budExpensesUsd),
+    newPoliciesCount: variance(execSummary.newPoliciesCount, budNewPoliciesTotal),
+  } : null;
 
   // The 14 queries below are all independent of each other (same orgId/from/to/branchId, no
   // query depends on another's result) but were previously awaited one at a time — a report
@@ -280,6 +302,7 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
   return {
     period: { from, to, branchId: branchId ?? null },
     comparison,
+    budget,
     capabilities: { hasFuneralOps, hasClaims, hasFleet },
     financial: {
       incomeStatement, cashFlow, incomeTimeSeries,

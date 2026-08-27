@@ -38,7 +38,7 @@ import {
   accumulationAccounts, accumulationContributions, accumulationWithdrawals,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
-  bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, budgets, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   pettyCashFloats, pettyCashTransactions,
   tombstoneCatalogItems, tombstoneOrders, tombstoneOrderPayments,
   quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts, agentCardEvents,
@@ -63,6 +63,7 @@ import {
   type TombstoneCatalogItem, type InsertTombstoneCatalogItem, type TombstoneOrder, type InsertTombstoneOrder, type TombstoneOrderPayment, type InsertTombstoneOrderPayment,
   type ParlourPersonnel, type InsertParlourPersonnel,
   type BalanceSheetEntry, type InsertBalanceSheetEntry,
+  type Budget, type InsertBudget,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
   type QuotationGuarantor, type InsertQuotationGuarantor,
@@ -777,6 +778,10 @@ export interface IStorage {
   createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
   updateBalanceSheetEntry(id: string, orgId: string, data: Partial<BalanceSheetEntry>): Promise<BalanceSheetEntry | undefined>;
   deleteBalanceSheetEntry(id: string, orgId: string): Promise<void>;
+  getBudgets(orgId: string, filters?: { from?: string; to?: string; category?: string }): Promise<Budget[]>;
+  upsertBudget(data: InsertBudget): Promise<Budget>;
+  deleteBudget(id: string, orgId: string): Promise<void>;
+  getBudgetForRange(orgId: string, from: string, to: string, category: string): Promise<Record<string, number>>;
 
   getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]>;
   getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined>;
@@ -6422,6 +6427,47 @@ export class DatabaseStorage implements IStorage {
   async deleteBalanceSheetEntry(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
     await tdb.delete(balanceSheetEntries).where(and(eq(balanceSheetEntries.id, id), eq(balanceSheetEntries.organizationId, orgId)));
+  }
+
+  // ── Finance: budgets (monthly targets by category) ──
+  async getBudgets(orgId: string, filters?: { from?: string; to?: string; category?: string }): Promise<Budget[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(budgets.organizationId, orgId)];
+    if (filters?.from) conds.push(sql`${budgets.periodMonth} >= ${filters.from}`);
+    if (filters?.to) conds.push(sql`${budgets.periodMonth} <= ${filters.to}`);
+    if (filters?.category) conds.push(eq(budgets.category, filters.category));
+    return tdb.select().from(budgets).where(and(...conds)).orderBy(budgets.periodMonth, budgets.category);
+  }
+  /** Insert or update the target for one org / month / category / currency. */
+  async upsertBudget(data: InsertBudget): Promise<Budget> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(budgets).values(data)
+      .onConflictDoUpdate({
+        target: [budgets.organizationId, budgets.periodMonth, budgets.category, budgets.currency],
+        set: { amount: data.amount, notes: data.notes ?? null, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+  async deleteBudget(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(budgets).where(and(eq(budgets.id, id), eq(budgets.organizationId, orgId)));
+  }
+  /** Total budgeted amount for a category across the months overlapping [from, to], per currency. */
+  async getBudgetForRange(orgId: string, from: string, to: string, category: string): Promise<Record<string, number>> {
+    const tdb = await getDbForOrg(orgId);
+    const fromMonth = from.slice(0, 7) + "-01";
+    const toMonth = to.slice(0, 7) + "-01";
+    const rows = await tdb.select({ currency: budgets.currency, total: sql<string>`COALESCE(SUM(${budgets.amount}::numeric), 0)` })
+      .from(budgets)
+      .where(and(
+        eq(budgets.organizationId, orgId), eq(budgets.category, category),
+        sql`${budgets.periodMonth} >= ${fromMonth}`, sql`${budgets.periodMonth} <= ${toMonth}`,
+      ))
+      .groupBy(budgets.currency);
+    const out: Record<string, number> = {};
+    for (const r of rows) { const v = parseFloat(r.total); if (Math.abs(v) > 0.004) out[(r.currency || "USD").toUpperCase()] = v; }
+    return out;
   }
 
   // ── Finance: debit orders (recurring premium-collection mandates) ──
