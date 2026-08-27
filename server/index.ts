@@ -93,6 +93,9 @@ if (enableCsrf) {
     "/api/auth/mobile-exchange",
     "/api/client-auth/login",
     "/api/client-auth/logout",
+    // Customer-service chatbot (SMSALA): server-to-server, authenticated by a per-tenant bearer
+    // shared secret (server/customer-service-integration.ts), never a browser session.
+    "/api/customer-service/verify",
   ];
   app.use((req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path)) return next();
@@ -263,6 +266,20 @@ if (enableCsrf) {
   app.use("/api/public/quote", publicLimiter);
   app.use("/api/public/verify", publicLimiter);
   app.use("/api/public/tenant-context", publicLimiter);
+
+  // Customer-service chatbot (SMSALA, server-to-server, bearer-secret auth). Low legitimate
+  // volume — one verification per WhatsApp conversation start — so a tight budget also caps
+  // brute-force of the guessable (policy number, ID, phone) triple.
+  app.use(
+    "/api/customer-service",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("customer-service"),
+      windowMs: 60 * 1000,
+      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      message: { error: "rate_limited" },
+    })
+  );
 
   // Platform-owner dashboards that loop every active tenant's isolated DB in batches — each
   // hit is a fan-out across every tenant, not a single-org query, so it needs a tighter budget

@@ -45,6 +45,7 @@ import { registerPlatformBillingRoutes } from "./platform-billing-routes";
 import { registerBillingPublicRoutes } from "./billing-public-routes";
 import { registerTenantSignupPublicRoutes } from "./tenant-signup-public-routes";
 import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes";
+import { registerCustomerServiceRoutes } from "./customer-service-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
@@ -12924,6 +12925,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerBillingPublicRoutes(app);
   registerTenantSignupPublicRoutes(app);
   registerInboundEmailPublicRoutes(app);
+  registerCustomerServiceRoutes(app);
   registerHrFleetFormRoutes(app);
 
   // ─── Tenant-facing billing (logged-in Pay Now flow) ────────────────
