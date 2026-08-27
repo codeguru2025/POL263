@@ -48,6 +48,16 @@ export async function streamExecutiveReportPdf(
     { label: "Claims overdue", value: report.claims?.overdue ? pct(report.claims.overdue.overduePercent) : "—" },
   ]);
 
+  const bud = (report as any).budget;
+  if (bud) {
+    const bl = (b: { budget: number; variance: number; variancePct: number | null }) =>
+      `${money(b.budget)}  (var ${b.variance >= 0 ? "+" : ""}${money(b.variance)}${b.variancePct != null ? `, ${b.variancePct >= 0 ? "+" : ""}${b.variancePct}%` : ""})`;
+    sectionBand(ctx, "Budget vs Actual");
+    kv(ctx, "Total income — budget", bl(bud.totalIncomeUsd));
+    kv(ctx, "Total expenses — budget", bl(bud.totalExpensesUsd));
+    kv(ctx, "New policies — budget", bl(bud.newPoliciesCount));
+  }
+
   renderIncomeStatementBody(ctx, report.financial.incomeStatement);
 
   if (report.financial.branchBreakdown.length) {

@@ -46,6 +46,7 @@ export type ReportDatasetId =
   | "users"
   | "insuranceContractSummary"
   | "ipecReturn"
+  | "budget"
   | "dataIntegrity"
   | "collectionEfficiency"
   | "persistency"
@@ -96,6 +97,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
     { value: "actuarial", label: "Actuarial Export", testId: "tab-actuarial-export" },
     { value: "ipec-return", label: "IPEC Return", testId: "tab-ipec-return" },
+    { value: "budget", label: "Budget", testId: "tab-budget" },
   ],
   agents: [
     { value: "agent-portfolio", label: "Agent portfolio", testId: "tab-agent-portfolio" },
@@ -188,6 +190,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   platform: ["platformReceivables"],
   actuarial: ["insuranceContractSummary"],
   "ipec-return": ["ipecReturn"],
+  budget: ["budget"],
   "agent-portfolio": ["agentPortfolio"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],
