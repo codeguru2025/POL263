@@ -3,7 +3,7 @@ import { getApiBase } from "@/lib/queryClient";
 import { CardSection, EnhancedDataTable, type EdtColumn, EmptyState, KpiStatCard } from "@/components/ds";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ShieldAlert, TrendingUp, Activity, RotateCcw, Users } from "lucide-react";
+import { Loader2, ShieldAlert, TrendingUp, Activity, RotateCcw, Users, CalendarClock } from "lucide-react";
 import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
@@ -12,6 +12,7 @@ type CollectionRow = { branch: string; currency: string; expected: number; colle
 type PersistencyRow = { cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number };
 type LapseAnalysis = { months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number };
 type MovementRow = { date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string };
+type AnnivRow = { policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number };
 
 const sevVariant = (s: string) => (s === "high" ? "destructive" : s === "medium" ? "default" : "secondary");
 const money = (n: number, c: string) => `${c} ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -53,6 +54,18 @@ const movementColumns: EdtColumn<MovementRow>[] = [
   { id: "actor", header: "By", accessor: (r) => r.actor, cell: (r) => <span className="text-sm text-muted-foreground">{r.actor}</span> },
 ];
 
+const annivColumns: EdtColumn<AnnivRow>[] = [
+  { id: "policy", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "client", header: "Client", accessor: (r) => r.client },
+  { id: "phone", header: "Phone", accessor: (r) => r.phone },
+  { id: "product", header: "Product", accessor: (r) => r.product },
+  { id: "branch", header: "Branch", accessor: (r) => r.branch },
+  { id: "premium", header: "Premium", align: "right", accessor: (r) => parseFloat(r.premium || "0"), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {r.premium}</span> },
+  { id: "years", header: "Years in force", align: "right", accessor: (r) => r.yearsInForce, cell: (r) => <span className="tabular-nums">{r.yearsInForce}</span> },
+  { id: "next", header: "Next anniversary", accessor: (r) => r.nextAnniversary, cell: (r) => <span className="text-sm whitespace-nowrap">{r.nextAnniversary}</span> },
+  { id: "days", header: "Days until", align: "right", accessor: (r) => r.daysUntil, cell: (r) => <span className={`tabular-nums ${r.daysUntil <= 14 ? "text-amber-600 font-semibold" : ""}`}>{r.daysUntil}</span> },
+];
+
 const lapseColumns: EdtColumn<{ month: string; lapses: number; reinstatements: number }>[] = [
   { id: "month", header: "Month", accessor: (r) => r.month, cell: (r) => <span className="font-mono text-sm">{r.month}</span> },
   { id: "lapses", header: "Lapses", align: "right", accessor: (r) => r.lapses, cell: (r) => <span className="tabular-nums text-destructive">{r.lapses}</span> },
@@ -88,6 +101,11 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
       return res.ok ? res.json() : [];
     },
     enabled: need("memberMovement"),
+  });
+  const { data: anniversary = [], isLoading: loadingAnniversary } = useQuery<AnnivRow[]>({
+    queryKey: ["reports", "anniversary", runKey],
+    queryFn: async () => (await fetch(getApiBase() + "/api/reports/anniversary?withinDays=60", { credentials: "include" })).json().catch(() => []),
+    enabled: need("anniversary"),
   });
   const { data: integrity = [], isLoading: loadingIntegrity } = useQuery<IntegrityIssue[]>({
     queryKey: ["reports", "data-integrity", runKey],
@@ -166,6 +184,24 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
             <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
             <EnhancedDataTable columns={collectionColumns} rows={collection.map((r, i) => ({ ...r, _k: i }))} getRowKey={(r: any) => String(r._k)} exportFilename="collection-efficiency" storageKey="reports-collection-efficiency" emptyMessage="No data for the selected period." />
+          )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="anniversary">
+        <CardSection
+          title="Policy anniversary / review list"
+          description="Active and grace policies whose inception-date anniversary falls within the next 60 days — the natural point for an annual review, a CPI / sum-assured conversation, or a check-in call."
+          icon={CalendarClock}
+          headerRight={<ExportButton reportType="anniversary" filters={filters} />}
+          flush
+        >
+          {loadingAnniversary ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : anniversary.length === 0 ? (
+            <EmptyState title="No anniversaries in the next 60 days" className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <EnhancedDataTable columns={annivColumns} rows={anniversary.map((r, i) => ({ ...r, _k: i }))} getRowKey={(r: any) => String(r._k)} exportFilename="anniversary" storageKey="reports-anniversary" emptyMessage="No anniversaries." />
           )}
         </CardSection>
       </TabsContent>

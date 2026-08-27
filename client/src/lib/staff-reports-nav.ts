@@ -46,6 +46,7 @@ export type ReportDatasetId =
   | "persistency"
   | "lapseAnalysis"
   | "memberMovement"
+  | "anniversary"
   | "claimsAging"
   | "claimsAnalytics";
 
@@ -102,6 +103,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "persistency", label: "Persistency", testId: "tab-persistency" },
     { value: "lapse-analysis", label: "Lapse analysis", testId: "tab-lapse-analysis" },
     { value: "collection-efficiency", label: "Collection efficiency", testId: "tab-collection-efficiency" },
+    { value: "anniversary", label: "Anniversary / review", testId: "tab-anniversary" },
     { value: "member-movement", label: "Member movement", testId: "tab-member-movement" },
     { value: "data-integrity", label: "Data integrity", testId: "tab-data-integrity" },
   ],
@@ -185,6 +187,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   "persistency": ["persistency"],
   "lapse-analysis": ["lapseAnalysis"],
   "member-movement": ["memberMovement"],
+  "anniversary": ["anniversary"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
   payroll: ["payrollEmployees"],
