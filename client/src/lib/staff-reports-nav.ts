@@ -31,6 +31,8 @@ export type ReportDatasetId =
   | "cashFlow"
   | "trialBalance"
   | "generalLedger"
+  | "bankReconciliation"
+  | "ifrs17Movement"
   | "transactionLedger"
   | "balanceSheet"
   | "underwriterPayable"
@@ -87,6 +89,8 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "general-ledger", label: "General Ledger", testId: "tab-general-ledger" },
     { value: "ledger", label: "Transaction Ledger", testId: "tab-ledger" },
     { value: "balance-sheet", label: "Balance Sheet", testId: "tab-balance-sheet" },
+    { value: "bank-reconciliation", label: "Bank Reconciliation", testId: "tab-bank-reconciliation" },
+    { value: "ifrs17-movement", label: "IFRS 17 Movement", testId: "tab-ifrs17-movement" },
     { value: "finance", label: "Finance", testId: "tab-finance-report" },
     { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
     { value: "reinsurance", label: "Reinsurance bordereaux", testId: "tab-reinsurance" },
@@ -178,6 +182,8 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   "cash-flow": ["cashFlow"],
   "trial-balance": ["trialBalance"],
   "general-ledger": ["generalLedger"],
+  "bank-reconciliation": ["bankReconciliation"],
+  "ifrs17-movement": ["ifrs17Movement"],
   ledger: ["transactionLedger"],
   "balance-sheet": ["balanceSheet"],
   finance: ["financeReport"],

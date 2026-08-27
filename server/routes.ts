@@ -13326,6 +13326,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getAnniversaryReport((req.user as any).organizationId, withinDays));
   });
 
+  app.get("/api/reports/ifrs17-movement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { buildIfrs17Movement } = await import("./ifrs17-movement");
+    return res.json(await buildIfrs17Movement(user.organizationId, { from, to, branchId }));
+  });
+
+  app.get("/api/reports/bank-reconciliation", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getBankReconciliation(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/premium-bordereau", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const def = await defaultStatementRange(user.organizationId);
@@ -14568,6 +14586,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const an = await storage.getAnniversaryReport(user.organizationId, withinDays);
           headers = ["Policy #", "Client", "Phone", "Product", "Branch", "Currency", "Premium", "Inception Date", "Next Anniversary", "Days Until", "Years In Force"];
           rows = an.map((r) => [r.policyNumber, r.client, r.phone, r.product, r.branch, r.currency, r.premium, r.inceptionDate, r.nextAnniversary, r.daysUntil, r.yearsInForce]);
+          break;
+        }
+        case "ifrs17-movement": {
+          const orgTodayIm = await todayForOrg(user.organizationId);
+          const imFrom = reportFilters.fromDate || `${orgTodayIm.slice(0, 7)}-01`;
+          const imTo = reportFilters.toDate || orgTodayIm;
+          const { buildIfrs17Movement } = await import("./ifrs17-movement");
+          const mv = await buildIfrs17Movement(user.organizationId, { from: imFrom, to: imTo, branchId: reportFilters.branchId });
+          headers = ["Liability", "Line", "Currency", "Amount"];
+          const emitMv = (liab: string, lbl: string, m: Record<string, number>) => {
+            for (const [c, v] of Object.entries(m)) rows.push([liab, lbl, c, Number(v).toFixed(2)]);
+          };
+          emitMv("LRC", "Opening balance", mv.lrc.opening);
+          emitMv("LRC", "Premiums received", mv.lrc.premiumsReceived);
+          emitMv("LRC", "Insurance revenue recognised", mv.lrc.revenueRecognised);
+          emitMv("LRC", "Closing balance", mv.lrc.closing);
+          emitMv("LRC", "Residual (straddling receipts)", mv.lrc.residual);
+          emitMv("LIC", "Opening balance", mv.lic.opening);
+          emitMv("LIC", "Claims incurred (reported)", mv.lic.claimsIncurred);
+          emitMv("LIC", "Claims paid / settled", mv.lic.claimsPaid);
+          emitMv("LIC", "Closing balance", mv.lic.closing);
+          emitMv("LIC", "Residual", mv.lic.residual);
+          break;
+        }
+        case "bank-reconciliation": {
+          const orgTodayBr = await todayForOrg(user.organizationId);
+          const brFrom = reportFilters.fromDate || `${orgTodayBr.slice(0, 7)}-01`;
+          const brTo = reportFilters.toDate || orgTodayBr;
+          const br = await storage.getBankReconciliation(user.organizationId, brFrom, brTo);
+          headers = ["Account", "Bank", "Currency", "Opening Balance", "Opening Date", "Closing Balance", "Closing Date", "Statement Movement", "Deposits Recorded", "Deposit Count", "Unreconciled Movement"];
+          rows = br.accounts.map((a) => [a.accountName, a.bankName, a.currency, a.openingBalance ?? "", a.openingDate ?? "", a.closingBalance ?? "", a.closingDate ?? "", a.statementMovement ?? "", a.depositsRecorded.toFixed(2), a.depositCount, a.unreconciledMovement ?? ""]);
+          rows.push(["", "", "", "", "", "", "", "", "", "", ""]);
+          for (const [c, v] of Object.entries(br.bankPaymentsRecorded)) {
+            rows.push([`Bank-method payments recorded (${c})`, "", c, "", "", "", "", "", v.total.toFixed(2), v.count, ""]);
+          }
           break;
         }
         case "premium-bordereau": {

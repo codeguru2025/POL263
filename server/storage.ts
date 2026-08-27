@@ -447,6 +447,12 @@ export interface IStorage {
   getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
   /** Per-claim reinsurance claims bordereau for a period. */
   getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
+  /** Bank reconciliation for a period — statement balances vs system-recorded deposits, per account. */
+  getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
+    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
+    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    note: string;
+  }>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2439,6 +2445,62 @@ export class DatabaseStorage implements IStorage {
       periodFrom: from,
       periodTo: to,
     }));
+  }
+
+  async getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
+    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
+    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    note: string;
+  }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const accts = (await this.getBankAccounts(organizationId)).filter((a) => a.isActive);
+    const accountResults: any[] = [];
+    for (const a of accts) {
+      const balances = await this.getBankStatementBalances(organizationId, a.id); // desc by date
+      const opening = balances.find((b) => String(b.statementDate) < from) ?? balances[balances.length - 1];
+      const closing = balances.find((b) => String(b.statementDate) <= to);
+      const dep = await tdb.execute(sql`
+        SELECT COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
+        FROM bank_deposits
+        WHERE organization_id = ${organizationId} AND bank_account_id = ${a.id}
+          AND deposit_date >= ${from} AND deposit_date <= ${to}`);
+      const depRow = rowsOf(dep)[0] || {};
+      const depositsRecorded = parseFloat(depRow.total ?? "0");
+      const openingBalance = opening ? parseFloat(String(opening.closingBalance)) : null;
+      const closingBalance = closing ? parseFloat(String(closing.closingBalance)) : null;
+      const statementMovement = openingBalance != null && closingBalance != null ? Number((closingBalance - openingBalance).toFixed(2)) : null;
+      // What the statement moved that is NOT explained by recorded deposits — i.e. payments out,
+      // bank charges, interest, and any unrecorded transaction. This is the amount to reconcile.
+      const unreconciledMovement = statementMovement != null ? Number((statementMovement - depositsRecorded).toFixed(2)) : null;
+      accountResults.push({
+        accountName: a.accountName, bankName: a.bankName, currency: a.currency,
+        openingBalance, openingDate: opening ? String(opening.statementDate) : null,
+        closingBalance, closingDate: closing ? String(closing.statementDate) : null,
+        statementMovement, depositsRecorded: Number(depositsRecorded.toFixed(2)), depositCount: parseInt(depRow.n ?? "0"),
+        unreconciledMovement,
+      });
+    }
+
+    // Bank-method payments recorded in the system in the period — not linked to a specific
+    // account, so reported once for the finance team to match against the accounts above.
+    const payRows = await tdb.execute(sql`
+      SELECT currency, COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
+      FROM payment_disbursements
+      WHERE organization_id = ${organizationId}
+        AND payment_method IN ('bank_transfer', 'cheque', 'eft')
+        AND paid_date >= ${from} AND paid_date <= ${to}
+      GROUP BY currency`);
+    const bankPaymentsRecorded: Record<string, { total: number; count: number }> = {};
+    for (const r of rowsOf(payRows)) {
+      bankPaymentsRecorded[(r.currency || "USD").toUpperCase()] = { total: Number(parseFloat(r.total).toFixed(2)), count: parseInt(r.n) };
+    }
+
+    return {
+      accounts: accountResults,
+      bankPaymentsRecorded,
+      note: "The system stores periodic bank-statement closing balances, not individual statement lines, and disbursements are not linked to a specific bank account. This reconciliation compares each account's statement movement against recorded deposits; the 'unreconciled movement' is the amount to explain from bank-method payments (shown below), bank charges, interest and any unrecorded items.",
+    };
   }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
