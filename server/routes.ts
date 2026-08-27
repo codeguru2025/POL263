@@ -13231,6 +13231,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getDataIntegrityReport(user.organizationId));
   });
 
+  app.get("/api/reports/chart-of-accounts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (_req, res) => {
+    const { CHART_OF_ACCOUNTS } = await import("./general-ledger");
+    return res.json(CHART_OF_ACCOUNTS);
+  });
+
+  app.get("/api/reports/trial-balance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { buildTrialBalance, buildLedgerPosition } = await import("./general-ledger");
+    const [trialBalance, position] = await Promise.all([
+      buildTrialBalance(user.organizationId, { from, to, branchId }),
+      buildLedgerPosition(user.organizationId, { asOf: to, branchId }),
+    ]);
+    return res.json({ trialBalance, position });
+  });
+
+  app.get("/api/reports/general-ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const account = typeof req.query.account === "string" && req.query.account ? req.query.account : undefined;
+    const { buildGeneralLedger } = await import("./general-ledger");
+    return res.json(await buildGeneralLedger(user.organizationId, { from, to, account, branchId }));
+  });
+
   app.get("/api/reports/collection-efficiency", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const def = await defaultStatementRange(user.organizationId);
@@ -14379,6 +14409,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const issues = await storage.getDataIntegrityReport(user.organizationId);
           headers = ["Severity", "Category", "Policy", "Client", "Detail"];
           rows = issues.map((i) => [i.severity.toUpperCase(), i.category, i.policyNumber, i.client, i.detail]);
+          break;
+        }
+        case "trial-balance": {
+          const orgTodayTb = await todayForOrg(user.organizationId);
+          const tbFrom = reportFilters.fromDate || `${orgTodayTb.slice(0, 4)}-01-01`;
+          const tbTo = reportFilters.toDate || orgTodayTb;
+          const { buildTrialBalance, buildLedgerPosition } = await import("./general-ledger");
+          const [tb, pos] = await Promise.all([
+            buildTrialBalance(user.organizationId, { from: tbFrom, to: tbTo, branchId: reportFilters.branchId }),
+            buildLedgerPosition(user.organizationId, { asOf: tbTo, branchId: reportFilters.branchId }),
+          ]);
+          headers = ["Section", "Code", "Account", "Class", "Currency", "Debit", "Credit"];
+          const emit = (section: string, r: { code: string; name: string; class: string; debit: Record<string, number>; credit: Record<string, number> }) => {
+            const curs = Array.from(new Set([...Object.keys(r.debit), ...Object.keys(r.credit)]));
+            for (const c of curs) rows.push([section, r.code, r.name, r.class, c, (r.debit[c] ?? 0).toFixed(2), (r.credit[c] ?? 0).toFixed(2)]);
+          };
+          for (const r of tb.rows) emit("Trial balance (period)", r);
+          rows.push(["", "", "", "", "", "", ""]);
+          for (const r of pos.rows) emit(`Financial position (as of ${tbTo})`, r as any);
+          break;
+        }
+        case "general-ledger": {
+          const orgTodayGl = await todayForOrg(user.organizationId);
+          const glFrom = reportFilters.fromDate || `${orgTodayGl.slice(0, 4)}-01-01`;
+          const glTo = reportFilters.toDate || orgTodayGl;
+          const account = typeof req.query.account === "string" && req.query.account ? req.query.account : undefined;
+          const { buildGeneralLedger } = await import("./general-ledger");
+          const gl = await buildGeneralLedger(user.organizationId, { from: glFrom, to: glTo, account, branchId: reportFilters.branchId });
+          headers = ["Date", "Account", "Account Name", "Description", "Reference", "Currency", "Debit", "Credit"];
+          rows = gl.lines.map((l) => [l.date, l.account, l.accountName, l.description, l.reference || "", l.currency, l.debit != null ? l.debit.toFixed(2) : "", l.credit != null ? l.credit.toFixed(2) : ""]);
           break;
         }
         case "collection-efficiency": {

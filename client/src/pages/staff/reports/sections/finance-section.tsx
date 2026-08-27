@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
@@ -6,7 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield, BookOpen, Scale } from "lucide-react";
 import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
@@ -210,6 +212,28 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("transactionLedger"),
   });
+  const { data: trialBalance, isLoading: loadingTrialBalance } = useQuery<any>({
+    queryKey: ["reports", "trial-balance", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/trial-balance" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("trialBalance"),
+  });
+  const [glAccount, setGlAccount] = useState<string>("");
+  const { data: chartOfAccounts = [] } = useQuery<any[]>({
+    queryKey: ["reports", "chart-of-accounts"],
+    queryFn: async () => (await fetch(getApiBase() + "/api/reports/chart-of-accounts", { credentials: "include" })).json().catch(() => []),
+    enabled: need("generalLedger"),
+  });
+  const { data: generalLedger, isLoading: loadingGeneralLedger } = useQuery<any>({
+    queryKey: ["reports", "general-ledger", runKey, ...fk, glAccount],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/general-ledger" + (q ? `${q}&` : "?") + (glAccount ? `account=${glAccount}` : ""), { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("generalLedger"),
+  });
   const asOfParam = filters.toDate ? `?asOf=${filters.toDate}${filters.branchId ? `&branchId=${filters.branchId}` : ""}` : `?asOf=${new Date().toISOString().slice(0, 10)}${filters.branchId ? `&branchId=${filters.branchId}` : ""}`;
   const { data: balanceSheet, isLoading: loadingBalanceSheet } = useQuery<any>({
     queryKey: ["reports", "balance-sheet", runKey, filters.toDate, filters.branchId],
@@ -397,6 +421,115 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               </div>
             );
           })()}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="trial-balance">
+        <CardSection
+          title="Trial Balance & Financial Position"
+          description="The income statement and balance sheet re-expressed in debit/credit form on a standard funeral/life-insurer chart of accounts. Derived from the subsidiary ledgers (receipts, disbursements, commission, claims) + manual balance-sheet entries — it re-presents the existing statements, it is not a second set of books."
+          icon={Scale}
+          headerRight={<ExportButton reportType="trial-balance" filters={filters} />}
+          flush
+        >
+          {loadingTrialBalance ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !trialBalance ? (
+            <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+          ) : (() => {
+            const tb = trialBalance.trialBalance;
+            const pos = trialBalance.position;
+            const curs: string[] = tb.currencies?.length ? tb.currencies : ["USD"];
+            const m = (obj: any, c: string) => Number(obj?.[c] || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const tbl = (title: string, rowsIn: any[], totals: any, balanced: any) => (
+              <div className="mb-6">
+                <p className="text-sm font-semibold mb-2">{title}</p>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border rounded-md min-w-[560px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow><TableHead>Code</TableHead><TableHead>Account</TableHead>{curs.map((c) => <TableHead key={`d${c}`} className="text-right">Dr ({c})</TableHead>)}{curs.map((c) => <TableHead key={`c${c}`} className="text-right">Cr ({c})</TableHead>)}</TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rowsIn.map((r: any, i: number) => (
+                        <TableRow key={i}>
+                          <TableCell className="font-mono text-xs">{r.code}</TableCell>
+                          <TableCell>{r.name}{r.source === "manual" ? <span className="text-[10px] text-muted-foreground"> (manual)</span> : null}</TableCell>
+                          {curs.map((c) => <TableCell key={`d${c}`} className="text-right tabular-nums">{r.debit?.[c] ? m(r.debit, c) : "—"}</TableCell>)}
+                          {curs.map((c) => <TableCell key={`c${c}`} className="text-right tabular-nums">{r.credit?.[c] ? m(r.credit, c) : "—"}</TableCell>)}
+                        </TableRow>
+                      ))}
+                      <TableRow className="font-semibold border-t-2">
+                        <TableCell colSpan={2}>Total</TableCell>
+                        {curs.map((c) => <TableCell key={`d${c}`} className="text-right tabular-nums">{m(totals.debit, c)}</TableCell>)}
+                        {curs.map((c) => <TableCell key={`c${c}`} className="text-right tabular-nums">{m(totals.credit, c)}</TableCell>)}
+                      </TableRow>
+                    </TableBody>
+                  </DataTable>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                  {curs.map((c) => (
+                    <span key={c} className={balanced?.[c] ? "text-emerald-600" : "text-amber-600"}>
+                      {c}: {balanced?.[c] ? "balanced" : "out of balance — check manual balance-sheet entries"}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+            return (
+              <div className="p-4">
+                {tbl("Trial balance — movements for the period", tb.rows, tb.totals, tb.balanced)}
+                {tbl(`Statement of financial position — as of ${pos.asOf}`, pos.rows, pos.totals, pos.balanced)}
+                <p className="text-[11px] text-muted-foreground">{tb.note}</p>
+              </div>
+            );
+          })()}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="general-ledger">
+        <CardSection
+          title="General Ledger"
+          description="Every subsidiary-ledger transaction for a chart-of-accounts account, in the selected period. Pick an account, or view all."
+          icon={BookOpen}
+          headerRight={<ExportButton reportType="general-ledger" filters={filters} />}
+          flush
+        >
+          <div className="p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Select value={glAccount || "__all__"} onValueChange={(v) => setGlAccount(v === "__all__" ? "" : v)}>
+                <SelectTrigger className="w-72 h-9"><SelectValue placeholder="All accounts" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All accounts</SelectItem>
+                  {(chartOfAccounts as any[]).map((a: any) => <SelectItem key={a.code} value={a.code}>{a.code} — {a.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {loadingGeneralLedger ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            ) : !generalLedger || generalLedger.lines.length === 0 ? (
+              <EmptyState title="No transactions for the selected account and period" className="border-0 rounded-none bg-transparent py-8" />
+            ) : (
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm min-w-[720px]">
+                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                    <tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Debit</th><th className="text-right px-3 py-2">Credit</th></tr>
+                  </thead>
+                  <tbody>
+                    {generalLedger.lines.map((l: any, i: number) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-3 py-1.5 whitespace-nowrap">{l.date}</td>
+                        <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">{l.account} {l.accountName}</td>
+                        <td className="px-3 py-1.5 max-w-[280px] truncate" title={l.description}>{l.description}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs">{l.reference || "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{l.debit != null ? `${l.currency} ${Number(l.debit).toFixed(2)}` : ""}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{l.credit != null ? `${l.currency} ${Number(l.credit).toFixed(2)}` : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </CardSection>
       </TabsContent>
 

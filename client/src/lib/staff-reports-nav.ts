@@ -29,6 +29,8 @@ export type ReportDatasetId =
   | "financeReport"
   | "incomeStatement"
   | "cashFlow"
+  | "trialBalance"
+  | "generalLedger"
   | "transactionLedger"
   | "balanceSheet"
   | "underwriterPayable"
@@ -77,6 +79,8 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   finance: [
     { value: "income-statement", label: "Income Statement", testId: "tab-income-statement" },
     { value: "cash-flow", label: "Cash Flow", testId: "tab-cash-flow" },
+    { value: "trial-balance", label: "Trial Balance", testId: "tab-trial-balance" },
+    { value: "general-ledger", label: "General Ledger", testId: "tab-general-ledger" },
     { value: "ledger", label: "Transaction Ledger", testId: "tab-ledger" },
     { value: "balance-sheet", label: "Balance Sheet", testId: "tab-balance-sheet" },
     { value: "finance", label: "Finance", testId: "tab-finance-report" },
@@ -165,6 +169,8 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   reinstatements: ["reinstatements"],
   "income-statement": ["incomeStatement"],
   "cash-flow": ["cashFlow"],
+  "trial-balance": ["trialBalance"],
+  "general-ledger": ["generalLedger"],
   ledger: ["transactionLedger"],
   "balance-sheet": ["balanceSheet"],
   finance: ["financeReport"],
