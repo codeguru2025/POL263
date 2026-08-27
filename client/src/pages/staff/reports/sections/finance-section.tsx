@@ -221,6 +221,29 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     enabled: need("trialBalance"),
   });
   const [glAccount, setGlAccount] = useState<string>("");
+  const IPEC_MANUAL_KEYS = ["insurerClass", "investmentIncome", "technicalProvisions", "prescribedAssetsHeld", "otherLiabilities", "riskBasedCapitalRequirement"] as const;
+  const [ipecManual, setIpecManual] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("ipec-return-manual") || "{}"); } catch { return {}; }
+  });
+  const setIpecField = (k: string, v: string) => {
+    setIpecManual((p) => { const next = { ...p, [k]: v }; try { localStorage.setItem("ipec-return-manual", JSON.stringify(next)); } catch { /* ignore */ } return next; });
+  };
+  const ipecQs = () => {
+    const p = new URLSearchParams();
+    if (filters.fromDate) p.set("fromDate", filters.fromDate);
+    if (filters.toDate) p.set("toDate", filters.toDate);
+    if (filters.branchId) p.set("branchId", filters.branchId);
+    for (const k of IPEC_MANUAL_KEYS) if (ipecManual[k]) p.set(k, ipecManual[k]);
+    return p.toString();
+  };
+  const { data: ipecReturn, isLoading: loadingIpec } = useQuery<any>({
+    queryKey: ["reports", "ipec-return", runKey, ...fk, ipecManual],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/ipec-return?" + ipecQs(), { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("ipecReturn"),
+  });
   const { data: chartOfAccounts = [] } = useQuery<any[]>({
     queryKey: ["reports", "chart-of-accounts"],
     queryFn: async () => (await fetch(getApiBase() + "/api/reports/chart-of-accounts", { credentials: "include" })).json().catch(() => []),
@@ -739,6 +762,122 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               emptyMessage="No POL263 Platform receivables recorded."
             />
           )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="ipec-return">
+        <CardSection
+          title="IPEC Return — Life / Funeral Assurer (indicative)"
+          description="Assembles the data the system holds into the structure of an IPEC statutory return. Investment income, technical provisions, prescribed-asset holdings and the ZICARP capital requirement are not in the system — enter them below. This is a working draft; the return still needs an actuary's sign-off before submission."
+          icon={Shield}
+          headerRight={
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(`${getApiBase()}/api/reports/ipec-return/pdf?${ipecQs()}&download=1`, "_blank")}>
+              <Download className="h-3.5 w-3.5" /> PDF
+            </Button>
+          }
+          flush
+        >
+          <div className="p-4 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Insurer class</label>
+                <Select value={ipecManual.insurerClass || "funeral"} onValueChange={(v) => setIpecField("insurerClass", v)}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="funeral">Funeral (min. capital USD 500,000)</SelectItem>
+                    <SelectItem value="life">Life (min. capital USD 2,000,000)</SelectItem>
+                    <SelectItem value="composite">Composite (USD 2,000,000)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {[
+                ["investmentIncome", "Investment income (USD, period)"],
+                ["technicalProvisions", "Technical provisions (USD, as of)"],
+                ["prescribedAssetsHeld", "Prescribed assets held (USD, as of)"],
+                ["otherLiabilities", "Other liabilities (USD, as of) — blank = derived"],
+                ["riskBasedCapitalRequirement", "ZICARP RBC requirement (USD) — blank = flat minimum"],
+              ].map(([k, label]) => (
+                <div key={k} className="space-y-1">
+                  <label className="text-xs text-muted-foreground">{label}</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    value={ipecManual[k] || ""}
+                    onChange={(e) => setIpecField(k, e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {loadingIpec ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            ) : !ipecReturn ? (
+              <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+            ) : (() => {
+              const R = ipecReturn;
+              const u = (n: number) => `USD ${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              const flag = (ok: boolean) => <span className={ok ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>{ok ? "Compliant" : "Not compliant"}</span>;
+              const Row = ({ l, v }: { l: string; v: any }) => (
+                <div className="flex justify-between gap-4 py-1 border-b border-border/40 text-sm"><span className="text-muted-foreground">{l}</span><span className="tabular-nums text-right">{v}</span></div>
+              );
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                  <p className="md:col-span-2 text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">{R.meta.disclaimer}</p>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Business summary</p>
+                    <Row l="Policies in force" v={R.businessSummary.policiesInForce} />
+                    <Row l="New policies in period" v={R.businessSummary.newPoliciesInPeriod} />
+                    <Row l="Lapses in period" v={R.businessSummary.lapsesInPeriod} />
+                    <Row l="Lives covered" v={R.businessSummary.livesCovered} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Revenue account (USD)</p>
+                    <Row l="Gross premium written" v={u(R.revenueAccount.grossPremiumWritten)} />
+                    <Row l="Reinsurance ceded (estimate)" v={u(R.revenueAccount.reinsurancePremiumCeded)} />
+                    <Row l="Net premium written" v={u(R.revenueAccount.netPremiumWritten)} />
+                    <Row l="Investment income (manual)" v={u(R.revenueAccount.investmentIncome)} />
+                    <Row l="Claims incurred" v={u(R.revenueAccount.claimsIncurred)} />
+                    <Row l="Commission" v={u(R.revenueAccount.commission)} />
+                    <Row l="Management expenses" v={u(R.revenueAccount.managementExpenses)} />
+                    <Row l="Underwriting result" v={<span className={R.revenueAccount.underwritingResult >= 0 ? "text-emerald-600" : "text-destructive"}>{u(R.revenueAccount.underwritingResult)}</span>} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Financial position (USD)</p>
+                    <Row l="Total assets" v={u(R.financialPosition.totalAssets)} />
+                    <Row l="Technical provisions (manual)" v={u(R.financialPosition.technicalProvisions)} />
+                    <Row l="Total liabilities" v={u(R.financialPosition.totalLiabilities)} />
+                    <Row l="Shareholders' funds" v={u(R.financialPosition.shareholdersFunds)} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Prescribed assets &amp; capital</p>
+                    <Row l={`Prescribed asset ratio (min ${R.prescribedAssets.minimumRatio}%)`} v={`${R.prescribedAssets.ratio}%`} />
+                    <Row l="Prescribed asset shortfall" v={u(R.prescribedAssets.shortfall)} />
+                    <Row l="Prescribed assets" v={flag(R.prescribedAssets.compliant)} />
+                    <Row l="Available capital" v={u(R.capitalAdequacy.availableCapital)} />
+                    <Row l="Min. capital requirement" v={u(R.capitalAdequacy.minimumCapitalRequirement)} />
+                    <Row l={`Capital adequacy ratio`} v={`${R.capitalAdequacy.capitalAdequacyRatio}%`} />
+                    <Row l="Capital adequacy" v={flag(R.capitalAdequacy.compliant)} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Claims analysis</p>
+                    <Row l="Reported" v={R.claimsAnalysis.reported} />
+                    <Row l="Settled" v={R.claimsAnalysis.settled} />
+                    <Row l="Repudiated" v={R.claimsAnalysis.repudiated} />
+                    <Row l="Outstanding" v={R.claimsAnalysis.outstanding} />
+                    <Row l="Avg settlement (days)" v={R.claimsAnalysis.averageSettlementDays} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Complaints</p>
+                    <Row l="Received" v={R.complaints.received} />
+                    <Row l="Resolved" v={R.complaints.resolved} />
+                    <Row l="Outstanding" v={R.complaints.outstanding} />
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </CardSection>
       </TabsContent>
 

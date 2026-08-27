@@ -13261,6 +13261,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await buildGeneralLedger(user.organizationId, { from, to, account, branchId }));
   });
 
+  const parseIpecParams = async (user: any, q: any) => {
+    const orgToday = await todayForOrg(user.organizationId);
+    const num = (v: unknown) => { const n = parseFloat(String(v)); return Number.isFinite(n) ? n : undefined; };
+    const insurerClass = ["funeral", "life", "composite"].includes(String(q.insurerClass)) ? String(q.insurerClass) as any : undefined;
+    return {
+      from: typeof q.fromDate === "string" && q.fromDate ? q.fromDate : `${orgToday.slice(0, 4)}-01-01`,
+      to: typeof q.toDate === "string" && q.toDate ? q.toDate : orgToday,
+      asOf: typeof q.asOf === "string" && q.asOf ? q.asOf : (typeof q.toDate === "string" && q.toDate ? q.toDate : orgToday),
+      branchId: typeof q.branchId === "string" && q.branchId ? q.branchId : undefined,
+      insurerClass,
+      manual: {
+        investmentIncome: num(q.investmentIncome),
+        technicalProvisions: num(q.technicalProvisions),
+        prescribedAssetsHeld: num(q.prescribedAssetsHeld),
+        otherLiabilities: num(q.otherLiabilities),
+        riskBasedCapitalRequirement: num(q.riskBasedCapitalRequirement),
+      },
+    };
+  };
+
+  app.get("/api/reports/ipec-return", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { buildIpecReturn } = await import("./ipec-return");
+    return res.json(await buildIpecReturn(user.organizationId, await parseIpecParams(user, req.query)));
+  });
+
+  app.get("/api/reports/ipec-return/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { streamIpecReturnPdf } = await import("./ipec-return-pdf");
+    await streamIpecReturnPdf(user.organizationId, await parseIpecParams(user, req.query), res, { attachment: req.query.download === "1" });
+  });
+
   app.get("/api/reports/collection-efficiency", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const def = await defaultStatementRange(user.organizationId);
