@@ -13077,6 +13077,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
   });
+  app.get("/api/reports/claims-aging", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    return res.json(await storage.getClaimsAgingReport((req.user as any).organizationId));
+  });
+
+  app.get("/api/reports/claims-analytics", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getClaimsAnalyticsReport(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/new-joinings", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -14375,6 +14387,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const mm = await storage.getMemberMovementReport(user.organizationId, reportFilters.fromDate || `${orgToday2.slice(0, 7)}-01`, reportFilters.toDate || orgToday2);
           headers = ["Date", "Action", "Policy", "Member", "Actor"];
           rows = mm.map((r) => [r.date, r.action, r.policyNumber, r.member, r.actor]);
+          break;
+        }
+        case "claims-aging": {
+          const ca = await storage.getClaimsAgingReport(user.organizationId);
+          headers = ["Claim #", "Policy #", "Deceased", "Status", "Branch", "Days Open", "Aging Bucket", "Overdue", "Currency", "Amount"];
+          currencyTotals = { Amount: {} };
+          rows = ca.map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            if (r.amount > 0) currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + r.amount;
+            return [r.claimNumber, r.policyNumber, r.deceased, r.status, r.branch, r.daysOpen, r.bucket, r.overdue ? "Yes" : "No", c, r.amount.toFixed(2)];
+          });
+          break;
+        }
+        case "claims-analytics": {
+          const orgToday3 = await todayForOrg(user.organizationId);
+          const an = await storage.getClaimsAnalyticsReport(user.organizationId, reportFilters.fromDate || `${orgToday3.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday3);
+          headers = ["Section", "Key", "Submitted / Claims incurred", "Approved / Premium collected", "Rejected", "Ratio %"];
+          rows = [
+            ...an.lossRatio.map((l) => ["Loss ratio", l.currency, l.claimsIncurred.toFixed(2), l.premiumCollected.toFixed(2), "", `${l.ratio}%`]),
+            ["", "", "", "", "", ""],
+            ...an.repudiation.map((r) => ["Repudiation", r.claimType, r.submitted, r.approved, r.rejected, `${r.repudiationRate}%`]),
+          ];
           break;
         }
         default:

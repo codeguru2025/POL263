@@ -33,7 +33,8 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "insurance-contract-summary": "read:finance", "collection-efficiency": "read:finance",
   "data-integrity": "read:report",
   // ── Claims / funerals / fleet ──
-  "claims": "read:claim", "funerals": "read:funeral_ops", "fleet": "read:fleet",
+  "claims": "read:claim", "claims-aging": "read:claim", "claims-analytics": "read:claim",
+  "funerals": "read:funeral_ops", "fleet": "read:fleet",
   // ── Commission (read:commission) ──
   "commissions": "read:commission", "commission-payments": "read:commission",
   "agent-commission": "read:commission", "agent-commission-summary": "read:commission",
@@ -88,6 +89,8 @@ export function reportExportLabel(type: string): string {
     "persistency": "Persistency by Inception Cohort",
     "lapse-analysis": "Lapse & Reinstatement Analysis",
     "member-movement": "Member / Dependant Movement",
+    "claims-aging": "Claims Aging",
+    "claims-analytics": "Claims Loss Ratio & Repudiation",
   };
   return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

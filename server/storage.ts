@@ -436,6 +436,10 @@ export interface IStorage {
   getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }>;
   /** Member / dependant additions and removals over a period, from the audit trail. */
   getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]>;
+  /** Open claims by days-open bucket, with branch, payout amount and SLA-overdue flag. */
+  getClaimsAgingReport(organizationId: string): Promise<{ claimNumber: string; policyNumber: string; deceased: string; status: string; branch: string; daysOpen: number; bucket: string; currency: string; amount: number; overdue: boolean }[]>;
+  /** Claims loss ratio (per currency) + repudiation breakdown by claim type, for a period. */
+  getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{ lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[]; repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[] }>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2214,6 +2218,79 @@ export class DatabaseStorage implements IStorage {
         actor: r.actor_email || "System",
       };
     });
+  }
+
+  /**
+   * Claims aging — open claims (not paid / rejected / closed / settled) by days-open bucket,
+   * with the branch and payout amount. "Overdue" is > 14 days open (mirrors claims-sla.ts).
+   */
+  async getClaimsAgingReport(organizationId: string): Promise<{ claimNumber: string; policyNumber: string; deceased: string; status: string; branch: string; daysOpen: number; bucket: string; currency: string; amount: number; overdue: boolean }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT cl.claim_number, cl.deceased_name, cl.status, cl.currency,
+             COALESCE(cl.cash_in_lieu_amount::numeric, 0) AS amount,
+             EXTRACT(DAY FROM (now() - cl.created_at))::int AS days_open,
+             p.policy_number, COALESCE(b.name, '(No branch)') AS branch
+      FROM claims cl
+      JOIN policies p ON p.id = cl.policy_id
+      LEFT JOIN branches b ON b.id = cl.branch_id
+      WHERE cl.organization_id = ${organizationId} AND cl.status NOT IN ('paid','rejected','closed','settled')
+      ORDER BY days_open DESC`);
+    const bucket = (d: number) => d <= 7 ? "0–7" : d <= 14 ? "8–14" : d <= 30 ? "15–30" : d <= 60 ? "31–60" : "60+";
+    return rowsOf(res).map((r: any) => ({
+      claimNumber: r.claim_number,
+      policyNumber: r.policy_number || "—",
+      deceased: r.deceased_name || "—",
+      status: r.status,
+      branch: r.branch,
+      daysOpen: parseInt(r.days_open),
+      bucket: bucket(parseInt(r.days_open)),
+      currency: r.currency || "USD",
+      amount: parseFloat(r.amount),
+      overdue: parseInt(r.days_open) > 14,
+    }));
+  }
+
+  /**
+   * Claims analytics for a period: loss ratio (claim payout value for claims raised in the
+   * period ÷ premium collected in the period, per currency, cash basis) and a repudiation
+   * (declinature) breakdown by claim type.
+   */
+  async getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{
+    lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[];
+    repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[];
+  }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const [claimRows, premiumRows, typeRows] = await Promise.all([
+      tdb.execute(sql`SELECT currency, COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS incurred
+        FROM claims WHERE organization_id = ${organizationId} AND created_at >= ${fromTs} AND created_at <= ${toTs}
+          AND status IN ('approved','paid','settled','closed') GROUP BY currency`),
+      tdb.execute(sql`SELECT currency, COALESCE(SUM(amount::numeric), 0) AS collected
+        FROM payment_receipts WHERE organization_id = ${organizationId} AND status = 'issued'
+          AND issued_at >= ${fromTs} AND issued_at <= ${toTs} GROUP BY currency`),
+      tdb.execute(sql`SELECT claim_type,
+             COUNT(*) AS submitted,
+             COUNT(*) FILTER (WHERE status IN ('approved','paid','settled','closed')) AS approved,
+             COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
+        FROM claims WHERE organization_id = ${organizationId} AND created_at >= ${fromTs} AND created_at <= ${toTs}
+        GROUP BY claim_type ORDER BY submitted DESC`),
+    ]);
+    const collectedByCur = new Map(rowsOf(premiumRows).map((r: any) => [r.currency, parseFloat(r.collected)]));
+    const currencies = new Set<string>([...rowsOf(claimRows).map((r: any) => r.currency), ...Array.from(collectedByCur.keys())]);
+    const lossRatio = Array.from(currencies).map((cur) => {
+      const claimsIncurred = parseFloat(rowsOf(claimRows).find((r: any) => r.currency === cur)?.incurred ?? "0");
+      const premiumCollected = collectedByCur.get(cur) ?? 0;
+      return { currency: cur, claimsIncurred, premiumCollected, ratio: premiumCollected > 0 ? Number(((claimsIncurred / premiumCollected) * 100).toFixed(1)) : 0 };
+    }).sort((a, b) => a.currency.localeCompare(b.currency));
+    const repudiation = rowsOf(typeRows).map((r: any) => {
+      const submitted = parseInt(r.submitted), rejected = parseInt(r.rejected);
+      return { claimType: r.claim_type, submitted, approved: parseInt(r.approved), rejected, repudiationRate: submitted > 0 ? Number(((rejected / submitted) * 100).toFixed(1)) : 0 };
+    });
+    return { lossRatio, repudiation };
   }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
