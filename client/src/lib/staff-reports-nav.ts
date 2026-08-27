@@ -45,7 +45,9 @@ export type ReportDatasetId =
   | "collectionEfficiency"
   | "persistency"
   | "lapseAnalysis"
-  | "memberMovement";
+  | "memberMovement"
+  | "claimsAging"
+  | "claimsAnalytics";
 
 export const SECTION_META: Record<ReportSectionId, { label: string; icon: LucideIcon }> = {
   policies: { label: "Policies", icon: FolderOpen },
@@ -91,7 +93,11 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "commissions", label: "Commissions summary", testId: "tab-commissions-report" },
     { value: "commission-payments", label: "Commission by payment", testId: "tab-commission-payments" },
   ],
-  claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
+  claims: [
+    { value: "claims", label: "Claims register", testId: "tab-claims-report" },
+    { value: "claims-aging", label: "Claims aging", testId: "tab-claims-aging" },
+    { value: "claims-analytics", label: "Loss ratio & repudiation", testId: "tab-claims-analytics" },
+  ],
   quality: [
     { value: "persistency", label: "Persistency", testId: "tab-persistency" },
     { value: "lapse-analysis", label: "Lapse analysis", testId: "tab-lapse-analysis" },
@@ -172,6 +178,8 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   commissions: ["commissionPlans", "commissionSummary"],
   "commission-payments": ["commissionPayments"],
   claims: ["claimsReport"],
+  "claims-aging": ["claimsAging"],
+  "claims-analytics": ["claimsAnalytics"],
   "data-integrity": ["dataIntegrity"],
   "collection-efficiency": ["collectionEfficiency"],
   "persistency": ["persistency"],
