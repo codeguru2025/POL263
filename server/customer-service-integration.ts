@@ -30,15 +30,27 @@
  * verification path in this phase — it will be designed separately.
  */
 import crypto from "crypto";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { and, eq } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenantIntegrations } from "@shared/control-plane-schema";
 import { decryptFields, encryptFields, encryptSecret, decryptSecret } from "./tenant-config-crypto";
 import { normalizeNationalId } from "@shared/validation";
+import type { Policy } from "@shared/schema";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { platformAuditLog } from "./route-helpers";
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** Set by requireVerifiedCustomer() — the authenticated customer-service caller: the tenant
+       *  (from the shared secret) and the verified customer (from the verification token). */
+      customerService?: { orgId: string; clientId: string; verifiedPolicyId: string };
+    }
+  }
+}
 
 /** control_plane.tenant_integrations.provider value for this integration. */
 export const CUSTOMER_SERVICE_PROVIDER_KEY = "customer_service";
@@ -346,6 +358,91 @@ export async function handleVerifyRequest(req: Request, res: Response): Promise<
     customer: { name: result.customerName },
     policy: { policy_number: result.policyNumber, status: result.policyStatus },
   });
+}
+
+// ─── customer-session middleware (shared secret + verification token) ─────────
+
+/** Canonical JSON error bodies for every /api/customer-service/* endpoint. */
+export const CS_ERROR = {
+  unauthorized: { error: "unauthorized" as const },
+  forbidden: { error: "forbidden" as const },
+  not_found: { error: "not_found" as const },
+  invalid_request: { error: "invalid_request" as const },
+};
+
+/**
+ * Gate for every /api/customer-service/* route EXCEPT /verify.
+ *
+ *   1. Authenticate the tenant shared secret (Authorization: Bearer …).
+ *   2. Read + decrypt the verification token (X-Verification-Token header).
+ *   3. Confirm token.orgId === the secret's orgId.
+ *   4. Attach req.customerService = { orgId, clientId, verifiedPolicyId }.
+ *
+ * Any failure → 401 { error: "unauthorized" }. The tenant NEVER comes from the body, query,
+ * params, or an arbitrary header — only from the decrypted credential and token.
+ */
+export async function requireVerifiedCustomer(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const auth = await authenticateCustomerServiceRequest(req);
+  if (!auth) {
+    structuredLog("warn", "CUSTOMER_SERVICE_AUTH_FAILED", { requestId: (req as any).requestId, ip: req.ip, reason: "secret" });
+    res.status(401).json(CS_ERROR.unauthorized);
+    return;
+  }
+
+  const token = req.header("X-Verification-Token") || "";
+  const claims = verifyCustomerServiceToken(token);
+  if (!claims) {
+    structuredLog("warn", "CUSTOMER_SERVICE_AUTH_FAILED", { requestId: (req as any).requestId, ip: req.ip, orgId: auth.orgId, reason: "token" });
+    res.status(401).json(CS_ERROR.unauthorized);
+    return;
+  }
+
+  if (claims.orgId !== auth.orgId) {
+    structuredLog("warn", "CUSTOMER_SERVICE_AUTH_FAILED", { requestId: (req as any).requestId, ip: req.ip, reason: "org_mismatch" });
+    res.status(401).json(CS_ERROR.unauthorized);
+    return;
+  }
+
+  req.customerService = { orgId: auth.orgId, clientId: claims.clientId, verifiedPolicyId: claims.policyId };
+  next();
+}
+
+/**
+ * CLIENT-scoped ownership check for any :policyId route. Loads the verified client's own policies
+ * (inherently org+client scoped — `getPoliciesByClient(clientId, orgId)`) and returns the one
+ * matching `policyRef` by id OR policy number. Returns null if the customer doesn't own it, which
+ * the caller turns into 403 — never revealing whether the policy exists for another client/tenant.
+ */
+export async function assertPolicyBelongsToVerifiedClient(
+  policyRef: string,
+  ctx: { orgId: string; clientId: string },
+): Promise<Policy | null> {
+  if (!policyRef || typeof policyRef !== "string") return null;
+  const policies = await storage.getPoliciesByClient(ctx.clientId, ctx.orgId);
+  const ref = policyRef.trim();
+  const refUpper = ref.toUpperCase();
+  const match = policies.find((p) => p.id === ref || (p.policyNumber && p.policyNumber.toUpperCase() === refUpper));
+  if (!match) return null;
+  // Belt-and-braces — getPoliciesByClient already constrains both, but assert explicitly.
+  if (match.clientId !== ctx.clientId || match.organizationId !== ctx.orgId) return null;
+  return match;
+}
+
+/**
+ * Exchange a still-valid verification token for a fresh 15-minute one, preserving orgId, clientId
+ * and policyId. Returns null if the presented token is missing, tampered, or expired (an expired
+ * token can never be refreshed), or if the token's tenant does not match `expectedOrgId` (the
+ * tenant resolved from the shared secret) — the secret and the token must be the same tenant,
+ * exactly as requireVerifiedCustomer enforces for every other endpoint.
+ */
+export function refreshVerificationToken(
+  token: string,
+  expectedOrgId: string,
+): { token: string; expiresIn: number } | null {
+  const claims = verifyCustomerServiceToken(token);
+  if (!claims) return null;
+  if (claims.orgId !== expectedOrgId) return null;
+  return issueVerificationToken({ orgId: claims.orgId, clientId: claims.clientId, policyId: claims.policyId });
 }
 
 /** Exposed for unit tests only. */

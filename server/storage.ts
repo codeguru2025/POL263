@@ -539,6 +539,9 @@ export interface IStorage {
   getFuneralCasesByOrg(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<FuneralCase[]>;
   getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined>;
   getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined>;
+  /** Most recent funeral case for a policy, org-scoped. Used by the customer-service API so a
+   *  chatbot can answer "when/where is the funeral" without touching operational tables. */
+  getFuneralCaseByPolicy(policyId: string, orgId: string): Promise<FuneralCase | undefined>;
   createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase>;
   updateFuneralCase(id: string, data: Partial<InsertFuneralCase>, orgId: string): Promise<FuneralCase | undefined>;
   getFuneralTasks(caseId: string, orgId: string): Promise<FuneralTask[]>;
@@ -3693,6 +3696,16 @@ export class DatabaseStorage implements IStorage {
     // manually-typed lookup (from memory, a phone call, etc.) shouldn't 404 on casing alone.
     // sql`upper(...)` rather than ilike() so user input can't be interpreted as a wildcard pattern.
     const [fc] = await tdb.select().from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(sql`upper(${funeralCases.caseNumber})`, caseNumber.toUpperCase())));
+    return fc;
+  }
+  async getFuneralCaseByPolicy(policyId: string, orgId: string): Promise<FuneralCase | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [fc] = await tdb
+      .select()
+      .from(funeralCases)
+      .where(and(eq(funeralCases.policyId, policyId), eq(funeralCases.organizationId, orgId)))
+      .orderBy(desc(funeralCases.createdAt))
+      .limit(1);
     return fc;
   }
   async createFuneralCase(fc: InsertFuneralCase): Promise<FuneralCase> {
