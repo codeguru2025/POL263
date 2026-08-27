@@ -35,10 +35,12 @@ export async function streamExecutiveReportPdf(
   newPage(ctx);
 
   // Headline KPI tiles
+  const cmp = (report as any).comparison;
+  const dl = (v: number | null | undefined) => (v == null ? "" : `  (${v > 0 ? "+" : ""}${v}% vs prior)`);
   statRow(ctx, [
-    { label: "Total income (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}`, color: C_INCOME },
-    { label: "Net (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.net)}`, color: Number(report.financial.incomeStatement.consolidatedUsd?.net ?? 0) >= 0 ? C_INCOME : C_EXPENSE },
-    { label: "New policies", value: String(report.policies.newPoliciesCount) },
+    { label: "Total income (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}${dl(cmp?.deltaPct?.totalIncomeUsd)}`, color: C_INCOME },
+    { label: "Net (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.net)}${dl(cmp?.deltaPct?.netUsd)}`, color: Number(report.financial.incomeStatement.consolidatedUsd?.net ?? 0) >= 0 ? C_INCOME : C_EXPENSE },
+    { label: "New policies", value: `${report.policies.newPoliciesCount}${dl(cmp?.deltaPct?.newPoliciesCount)}` },
   ]);
   statRow(ctx, [
     { label: "Funeral services", value: report.funeralServices ? String(report.funeralServices.byType.reduce((s, r) => s + r.count, 0)) : "—" },

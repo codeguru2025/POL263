@@ -33,14 +33,36 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
   const hasClaims = hasModuleCapability(caps, "claims");
   const hasFleet = hasModuleCapability(caps, "fleet");
 
-  const [incomeStatement, cashFlow, incomeTimeSeries, execSummary] = await Promise.all([
+  // Immediately-preceding window of the same length, for period-on-period deltas on the
+  // headline KPIs. Half-open at the start so the two windows don't overlap on the boundary day.
+  const spanDays = Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1);
+  const prevTo = new Date(new Date(from).getTime() - 86400000).toISOString().slice(0, 10);
+  const prevFrom = new Date(new Date(from).getTime() - spanDays * 86400000).toISOString().slice(0, 10);
+
+  const [incomeStatement, cashFlow, incomeTimeSeries, execSummary, prevIncome, prevSummary] = await Promise.all([
     buildIncomeStatement(orgId, { from, to, branchId }),
     buildCashFlowStatement(orgId, { from, to, branchId }),
     buildIncomeTimeSeries(orgId, { from, to, branchId }),
     // Reused wholesale rather than re-deriving: branchBreakdown, claimStats, newPoliciesCount,
     // countryFlag (SA vs home split — gated on countryFlagSettings.isEnabled inside).
     buildExecutiveSummary(orgId, { from, to, branchId }),
+    buildIncomeStatement(orgId, { from: prevFrom, to: prevTo, branchId }),
+    buildExecutiveSummary(orgId, { from: prevFrom, to: prevTo, branchId }),
   ]);
+
+  const pctChange = (curr: number, prev: number): number | null =>
+    prev === 0 ? (curr === 0 ? 0 : null) : Number((((curr - prev) / Math.abs(prev)) * 100).toFixed(1));
+  const comparison = {
+    previousPeriod: { from: prevFrom, to: prevTo },
+    totalIncomeUsd: { current: Number(incomeStatement.consolidatedUsd?.income ?? 0), previous: Number(prevIncome.consolidatedUsd?.income ?? 0) },
+    netUsd: { current: Number(incomeStatement.consolidatedUsd?.net ?? 0), previous: Number(prevIncome.consolidatedUsd?.net ?? 0) },
+    newPoliciesCount: { current: execSummary.newPoliciesCount, previous: prevSummary.newPoliciesCount },
+    deltaPct: {
+      totalIncomeUsd: pctChange(Number(incomeStatement.consolidatedUsd?.income ?? 0), Number(prevIncome.consolidatedUsd?.income ?? 0)),
+      netUsd: pctChange(Number(incomeStatement.consolidatedUsd?.net ?? 0), Number(prevIncome.consolidatedUsd?.net ?? 0)),
+      newPoliciesCount: pctChange(execSummary.newPoliciesCount, prevSummary.newPoliciesCount),
+    },
+  };
 
   // The 14 queries below are all independent of each other (same orgId/from/to/branchId, no
   // query depends on another's result) but were previously awaited one at a time — a report
@@ -257,6 +279,7 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
 
   return {
     period: { from, to, branchId: branchId ?? null },
+    comparison,
     capabilities: { hasFuneralOps, hasClaims, hasFleet },
     financial: {
       incomeStatement, cashFlow, incomeTimeSeries,
