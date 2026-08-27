@@ -10,6 +10,7 @@ const PDF_CAPABLE = new Set([
   "claims", "cashups", "payments", "expenditures", "platform",
   "reinstatements", "conversions", "activations", "receipt-amendments", "complaint-report",
   "branch-report", "audit-trail", "irp5-reconciliation", "data-integrity", "collection-efficiency",
+  "persistency", "lapse-analysis", "member-movement",
   "active-policies", "awaiting-payments", "overdue", "pre-lapse", "lapsed",
 ]);
 

@@ -13204,6 +13204,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getCollectionEfficiencyReport(user.organizationId, from, to));
   });
 
+  app.get("/api/reports/persistency", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    return res.json(await storage.getPersistencyReport((req.user as any).organizationId));
+  });
+
+  app.get("/api/reports/lapse-analysis", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getLapseAnalysisReport(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/member-movement", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getMemberMovementReport(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
@@ -14332,6 +14352,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             currencyTotals!["Collected"][c] = (currencyTotals!["Collected"][c] || 0) + r.collected;
             return [r.branch, c, r.policyCount, r.expected.toFixed(2), r.collected.toFixed(2), `${r.collectionRate}%`];
           });
+          break;
+        }
+        case "persistency": {
+          const pr = await storage.getPersistencyReport(user.organizationId);
+          headers = ["Inception Cohort", "Months Elapsed", "Incepted", "Active", "In Grace", "Lapsed", "Cancelled", "Persistency %"];
+          rows = pr.map((r) => [r.cohort, r.monthsElapsed, r.incepted, r.active, r.grace, r.lapsed, r.cancelled, `${r.persistency}%`]);
+          break;
+        }
+        case "lapse-analysis": {
+          const orgToday = await todayForOrg(user.organizationId);
+          const la = await storage.getLapseAnalysisReport(user.organizationId, reportFilters.fromDate || `${orgToday.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday);
+          headers = ["Month", "Lapses", "Reinstatements"];
+          rows = la.months.map((m) => [m.month, m.lapses, m.reinstatements]);
+          rows.push(["TOTAL", la.totalLapses, la.totalReinstatements]);
+          rows.push(["", "", ""]);
+          rows.push([`In force now: ${la.inForceNow}`, `Approx. period lapse rate: ${la.approxLapseRate}%`, ""]);
+          break;
+        }
+        case "member-movement": {
+          const orgToday2 = await todayForOrg(user.organizationId);
+          const mm = await storage.getMemberMovementReport(user.organizationId, reportFilters.fromDate || `${orgToday2.slice(0, 7)}-01`, reportFilters.toDate || orgToday2);
+          headers = ["Date", "Action", "Policy", "Member", "Actor"];
+          rows = mm.map((r) => [r.date, r.action, r.policyNumber, r.member, r.actor]);
           break;
         }
         default:

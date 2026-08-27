@@ -430,6 +430,12 @@ export interface IStorage {
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
   /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
   getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
+  /** Persistency by inception-month cohort (as-of-now survivorship). */
+  getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]>;
+  /** Lapse & reinstatement analysis for a period, by month, from policy_status_history. */
+  getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }>;
+  /** Member / dependant additions and removals over a period, from the audit trail. */
+  getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2109,6 +2115,105 @@ export class DatabaseStorage implements IStorage {
     return Array.from(map.values())
       .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
       .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
+  }
+
+  /**
+   * Persistency by inception-month cohort. "Persistency %" here is as-of-now survivorship
+   * ((active + grace) / incepted) rather than a snapshot at exactly month 13/25 — the system
+   * doesn't retain enough status history to reconstruct the latter. Cohorts <2 months old are
+   * dropped as not yet meaningful.
+   */
+  async getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT to_char(inception_date, 'YYYY-MM') AS cohort,
+             COUNT(*) AS incepted,
+             COUNT(*) FILTER (WHERE status = 'active') AS active,
+             COUNT(*) FILTER (WHERE status = 'grace') AS grace,
+             COUNT(*) FILTER (WHERE status = 'lapsed') AS lapsed,
+             COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+      FROM policies
+      WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND inception_date IS NOT NULL
+      GROUP BY cohort ORDER BY cohort DESC`);
+    const now = new Date();
+    return rowsOf(res).map((r: any) => {
+      const [y, m] = String(r.cohort).split("-").map(Number);
+      const monthsElapsed = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+      const incepted = parseInt(r.incepted);
+      const active = parseInt(r.active), grace = parseInt(r.grace);
+      return {
+        cohort: r.cohort, monthsElapsed, incepted, active, grace,
+        lapsed: parseInt(r.lapsed), cancelled: parseInt(r.cancelled),
+        persistency: incepted > 0 ? Number((((active + grace) / incepted) * 100).toFixed(1)) : 0,
+      };
+    }).filter((r) => r.monthsElapsed >= 2);
+  }
+
+  /**
+   * Lapse & reinstatement analysis for a period, by month, from policy_status_history. The
+   * period lapse rate is approximate: lapses in period / (currently active + grace + lapses in
+   * period) — the system has no point-in-time in-force count to use as a clean denominator.
+   */
+  async getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const [monthRows, inForceRows] = await Promise.all([
+      tdb.execute(sql`
+        SELECT to_char(psh.created_at, 'YYYY-MM') AS month,
+               COUNT(*) FILTER (WHERE psh.to_status = 'lapsed') AS lapses,
+               COUNT(*) FILTER (WHERE psh.to_status = 'active' AND psh.from_status = 'lapsed') AS reinstatements
+        FROM policy_status_history psh JOIN policies p ON p.id = psh.policy_id
+        WHERE p.organization_id = ${organizationId} AND psh.created_at >= ${fromTs} AND psh.created_at <= ${toTs}
+        GROUP BY month ORDER BY month`),
+      tdb.execute(sql`SELECT COUNT(*) AS n FROM policies WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND status IN ('active','grace')`),
+    ]);
+    const months = rowsOf(monthRows).map((r: any) => ({ month: r.month, lapses: parseInt(r.lapses), reinstatements: parseInt(r.reinstatements) }));
+    const totalLapses = months.reduce((s, m) => s + m.lapses, 0);
+    const totalReinstatements = months.reduce((s, m) => s + m.reinstatements, 0);
+    const inForceNow = parseInt(rowsOf(inForceRows)[0]?.n ?? "0");
+    const denom = inForceNow + totalLapses;
+    return { months, totalLapses, totalReinstatements, inForceNow, approxLapseRate: denom > 0 ? Number(((totalLapses / denom) * 100).toFixed(1)) : 0 };
+  }
+
+  /**
+   * Member / dependant movement over a period — additions and removals of lives on policies,
+   * from the audit trail (ADD_POLICY_MEMBER / REMOVE_POLICY_MEMBER).
+   */
+  async getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const res = await tdb.execute(sql`
+      SELECT al.timestamp, al.action, al.actor_email, al.before, al.after,
+             COALESCE((al.after->>'policyId'), (al.before->>'policyId')) AS policy_id
+      FROM audit_logs al
+      WHERE al.organization_id = ${organizationId}
+        AND al.action IN ('ADD_POLICY_MEMBER','REMOVE_POLICY_MEMBER')
+        AND al.timestamp >= ${fromTs} AND al.timestamp <= ${toTs}
+      ORDER BY al.timestamp DESC`);
+    const rows = rowsOf(res);
+    const policyIds = Array.from(new Set(rows.map((r: any) => r.policy_id).filter(Boolean)));
+    const polNums = new Map<string, string>();
+    if (policyIds.length) {
+      const found = await tdb.select({ id: policies.id, policyNumber: policies.policyNumber })
+        .from(policies).where(inArray(policies.id, policyIds as string[]));
+      for (const p of found) polNums.set(p.id, p.policyNumber);
+    }
+    return rows.map((r: any) => {
+      const payload = (r.after || r.before || {}) as any;
+      const member = payload.memberName || [payload.firstName, payload.lastName].filter(Boolean).join(" ") || payload.dependentName || "—";
+      return {
+        date: r.timestamp ? new Date(r.timestamp).toISOString() : "",
+        action: r.action === "ADD_POLICY_MEMBER" ? "Added" as const : "Removed" as const,
+        policyNumber: r.policy_id ? (polNums.get(r.policy_id) || "—") : "—",
+        member,
+        actor: r.actor_email || "System",
+      };
+    });
   }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
