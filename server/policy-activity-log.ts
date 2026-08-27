@@ -99,7 +99,7 @@ export async function getPolicyActivityLog(
       .limit(limit),
   ]);
 
-  const refs = await resolveAuditRefs(tdb, auditRows);
+  const { refs } = await resolveAuditRefs(tdb, auditRows);
 
   const entries: PolicyActivityEntry[] = [
     ...auditRows.map((r): PolicyActivityEntry => ({

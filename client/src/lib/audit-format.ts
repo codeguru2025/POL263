@@ -120,11 +120,19 @@ function formatValue(value: unknown): string {
 export interface FieldChange {
   field: string;
   /** "diff" = a field changed value (from -> to); "snapshot" = a create/delete, `to` is the
-   *  record's value at that moment and `from` is unused. The UI renders each shape differently
-   *  (an arrow doesn't make sense for "this is what was created"). */
+   *  record's value at that moment. Both shapes render the same "from → to" way (see
+   *  renderChange) — for a create the "from" side is just "—" (nothing yet). */
   kind: "diff" | "snapshot";
   from: string;
   to: string;
+}
+
+/** One-line "old → new" rendering of a change. The reader explicitly wants both sides shown
+ *  even for a brand-new record, so a snapshot renders as "— → new value" rather than the value
+ *  alone. */
+export function renderChange(c: FieldChange): string {
+  const from = c.kind === "diff" ? c.from : "—";
+  return `${from} → ${c.to}`;
 }
 
 /**

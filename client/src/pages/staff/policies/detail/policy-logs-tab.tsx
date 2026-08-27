@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { CardSection } from "@/components/ds";
 import { History, Loader2 } from "lucide-react";
-import { humanizeAction, humanizeEntityType, summarizeAuditEntry, summarizeChanges } from "@/lib/audit-format";
+import { humanizeAction, humanizeEntityType, summarizeAuditEntry, summarizeChanges, renderChange } from "@/lib/audit-format";
 
 interface PolicyActivityEntry {
   id: string;
@@ -72,18 +72,19 @@ export function PolicyLogsTab({ selectedPolicy }: PolicyLogsTabProps) {
                   </span>
                 </div>
                 {isAudit && entry.entityType && (
-                  <p className="text-xs text-muted-foreground">{humanizeEntityType(entry.entityType)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {humanizeEntityType(entry.entityType)}
+                    {entry.entityId && entry.entityType !== "Policy" && (
+                      <span className="font-mono"> · {refs[entry.entityId] || entry.entityId.slice(0, 8)}</span>
+                    )}
+                  </p>
                 )}
                 {changes.length > 0 && (
                   <ul className="text-xs text-muted-foreground space-y-0.5 pl-3 border-l-2 border-border/60">
                     {changes.map((c) => (
                       <li key={c.field}>
                         <span className="font-medium text-foreground/80">{c.field}:</span>{" "}
-                        {c.kind === "diff" ? (
-                          <>{c.from} <span aria-hidden>→</span> {c.to}</>
-                        ) : (
-                          c.to
-                        )}
+                        {renderChange(c)}
                       </li>
                     ))}
                   </ul>
