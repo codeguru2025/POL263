@@ -440,6 +440,8 @@ export interface IStorage {
   getClaimsAgingReport(organizationId: string): Promise<{ claimNumber: string; policyNumber: string; deceased: string; status: string; branch: string; daysOpen: number; bucket: string; currency: string; amount: number; overdue: boolean }[]>;
   /** Claims loss ratio (per currency) + repudiation breakdown by claim type, for a period. */
   getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{ lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[]; repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[] }>;
+  /** Active/grace policies whose inception anniversary falls within the next `withinDays` days. */
+  getAnniversaryReport(organizationId: string, withinDays: number): Promise<{ policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number }[]>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2291,6 +2293,49 @@ export class DatabaseStorage implements IStorage {
       return { claimType: r.claim_type, submitted, approved: parseInt(r.approved), rejected, repudiationRate: submitted > 0 ? Number(((rejected / submitted) * 100).toFixed(1)) : 0 };
     });
     return { lossRatio, repudiation };
+  }
+
+  /**
+   * Policy anniversary / review list — active & grace policies whose inception-date anniversary
+   * falls within the next `withinDays` days. Forward-looking book management (annual review,
+   * CPI escalation conversation, sum-assured check) — funeral cover doesn't formally "renew"
+   * but the anniversary is still the natural review point.
+   */
+  async getAnniversaryReport(organizationId: string, withinDays: number): Promise<{ policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT p.policy_number, p.currency, p.premium_amount, p.inception_date,
+             c.first_name, c.last_name, c.phone,
+             prod.name AS product, b.name AS branch
+      FROM policies p
+      JOIN clients c ON c.id = p.client_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      LEFT JOIN branches b ON b.id = p.branch_id
+      WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL
+        AND p.status IN ('active','grace') AND p.inception_date IS NOT NULL`);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const out = rowsOf(res).map((r: any) => {
+      const inc = new Date(r.inception_date);
+      let next = new Date(today.getFullYear(), inc.getMonth(), inc.getDate());
+      if (next < today) next = new Date(today.getFullYear() + 1, inc.getMonth(), inc.getDate());
+      const daysUntil = Math.round((next.getTime() - today.getTime()) / 86400000);
+      return {
+        policyNumber: r.policy_number,
+        client: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+        phone: r.phone || "—",
+        product: r.product || "—",
+        branch: r.branch || "(No branch)",
+        currency: r.currency || "USD",
+        premium: r.premium_amount ?? "",
+        inceptionDate: String(r.inception_date),
+        nextAnniversary: next.toISOString().slice(0, 10),
+        daysUntil,
+        yearsInForce: Math.max(0, Math.floor((today.getTime() - inc.getTime()) / (365.25 * 86400000))),
+      };
+    }).filter((r) => r.daysUntil <= withinDays).sort((a, b) => a.daysUntil - b.daysUntil);
+    return out;
   }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {

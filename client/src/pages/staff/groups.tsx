@@ -978,6 +978,17 @@ function GroupLedgerSection({ group }: { group: Group }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => window.open(`${getApiBase()}/api/groups/${groupId}/statement/pdf?download=1`, "_blank")}
+          data-testid="button-group-statement-pdf"
+        >
+          <Download className="h-3.5 w-3.5" /> Statement PDF (YTD)
+        </Button>
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {balanceEntries.length === 0 ? (
           <div className="rounded-md border p-3 sm:col-span-3">

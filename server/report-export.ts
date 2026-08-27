@@ -21,6 +21,7 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "captured-per-employee": "read:policy", "broker-policies": "read:policy",
   "branch-report": "read:policy", "select-count": "read:policy",
   "persistency": "read:policy", "lapse-analysis": "read:policy", "member-movement": "read:policy",
+  "anniversary": "read:policy",
   // ── Finance (read:finance) ──
   "finance": "read:finance", "underwriter-payable": "read:finance", "payments": "read:finance",
   "expenditures": "read:finance", "platform": "read:finance", "cashups": "read:finance",
@@ -91,6 +92,7 @@ export function reportExportLabel(type: string): string {
     "member-movement": "Member / Dependant Movement",
     "claims-aging": "Claims Aging",
     "claims-analytics": "Claims Loss Ratio & Repudiation",
+    "anniversary": "Policy Anniversary / Review List",
   };
   return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

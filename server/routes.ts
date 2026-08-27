@@ -11945,6 +11945,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ balance: computeGroupLedgerBalance(entries) });
   });
 
+  app.get("/api/groups/:id/statement/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const orgToday = await todayForOrg(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${orgToday.slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : orgToday;
+    const { streamGroupStatementPdf } = await import("./group-statement-pdf");
+    await streamGroupStatementPdf(user.organizationId, groupId, from, to, res, { attachment: req.query.download === "1" });
+  });
+
   app.post("/api/groups/ledger/import/upload", requireAuth, requireTenantScope, requirePermission("write:finance"), groupLedgerImportUpload.single("file"), async (req, res) => {
     const user = req.user as any;
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -13249,6 +13259,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getMemberMovementReport(user.organizationId, from, to));
   });
 
+  app.get("/api/reports/anniversary", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const withinDays = Math.max(1, Math.min(parseInt(String(req.query.withinDays)) || 60, 366));
+    return res.json(await storage.getAnniversaryReport((req.user as any).organizationId, withinDays));
+  });
+
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
@@ -14400,6 +14415,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const mm = await storage.getMemberMovementReport(user.organizationId, reportFilters.fromDate || `${orgToday2.slice(0, 7)}-01`, reportFilters.toDate || orgToday2);
           headers = ["Date", "Action", "Policy", "Member", "Actor"];
           rows = mm.map((r) => [r.date, r.action, r.policyNumber, r.member, r.actor]);
+          break;
+        }
+        case "anniversary": {
+          const withinDays = Math.max(1, Math.min(parseInt(String(req.query.withinDays)) || 60, 366));
+          const an = await storage.getAnniversaryReport(user.organizationId, withinDays);
+          headers = ["Policy #", "Client", "Phone", "Product", "Branch", "Currency", "Premium", "Inception Date", "Next Anniversary", "Days Until", "Years In Force"];
+          rows = an.map((r) => [r.policyNumber, r.client, r.phone, r.product, r.branch, r.currency, r.premium, r.inceptionDate, r.nextAnniversary, r.daysUntil, r.yearsInForce]);
           break;
         }
         case "claims-aging": {
