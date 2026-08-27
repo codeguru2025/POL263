@@ -20,6 +20,7 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "policies-per-agent": "read:policy", "new-joinings-summary": "read:policy",
   "captured-per-employee": "read:policy", "broker-policies": "read:policy",
   "branch-report": "read:policy", "select-count": "read:policy",
+  "persistency": "read:policy", "lapse-analysis": "read:policy", "member-movement": "read:policy",
   // ── Finance (read:finance) ──
   "finance": "read:finance", "underwriter-payable": "read:finance", "payments": "read:finance",
   "expenditures": "read:finance", "platform": "read:finance", "cashups": "read:finance",
@@ -84,6 +85,9 @@ export function reportExportLabel(type: string): string {
     "activations": "Policy Activations",
     "data-integrity": "Data Integrity — Exceptions",
     "collection-efficiency": "Premium Collection Efficiency",
+    "persistency": "Persistency by Inception Cohort",
+    "lapse-analysis": "Lapse & Reinstatement Analysis",
+    "member-movement": "Member / Dependant Movement",
   };
   return LABELS[type] || type.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

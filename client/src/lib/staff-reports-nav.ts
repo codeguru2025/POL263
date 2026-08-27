@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { FolderOpen, Shield, ShieldAlert, UserCircle, Users, Wallet, Wrench } from "lucide-react";
+import { Activity, FolderOpen, Shield, UserCircle, Users, Wallet, Wrench } from "lucide-react";
 
 export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll" | "quality";
 
@@ -42,7 +42,10 @@ export type ReportDatasetId =
   | "users"
   | "insuranceContractSummary"
   | "dataIntegrity"
-  | "collectionEfficiency";
+  | "collectionEfficiency"
+  | "persistency"
+  | "lapseAnalysis"
+  | "memberMovement";
 
 export const SECTION_META: Record<ReportSectionId, { label: string; icon: LucideIcon }> = {
   policies: { label: "Policies", icon: FolderOpen },
@@ -51,7 +54,7 @@ export const SECTION_META: Record<ReportSectionId, { label: string; icon: Lucide
   claims: { label: "Claims", icon: Shield },
   operations: { label: "Operations", icon: Wrench },
   payroll: { label: "Payroll", icon: Users },
-  quality: { label: "Data Quality", icon: ShieldAlert },
+  quality: { label: "Book Health", icon: Activity },
 };
 
 export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: string; testId?: string }[]> = {
@@ -90,8 +93,11 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   ],
   claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
   quality: [
-    { value: "data-integrity", label: "Data integrity", testId: "tab-data-integrity" },
+    { value: "persistency", label: "Persistency", testId: "tab-persistency" },
+    { value: "lapse-analysis", label: "Lapse analysis", testId: "tab-lapse-analysis" },
     { value: "collection-efficiency", label: "Collection efficiency", testId: "tab-collection-efficiency" },
+    { value: "member-movement", label: "Member movement", testId: "tab-member-movement" },
+    { value: "data-integrity", label: "Data integrity", testId: "tab-data-integrity" },
   ],
   operations: [
     { value: "funerals", label: "Funerals", testId: "tab-funerals-report" },
@@ -168,6 +174,9 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   claims: ["claimsReport"],
   "data-integrity": ["dataIntegrity"],
   "collection-efficiency": ["collectionEfficiency"],
+  "persistency": ["persistency"],
+  "lapse-analysis": ["lapseAnalysis"],
+  "member-movement": ["memberMovement"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
   payroll: ["payrollEmployees"],
