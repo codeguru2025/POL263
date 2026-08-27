@@ -10,6 +10,53 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-27 — Audit trail still showed raw UUIDs (vehicles, entity ids) and hid policy numbers
+
+**Symptom:** After the 2026-08-26 "readability overhaul", the audit viewer still read as
+jargon in three ways: (1) some before/after fields — most visibly `vehicleId` on
+CHECKOUT_VEHICLE / RETURN_VEHICLE / trip logs — rendered a raw UUID because the resolver had
+no rule for them; (2) the row subtitle always showed `entityType · <first 8 hex of entityId>`
+— a truncated UUID — because the row's *own* `entityId` was never resolved at all, only
+UUIDs embedded inside before/after JSON; (3) for a mutation on a sub-entity of a policy
+(payment, receipt, claim, member) the policy number appeared nowhere, even though "which
+policy?" is the first thing a reader wants — most mutations in this system are against a
+policy.
+
+**Root cause:** `server/audit-ref-resolver.ts` only did field-name-rule resolution of UUIDs
+found *inside* `before`/`after`, and its field→table map was short (`clientId`, `policyId`,
+`branchId`, `groupId`, actor-shaped `*By`/`*UserId`/`*DriverId`). It never looked at the
+row's top-level `entityType`/`entityId`, and the client (`audit.tsx`,
+`policy-logs-tab.tsx`) hard-coded `log.entityId.slice(0, 8)` for the subtitle instead of a
+ref lookup. Snapshot (create/delete) changes also rendered as the bare new value with no
+`— →` so a reader couldn't tell at a glance it was a change line.
+
+**Fix:**
+- `server/audit-ref-resolver.ts`: added `vehicleId`/`fleetVehicleId`/`productId`/`claimId`/
+  `receiptId` to `tableForField`; added `tableForEntityType()` so the row's own `entityId`
+  is resolved (Policy→policyNumber, Client/User/Branch/Group→name, FleetVehicle→"REG (make
+  model)", Product→name, Claim→claimNumber, PaymentReceipt→receiptNumber); the resolver now
+  also returns a per-row `policyNumbers` map (entity is a policy, or its payload carries a
+  `policyId`). Return type changed from `Record<string,string>` to
+  `{ refs, policyNumbers }` — updated both call sites (`server/routes.ts` audit-logs route,
+  `server/policy-activity-log.ts` which destructures `{ refs }`).
+- `client/src/lib/audit-format.ts`: added `renderChange(c)` → `"old → new"` for a diff,
+  `"— → new"` for a create/delete snapshot (both sides always shown).
+- `client/src/pages/staff/audit.tsx`: subtitle now shows `refs[entityId] || slice(8)`, plus
+  a separate "Policy <number>" chip from `policyNumbers` when the entity itself isn't the
+  policy. `client/src/pages/staff/policies/detail/policy-logs-tab.tsx`: resolves the
+  sub-entity id, uses `renderChange`.
+
+**Verified:** `npm run check` clean; `npm run test` 401/401 (added 2 `renderChange` cases +
+updated import in `tests/unit/audit-format.test.ts`).
+
+**Lesson for next time:** "resolve the IDs in the audit trail" has two halves — the UUIDs
+*inside* before/after JSON, and the row's *own* `entityType`/`entityId`. The 2026-08-26 pass
+only did the first. When a reader says the trail "still shows ids", check whether the
+subtitle/entity column is doing a raw `.slice(0, 8)` rather than a ref lookup. The resolver
+is deliberately rule-based (field name / entity type → table), not a per-action table, so
+extending it is a one-line map entry per new reference kind — but a genuinely new table
+(vehicles, products, claims) still needs its own `inArray` fetch block added.
+
 ## 2026-08-26 — Pre-push review: payment-route race condition, 2 misattributed audit-log entries, 1 timing side-channel
 
 Ran a dedicated `/code-review high` pass over the full day's diff before pushing (payment-route

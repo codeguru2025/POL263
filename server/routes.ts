@@ -2504,8 +2504,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.to) filters.to = String(req.query.to);
     const result = await storage.getAuditLogs(user.organizationId, limit, offset, filters);
     const tdb = await getDbForOrg(user.organizationId);
-    const refs = await resolveAuditRefs(tdb, result.rows);
-    return res.json({ ...result, refs });
+    const { refs, policyNumbers } = await resolveAuditRefs(tdb, result.rows);
+    return res.json({ ...result, refs, policyNumbers });
   });
 
   // ─── Dashboard Stats ───────────────────────────────────────
