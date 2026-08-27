@@ -48,7 +48,7 @@ import { registerInboundEmailPublicRoutes } from "./inbound-email-public-routes"
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
-import { REPORT_EXPORT_PERMISSIONS, csvEscape } from "./report-export";
+import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { sendEmail, escapeHtml } from "./email-service";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -13191,6 +13191,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await buildDailyReport(user.organizationId, date));
   });
 
+  app.get("/api/reports/data-integrity", requireAuth, requireTenantScope, requirePermission("read:report"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getDataIntegrityReport(user.organizationId));
+  });
+
+  app.get("/api/reports/collection-efficiency", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getCollectionEfficiencyReport(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
@@ -14302,8 +14315,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ];
           break;
         }
+        case "data-integrity": {
+          const issues = await storage.getDataIntegrityReport(user.organizationId);
+          headers = ["Severity", "Category", "Policy", "Client", "Detail"];
+          rows = issues.map((i) => [i.severity.toUpperCase(), i.category, i.policyNumber, i.client, i.detail]);
+          break;
+        }
+        case "collection-efficiency": {
+          const def = { from: `${(await todayForOrg(user.organizationId)).slice(0, 7)}-01`, to: await todayForOrg(user.organizationId) };
+          const ce = await storage.getCollectionEfficiencyReport(user.organizationId, reportFilters.fromDate || def.from, reportFilters.toDate || def.to);
+          headers = ["Branch", "Currency", "Policies", "Expected Premium", "Collected", "Collection Rate %"];
+          currencyTotals = { "Expected Premium": {}, "Collected": {} };
+          rows = ce.map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!["Expected Premium"][c] = (currencyTotals!["Expected Premium"][c] || 0) + r.expected;
+            currencyTotals!["Collected"][c] = (currencyTotals!["Collected"][c] || 0) + r.collected;
+            return [r.branch, c, r.policyCount, r.expected.toFixed(2), r.collected.toFixed(2), `${r.collectionRate}%`];
+          });
+          break;
+        }
         default:
           return res.status(400).json({ message: `Unknown report type: ${reportType}` });
+      }
+
+      // Same data, rendered as a landscape-A4 letterhead PDF instead of CSV, for reports narrow
+      // enough to read on a page (?format=pdf). Wide Easipol-format exports are refused inside.
+      if (String(req.query.format) === "pdf") {
+        const pdfOrg = await storage.getOrganization(user.organizationId);
+        if (!pdfOrg) return res.status(404).json({ message: "Organisation not found" });
+        const { streamListReportPdf } = await import("./list-report-pdf");
+        const periodBits = [reportFilters.fromDate, reportFilters.toDate].filter(Boolean).join(" to ");
+        await streamListReportPdf({
+          org: pdfOrg as any,
+          title: reportExportLabel(reportType),
+          subtitle: `${periodBits ? `Period: ${periodBits}  ·  ` : ""}Generated ${new Date().toLocaleString("en-ZA")}`,
+          headers,
+          rows,
+          currencyTotals,
+          truncatedAt: REPORT_EXPORT_MAX_ROWS,
+        }, res, { attachment: req.query.download === "1" });
+        return;
       }
 
       const escapeCsv = csvEscape;

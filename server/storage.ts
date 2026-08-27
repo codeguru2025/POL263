@@ -426,6 +426,10 @@ export interface IStorage {
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
   /** All-policies report: 45-column spreadsheet export matching the standard template. */
   getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
+  /** Records that are internally inconsistent and need a human — the data-integrity exception report. */
+  getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
+  /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
+  getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -2019,6 +2023,93 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  /**
+   * Data-integrity / exception report — records that are internally inconsistent and need a
+   * human to look at them. Read-only; each check is a small independent query, unioned in JS.
+   */
+  async getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const out: { category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[] = [];
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const name = (r: any) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "—";
+
+    const [noAgent, badPremium, noBeneficiary, noNationalId, noPrincipal, dupIds, dupPhones] = await Promise.all([
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace') AND p.agent_id IS NULL`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name, p.premium_amount FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace') AND (p.premium_amount IS NULL OR p.premium_amount::numeric <= 0)`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND (p.beneficiary_first_name IS NULL OR p.beneficiary_first_name = '')`),
+      tdb.execute(sql`SELECT DISTINCT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND (c.national_id IS NULL OR c.national_id = '')`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND NOT EXISTS (SELECT 1 FROM policy_members pm WHERE pm.policy_id = p.id AND pm.is_active = true AND pm.role IN ('principal','policy_holder'))`),
+      tdb.execute(sql`SELECT national_id, COUNT(*) AS n, string_agg(DISTINCT (first_name || ' ' || last_name), ' | ') AS names
+        FROM clients WHERE organization_id = ${organizationId} AND national_id IS NOT NULL AND national_id <> ''
+        GROUP BY national_id HAVING COUNT(*) > 1`),
+      tdb.execute(sql`SELECT phone, COUNT(*) AS n, string_agg(DISTINCT (first_name || ' ' || last_name), ' | ') AS names
+        FROM clients WHERE organization_id = ${organizationId} AND phone IS NOT NULL AND length(regexp_replace(phone, '\\D', '', 'g')) >= 7
+        GROUP BY phone HAVING COUNT(*) > 1`),
+    ]);
+
+    for (const r of rowsOf(noAgent)) out.push({ category: "No agent assigned", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no agent — commission and follow-up have no owner." });
+    for (const r of rowsOf(badPremium)) out.push({ category: "Zero / missing premium", severity: "high", policyNumber: r.policy_number, client: name(r), detail: `Premium is ${r.premium_amount ?? "null"} on an active/grace policy.` });
+    for (const r of rowsOf(noBeneficiary)) out.push({ category: "No beneficiary", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no beneficiary recorded — a claim payout has no payee." });
+    for (const r of rowsOf(noNationalId)) out.push({ category: "Client missing national ID", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Policyholder has no national ID — blocks KYC and claims verification." });
+    for (const r of rowsOf(noPrincipal)) out.push({ category: "No principal member", severity: "high", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no active principal/policy-holder member row." });
+    for (const r of rowsOf(dupIds)) out.push({ category: "Duplicate national ID", severity: "high", policyNumber: "—", client: r.names, detail: `${r.n} client records share national ID ${r.national_id}.` });
+    for (const r of rowsOf(dupPhones)) out.push({ category: "Duplicate phone number", severity: "low", policyNumber: "—", client: r.names, detail: `${r.n} client records share phone ${r.phone}.` });
+
+    const sevRank = { high: 0, medium: 1, low: 2 };
+    return out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || a.category.localeCompare(b.category));
+  }
+
+  /**
+   * Premium-collection efficiency for a period: expected premium (active + grace policies whose
+   * cycle falls in the window) vs collected (issued receipts in the window), and the collection
+   * rate, grouped by branch. Cash basis, per currency.
+   */
+  async getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+
+    const [expectedRows, collectedRows] = await Promise.all([
+      // Expected = one premium per active/grace policy in the period (a single billing cycle).
+      tdb.execute(sql`
+        SELECT COALESCE(b.name, '(No branch)') AS branch, p.currency,
+               COALESCE(SUM(p.premium_amount::numeric), 0) AS expected, COUNT(*) AS policy_count
+        FROM policies p LEFT JOIN branches b ON b.id = p.branch_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+        GROUP BY COALESCE(b.name, '(No branch)'), p.currency`),
+      tdb.execute(sql`
+        SELECT COALESCE(b.name, '(No branch)') AS branch, pr.currency,
+               COALESCE(SUM(pr.amount::numeric), 0) AS collected
+        FROM payment_receipts pr LEFT JOIN branches b ON b.id = pr.branch_id
+        WHERE pr.organization_id = ${organizationId} AND pr.status = 'issued'
+          AND pr.issued_at >= ${fromTs} AND pr.issued_at <= ${toTs}
+        GROUP BY COALESCE(b.name, '(No branch)'), pr.currency`),
+    ]);
+
+    const map = new Map<string, { branch: string; currency: string; expected: number; collected: number; policyCount: number }>();
+    for (const r of rowsOf(expectedRows)) {
+      const k = `${r.branch}|${r.currency}`;
+      map.set(k, { branch: r.branch, currency: r.currency, expected: parseFloat(r.expected), collected: 0, policyCount: parseInt(r.policy_count) });
+    }
+    for (const r of rowsOf(collectedRows)) {
+      const k = `${r.branch}|${r.currency}`;
+      const e = map.get(k) ?? { branch: r.branch, currency: r.currency, expected: 0, collected: 0, policyCount: 0 };
+      e.collected += parseFloat(r.collected);
+      map.set(k, e);
+    }
+    return Array.from(map.values())
+      .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
+      .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
+  }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);

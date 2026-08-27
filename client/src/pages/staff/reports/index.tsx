@@ -20,6 +20,7 @@ import { AgentsSection } from "./sections/agents-section";
 import { ClaimsSection } from "./sections/claims-section";
 import { OperationsSection } from "./sections/operations-section";
 import { PayrollSection } from "./sections/payroll-section";
+import { QualitySection } from "./sections/quality-section";
 
 export default function StaffReports() {
   const {
@@ -125,7 +126,7 @@ export default function StaffReports() {
                   <SelectItem value="rejected">Rejected</SelectItem>
                 </SelectContent>
               </Select>
-            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "ledger", "balance-sheet", "funerals", "payments", "actuarial"].includes(activeReport) ? (
+            ) : !["fleet", "expenditures", "cashups", "payroll", "commissions", "commission-payments", "platform", "income-statement", "cash-flow", "ledger", "balance-sheet", "funerals", "payments", "actuarial", "data-integrity", "collection-efficiency"].includes(activeReport) ? (
               <Select value={statusFilter || "__all__"} onValueChange={(v) => setStatusFilter(v === "__all__" ? "" : v)}>
                 <SelectTrigger className="w-44 h-9"><SelectValue placeholder="All statuses" /></SelectTrigger>
                 <SelectContent>
@@ -192,6 +193,7 @@ export default function StaffReports() {
             {reportSection === "claims" && <ClaimsSection {...sectionProps} />}
             {reportSection === "operations" && <OperationsSection {...sectionProps} />}
             {reportSection === "payroll" && <PayrollSection {...sectionProps} />}
+            {reportSection === "quality" && <QualitySection {...sectionProps} />}
           </Tabs>
         </div>
       </PageShell>
