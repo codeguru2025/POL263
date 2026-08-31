@@ -1,7 +1,9 @@
 /**
  * Revenue-share enforcement (Phase 4):
- *  - the per-tenant outstanding-fee cap ("unpaid platform fees may not exceed $X") — when a
- *    revenue-share tenant's unpaid + accrued fees pass the cap, bill immediately and block access
+ *  - the per-tenant outstanding-fee cap ("unpaid platform fees may not exceed $X") — a "bill
+ *    early" control: raises an invoice for the uninvoiced accrual when unpaid fees pass the cap,
+ *    so fees don't run up unseen. It does NOT suspend — the normal past-due → grace → suspend
+ *    path handles that on the invoice due date.
  *  - settlement reconciliation — once a revenue-share invoice is paid, mark the matching
  *    platform_receivables in the tenant's own DB as settled and drop an audit-trail entry
  *
@@ -9,10 +11,9 @@
  * so everything here is best-effort and idempotent, run outside the payment transaction — the
  * same shape as tenant-db-commissioning.
  */
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import {
-  tenants as cpTenants,
   billingPlans,
   billingSettings,
   tenantSubscriptions,
@@ -26,8 +27,6 @@ import { platformReceivables, auditLogs } from "@shared/schema";
 import { getDbForOrg } from "./tenant-db";
 import { getFxToUsdMap, getUnsettledPlatformFeesByCurrency } from "./tenant-billing-usage";
 import { resolveEffectivePricing, computeRevenueShareInvoiceFromFees } from "./billing-model-math";
-import { invalidateTenantActiveCache } from "./auth";
-import { invalidateTenantModuleCache } from "./module-gate";
 import { structuredLog } from "./logger";
 import crypto from "crypto";
 
@@ -41,20 +40,25 @@ function generateMerchantReference(orgId: string): string {
   return `BILL-${orgId.slice(0, 8)}-${date}-${crypto.randomBytes(4).toString("hex")}`;
 }
 
-/** Sum of a tenant's unpaid billing exposure in USD (all open invoices for the subscription). */
-export async function unpaidInvoiceExposureUsd(subscriptionId: string): Promise<number> {
+/** Sum of a tenant's open revenue-share / subscription invoice amounts in USD. */
+async function openFeeInvoiceTotalUsd(subscriptionId: string): Promise<number> {
   const [row] = await cpDb
     .select({ total: sql<string>`coalesce(sum(${tenantInvoices.amount}), '0')` })
     .from(tenantInvoices)
-    .where(and(eq(tenantInvoices.subscriptionId, subscriptionId), eq(tenantInvoices.status, "open")));
+    .where(and(
+      eq(tenantInvoices.subscriptionId, subscriptionId),
+      eq(tenantInvoices.status, "open"),
+      inArray(tenantInvoices.kind, ["revenue_share", "subscription"]),
+    ));
   return parseFloat(row?.total ?? "0");
 }
 
 /**
- * Outstanding-fee-cap enforcement for one revenue-share subscription. When unpaid invoices +
- * fees accrued since the last settlement exceed the effective cap: raise an immediate
- * revenue-share invoice for the accrued portion, advance lastSettlementAt, and suspend the tenant
- * (paying the invoice restores access). Returns true if it fired.
+ * Outstanding-fee-cap enforcement for one revenue-share subscription. The cap is a "bill early"
+ * control, NOT a "suspend early" one: when a tenant's unpaid fees (open invoices + still-uninvoiced
+ * accrual) pass the effective cap, this raises a revenue-share invoice for the uninvoiced portion
+ * so fees don't run up invisibly. The invoice carries the normal grace-period due date; suspension
+ * still only happens through the usual past-due → grace → suspend path. Returns true if it billed.
  */
 export async function enforceOutstandingFeeCap(
   sub: TenantSubscription,
@@ -79,63 +83,55 @@ export async function enforceOutstandingFeeCap(
   if (pricing.billingModel !== "revenue_share") return false;
 
   const now = new Date();
-  // Accrued = unsettled platform_receivables (the single ledger), converted to USD. No minimum
-  // floor here — the cap is about real accrual.
+  const graceDays = Number((settingsInput.graceDays as number | undefined) ?? sub.graceDaysOverride ?? 7) || 7;
+
+  // Accrued = unsettled platform_receivables (the single ledger) in USD, no minimum floor.
   const [{ byCurrency }, fx] = await Promise.all([
     getUnsettledPlatformFeesByCurrency(sub.tenantId),
     getFxToUsdMap(sub.tenantId),
   ]);
   const rawAccrual = computeRevenueShareInvoiceFromFees({ ...pricing, monthlyMinimumUsd: "0" }, byCurrency, fx);
   const accruedUsd = parseFloat(rawAccrual.amountUsd);
-  const unpaidUsd = await unpaidInvoiceExposureUsd(sub.id);
+  const openInvoicedUsd = await openFeeInvoiceTotalUsd(sub.id);
+  // The unsettled ledger already includes whatever an open invoice covers (receivables settle
+  // only on payment), so the not-yet-invoiced part is the excess over what's already billed.
+  const uninvoicedAccrualUsd = Math.max(0, accruedUsd - openInvoicedUsd);
+  const exposureUsd = openInvoicedUsd + uninvoicedAccrualUsd;
 
-  if (unpaidUsd + accruedUsd <= cap) return false;
+  if (exposureUsd <= cap || uninvoicedAccrualUsd < 0.01) return false;
 
-  structuredLog("warn", "Outstanding-fee cap exceeded — billing immediately and blocking", {
-    tenantId: sub.tenantId, cap, unpaidUsd, accruedUsd,
+  structuredLog("warn", "Outstanding-fee cap exceeded — raising an early invoice (no suspension)", {
+    tenantId: sub.tenantId, cap, openInvoicedUsd, uninvoicedAccrualUsd,
   });
 
   await cpDb.transaction(async (tx) => {
-    if (accruedUsd > 0) {
-      await tx.insert(tenantInvoices).values({
-        tenantId: sub.tenantId,
-        subscriptionId: sub.id,
-        planId: plan.id,
-        kind: "revenue_share",
-        amount: money(accruedUsd),
-        currency: "USD",
-        status: "open",
-        lineItems: [
-          ...rawAccrual.lineItems,
-          { label: `Billed early — unpaid platform fees reached the $${money(cap)} limit`, amount: "0.00" },
-        ],
-        periodStart: sub.lastSettlementAt ?? sub.currentPeriodStart,
-        periodEnd: now,
-        usageCutAt: now,
-        dueDate: now,
-        paymentToken: crypto.randomBytes(24).toString("hex"),
-        merchantReference: generateMerchantReference(sub.tenantId),
-      });
-      await tx.update(tenantSubscriptions).set({ lastSettlementAt: now, updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
-    }
-    await tx.update(tenantSubscriptions).set({ status: "suspended", updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
-    const graceDays = Number((settingsInput.deletionGraceDays as number | undefined) ?? 30) || 30;
-    await tx.update(cpTenants).set({
-      isActive: false,
-      licenseStatus: "suspended",
-      suspendedAt: now,
-      suspendReason: `Unpaid platform fees exceeded the $${money(cap)} limit`,
-      viewOnlyGraceUntil: new Date(now.getTime() + graceDays * 24 * 60 * 60 * 1000),
-    }).where(eq(cpTenants.id, sub.tenantId));
+    await tx.insert(tenantInvoices).values({
+      tenantId: sub.tenantId,
+      subscriptionId: sub.id,
+      planId: plan.id,
+      kind: "revenue_share",
+      amount: money(uninvoicedAccrualUsd),
+      currency: "USD",
+      status: "open",
+      lineItems: [
+        ...rawAccrual.lineItems,
+        { label: `Billed now because unpaid platform fees passed the $${money(cap)} limit`, amount: "0.00" },
+      ],
+      periodStart: sub.lastSettlementAt ?? sub.currentPeriodStart,
+      periodEnd: now,
+      usageCutAt: now,
+      dueDate: new Date(now.getTime() + graceDays * 24 * 60 * 60 * 1000),
+      paymentToken: crypto.randomBytes(24).toString("hex"),
+      merchantReference: generateMerchantReference(sub.tenantId),
+    });
+    await tx.update(tenantSubscriptions).set({ lastSettlementAt: now, updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
     await tx.insert(tenantBillingEvents).values({
       tenantId: sub.tenantId,
       type: "outstanding_cap_exceeded",
-      detail: { cap: money(cap), unpaidUsd: money(unpaidUsd), accruedUsd: money(accruedUsd) },
+      detail: { cap: money(cap), openInvoicedUsd: money(openInvoicedUsd), billedNowUsd: money(uninvoicedAccrualUsd), dueInDays: graceDays },
     });
   });
 
-  invalidateTenantActiveCache(sub.tenantId);
-  invalidateTenantModuleCache(sub.tenantId);
   return true;
 }
 

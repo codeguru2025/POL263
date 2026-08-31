@@ -73,14 +73,14 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
 
   for (const sub of subscriptions) {
     try {
-      // Step 0: revenue-share outstanding-fee cap. Bills immediately and blocks access when a
-      // tenant's unpaid + accrued platform fees pass their cap — runs before the normal steps so
-      // a capped tenant is handled even if their renewal isn't due yet.
+      // Step 0: revenue-share outstanding-fee cap — a "bill early" control. Raises an invoice for
+      // the uninvoiced accrual when unpaid fees pass the tenant's cap, so fees don't run up
+      // invisibly. It does NOT suspend — the normal past-due → grace → suspend path (steps 2–3)
+      // handles that on the invoice's due date like any other.
       if (sub.status !== "suspended") {
         const [capPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, sub.planId)).limit(1);
-        if (capPlan) {
-          const fired = await enforceOutstandingFeeCap(sub, capPlan, settings);
-          if (fired) { result.autoSuspensions++; sub.status = "suspended"; continue; }
+        if (capPlan && await enforceOutstandingFeeCap(sub, capPlan, settings)) {
+          result.invoicesGenerated++;
         }
       }
 

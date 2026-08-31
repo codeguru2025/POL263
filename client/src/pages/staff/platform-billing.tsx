@@ -137,7 +137,7 @@ function SettingsCard() {
           <div className="space-y-2">
             <Label htmlFor="pb-cap">Unpaid-fee limit (USD)</Label>
             <Input id="pb-cap" type="number" min={0} step="0.01" value={defaultOutstandingFeeCapUsd} onChange={(e) => setDefaultOutstandingFeeCapUsd(e.target.value)} placeholder="No limit" />
-            <p className="text-xs text-muted-foreground">When a revenue-share tenant's unpaid fees pass this, they're billed immediately and access is blocked. Blank = no limit. Can be set per tenant.</p>
+            <p className="text-xs text-muted-foreground">When a revenue-share tenant's unpaid fees pass this, an invoice is raised right away (with the normal grace period) so fees don't build up unseen — it does not suspend on its own. Blank = no limit. Can be set per tenant.</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="pb-deletion">View-only window after suspension (days)</Label>
