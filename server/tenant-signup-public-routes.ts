@@ -30,6 +30,9 @@ export function registerTenantSignupPublicRoutes(app: Express): void {
         id: billingPlans.id, key: billingPlans.key, name: billingPlans.name,
         description: billingPlans.description, priceMonthlyUsd: billingPlans.priceMonthlyUsd,
         modules: billingPlans.modules, sortOrder: billingPlans.sortOrder,
+        billingModel: billingPlans.billingModel, baseFeeUsd: billingPlans.baseFeeUsd,
+        includedPolicyUnits: billingPlans.includedPolicyUnits, revenueSharePercent: billingPlans.revenueSharePercent,
+        monthlyMinimumUsd: billingPlans.monthlyMinimumUsd, setupFeeUsd: billingPlans.setupFeeUsd,
       })
       .from(billingPlans)
       .where(eq(billingPlans.isActive, true))
