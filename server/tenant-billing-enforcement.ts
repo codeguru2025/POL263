@@ -58,29 +58,30 @@ async function openFeeInvoiceTotalUsd(subscriptionId: string): Promise<number> {
  * control, NOT a "suspend early" one: when a tenant's unpaid fees (open invoices + still-uninvoiced
  * accrual) pass the effective cap, this raises a revenue-share invoice for the uninvoiced portion
  * so fees don't run up invisibly. The invoice carries the normal grace-period due date; suspension
- * still only happens through the usual past-due → grace → suspend path. Returns true if it billed.
+ * still only happens through the usual past-due → grace → suspend path. Returns the invoice it
+ * raised (for the caller to email), or null if nothing was billed.
  */
 export async function enforceOutstandingFeeCap(
   sub: TenantSubscription,
   plan: BillingPlan,
   settingsInput: Record<string, unknown>,
-): Promise<boolean> {
+): Promise<TenantInvoice | null> {
   const settings = {
     defaultOutstandingFeeCapUsd: (settingsInput.defaultOutstandingFeeCapUsd as string | null | undefined) ?? null,
     platformFeeRatePercent: (settingsInput.platformFeeRatePercent as string | null | undefined) ?? null,
     defaultMonthlyMinimumUsd: (settingsInput.defaultMonthlyMinimumUsd as string | null | undefined) ?? null,
   };
   const capRaw = sub.outstandingFeeCapUsd ?? settings.defaultOutstandingFeeCapUsd ?? null;
-  if (capRaw == null) return false;
+  if (capRaw == null) return null;
   const cap = parseFloat(String(capRaw));
-  if (!Number.isFinite(cap) || cap <= 0) return false;
+  if (!Number.isFinite(cap) || cap <= 0) return null;
 
   const pricing = resolveEffectivePricing(plan, [], sub, {
     platformFeeRatePercent: settings.platformFeeRatePercent ?? null,
     defaultMonthlyMinimumUsd: settings.defaultMonthlyMinimumUsd ?? null,
     defaultOutstandingFeeCapUsd: settings.defaultOutstandingFeeCapUsd ?? null,
   });
-  if (pricing.billingModel !== "revenue_share") return false;
+  if (pricing.billingModel !== "revenue_share") return null;
 
   const now = new Date();
   const graceDays = Number((settingsInput.graceDays as number | undefined) ?? sub.graceDaysOverride ?? 7) || 7;
@@ -98,14 +99,14 @@ export async function enforceOutstandingFeeCap(
   const uninvoicedAccrualUsd = Math.max(0, accruedUsd - openInvoicedUsd);
   const exposureUsd = openInvoicedUsd + uninvoicedAccrualUsd;
 
-  if (exposureUsd <= cap || uninvoicedAccrualUsd < 0.01) return false;
+  if (exposureUsd <= cap || uninvoicedAccrualUsd < 0.01) return null;
 
   structuredLog("warn", "Outstanding-fee cap exceeded — raising an early invoice (no suspension)", {
     tenantId: sub.tenantId, cap, openInvoicedUsd, uninvoicedAccrualUsd,
   });
 
-  await cpDb.transaction(async (tx) => {
-    await tx.insert(tenantInvoices).values({
+  const raised = await cpDb.transaction(async (tx) => {
+    const [row] = await tx.insert(tenantInvoices).values({
       tenantId: sub.tenantId,
       subscriptionId: sub.id,
       planId: plan.id,
@@ -123,16 +124,17 @@ export async function enforceOutstandingFeeCap(
       dueDate: new Date(now.getTime() + graceDays * 24 * 60 * 60 * 1000),
       paymentToken: crypto.randomBytes(24).toString("hex"),
       merchantReference: generateMerchantReference(sub.tenantId),
-    });
+    }).returning();
     await tx.update(tenantSubscriptions).set({ lastSettlementAt: now, updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
     await tx.insert(tenantBillingEvents).values({
       tenantId: sub.tenantId,
       type: "outstanding_cap_exceeded",
       detail: { cap: money(cap), openInvoicedUsd: money(openInvoicedUsd), billedNowUsd: money(uninvoicedAccrualUsd), dueInDays: graceDays },
     });
+    return row;
   });
 
-  return true;
+  return raised;
 }
 
 /**

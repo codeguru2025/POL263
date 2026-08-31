@@ -11,7 +11,7 @@
  * This one-directional split avoids the sweep and the payment-clearance path
  * racing over subscription.status.
  */
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, billingPlans, tenantSubscriptions, tenantInvoices, tenantBillingEvents } from "@shared/control-plane-schema";
 import { generateInvoiceForSubscription, getEffectiveGraceDays, getBillingSettings } from "./tenant-billing-service";
@@ -79,8 +79,12 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
       // handles that on the invoice's due date like any other.
       if (sub.status !== "suspended") {
         const [capPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, sub.planId)).limit(1);
-        if (capPlan && await enforceOutstandingFeeCap(sub, capPlan, settings)) {
-          result.invoicesGenerated++;
+        if (capPlan) {
+          const capInvoice = await enforceOutstandingFeeCap(sub, capPlan, settings);
+          if (capInvoice) {
+            result.invoicesGenerated++;
+            await sendInvoiceReminderEmail(capInvoice);
+          }
         }
       }
 
@@ -112,6 +116,26 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
         if (openInvoice) await sendGracePeriodEmail(openInvoice, graceDeadline);
 
         sub.status = "past_due"; // keep the in-loop copy consistent for the auto-suspend check below
+      }
+
+      // Step 2b: repeat reminder while past-due but not yet suspended. Sends at most once every 7
+      // days so a tenant in a long grace window keeps getting nudged instead of hearing nothing
+      // between the first overdue notice and the suspension.
+      if (sub.status === "past_due") {
+        const [lastReminder] = await cpDb.select({ createdAt: tenantBillingEvents.createdAt }).from(tenantBillingEvents)
+          .where(and(eq(tenantBillingEvents.tenantId, sub.tenantId), eq(tenantBillingEvents.type, "grace_reminder")))
+          .orderBy(desc(tenantBillingEvents.createdAt)).limit(1);
+        const dueForReminder = !lastReminder || (now.getTime() - new Date(lastReminder.createdAt).getTime()) >= 7 * 24 * 60 * 60 * 1000;
+        if (dueForReminder) {
+          const [openInvoice] = await cpDb.select().from(tenantInvoices).where(and(eq(tenantInvoices.subscriptionId, sub.id), eq(tenantInvoices.status, "open"))).limit(1);
+          if (openInvoice) {
+            const graceDeadline = new Date(sub.currentPeriodEnd.getTime() + getEffectiveGraceDays(sub, settings) * 24 * 60 * 60 * 1000);
+            if (graceDeadline.getTime() > now.getTime()) {
+              await sendGracePeriodEmail(openInvoice, graceDeadline);
+              await cpDb.insert(tenantBillingEvents).values({ tenantId: sub.tenantId, type: "grace_reminder", detail: { invoiceId: openInvoice.id, graceDeadline } });
+            }
+          }
+        }
       }
 
       // Step 3: auto-suspend. Sweep only ever moves TOWARD suspension — see file header.
