@@ -10,14 +10,27 @@ import { verifyTotpCode, TOTP_EPOCH_TOLERANCE_SEC } from "../../server/totp";
  */
 describe("verifyTotpCode — clock-skew tolerance", () => {
   const secret = generateSecret();
-  const realNow = Date.now();
 
-  /** Generate the code that a device would show at (now + offsetMs). */
+  // Pin "now" to the MIDDLE of a 30s TOTP window so ±35s offsets land unambiguously in the
+  // adjacent window (not 2 windows away, which happens when now sits near a window edge).
+  const STEP_MS = 30_000;
+  const base = Math.floor(Date.now() / STEP_MS) * STEP_MS + STEP_MS / 2;
+
+  /** Generate the code a device would show at (base + offsetMs), and verify against base. */
   function tokenAt(offsetMs: number): string {
     const D = Date.now;
-    Date.now = () => realNow + offsetMs;
+    Date.now = () => base + offsetMs;
     try {
       return generateSync({ secret });
+    } finally {
+      Date.now = D;
+    }
+  }
+  async function verifyAtBase(token: string): Promise<boolean> {
+    const D = Date.now;
+    Date.now = () => base;
+    try {
+      return await verifyTotpCode(secret, token);
     } finally {
       Date.now = D;
     }
@@ -28,23 +41,23 @@ describe("verifyTotpCode — clock-skew tolerance", () => {
   });
 
   it("accepts the current-window code", async () => {
-    expect(await verifyTotpCode(secret, tokenAt(0))).toBe(true);
+    expect(await verifyAtBase(tokenAt(0))).toBe(true);
   });
 
   it("accepts a code from the PREVIOUS window (slow phone / slow typing across a boundary)", async () => {
-    expect(await verifyTotpCode(secret, tokenAt(-35_000))).toBe(true);
+    expect(await verifyAtBase(tokenAt(-35_000))).toBe(true);
   });
 
   it("accepts a code from the NEXT window (fast phone)", async () => {
-    expect(await verifyTotpCode(secret, tokenAt(+35_000))).toBe(true);
+    expect(await verifyAtBase(tokenAt(+35_000))).toBe(true);
   });
 
   it("rejects a code two windows in the past", async () => {
-    expect(await verifyTotpCode(secret, tokenAt(-95_000))).toBe(false);
+    expect(await verifyAtBase(tokenAt(-95_000))).toBe(false);
   });
 
   it("rejects a code two windows in the future", async () => {
-    expect(await verifyTotpCode(secret, tokenAt(+95_000))).toBe(false);
+    expect(await verifyAtBase(tokenAt(+95_000))).toBe(false);
   });
 
   it("rejects a wrong code", async () => {
@@ -62,6 +75,6 @@ describe("verifyTotpCode — clock-skew tolerance", () => {
   });
 
   it("trims surrounding whitespace on the submitted code", async () => {
-    expect(await verifyTotpCode(secret, `  ${tokenAt(0)}  `)).toBe(true);
+    expect(await verifyAtBase(`  ${tokenAt(0)}  `)).toBe(true);
   });
 });
