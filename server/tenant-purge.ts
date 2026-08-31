@@ -124,14 +124,20 @@ export async function purgeTenant(tenantId: string, opts: { actorEmail?: string 
     detail: { actor: opts.actorEmail ?? "system", storageObjectsDeleted: result.storageObjectsDeleted, databaseMode: result.databaseMode, rowsDeleted: result.rowsDeleted },
   }).catch(() => {});
 
-  await cpDb.update(cpTenants).set({
-    name: tenant.name.endsWith("(purged)") ? tenant.name : `${tenant.name} (purged)`,
-    isActive: false,
-    licenseStatus: "purged",
-    provisioningState: "suspended",
-    viewOnlyGraceUntil: null,
-    suspendReason: `Permanently deleted ${new Date().toISOString().slice(0, 10)}`,
-  }).where(eq(cpTenants.id, tenantId));
+  // Raw SQL for the tombstone so it works even if control-plane migration 0006
+  // (view_only_grace_until) hasn't been applied yet — the data is already gone by this point, so
+  // this must not fail.
+  const purgedName = tenant.name.endsWith("(purged)") ? tenant.name : `${tenant.name} (purged)`;
+  const today = new Date().toISOString().slice(0, 10);
+  await cpDb.execute(sql`
+    UPDATE tenants SET
+      name = ${purgedName},
+      is_active = false,
+      license_status = 'purged',
+      provisioning_state = 'suspended',
+      suspend_reason = ${`Permanently deleted ${today}`}
+    WHERE id = ${tenantId}::uuid`);
+  await cpDb.execute(sql`UPDATE tenants SET view_only_grace_until = NULL WHERE id = ${tenantId}::uuid`).catch(() => {});
 
   result.ok = result.leftoverTables.length === 0 && result.notes.length === 0;
   structuredLog("warn", "TENANT PURGE complete", { tenantId, ...result });
