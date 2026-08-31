@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTenantBillingPdf } from "../../server/tenant-billing-pdf";
+import { buildTenantBillingPdf, REVENUE_SHARE_BILLING_TERMS } from "../../server/tenant-billing-pdf";
 
 const baseInvoice = {
   id: "11111111-2222-3333-4444-555555555555",
@@ -45,5 +45,20 @@ describe("buildTenantBillingPdf", () => {
       tenantName: "Acme", planName: "Starter", variant: "invoice",
     });
     expect(buffer.subarray(0, 5).toString()).toBe("%PDF-");
+  });
+
+  it("renders a partial-payment receipt with a remaining balance and T&Cs", async () => {
+    const { buffer } = await buildTenantBillingPdf({
+      invoice: { ...baseInvoice, amount: "617.60" },
+      tenantName: "FALAKHE FUNERAL PARLOUR",
+      variant: "receipt",
+      amountPaidUsd: "250.00",
+      balanceDueUsd: "367.60",
+      payment: { method: "Bank transfer", reference: "FLK-PAY-001", receivedOn: new Date("2026-08-31") },
+      terms: REVENUE_SHARE_BILLING_TERMS,
+    });
+    expect(buffer.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(buffer.length).toBeGreaterThan(2000);
+    expect(REVENUE_SHARE_BILLING_TERMS.length).toBeGreaterThan(5);
   });
 });
