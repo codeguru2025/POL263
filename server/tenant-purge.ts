@@ -16,7 +16,6 @@
 import { eq, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import {
-  tenants as cpTenants,
   tenantDatabases,
   tenantStorage,
   tenantSubscriptions,
@@ -83,14 +82,17 @@ export async function purgeTenant(tenantId: string, opts: { actorEmail?: string 
     ok: false, storageObjectsDeleted: 0, databaseMode: "skipped", rowsDeleted: 0, leftoverTables: [], notes: [],
   };
 
-  const [tenant] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, tenantId)).limit(1);
+  // Raw SQL (not the drizzle model) so a teardown still runs on a control plane that hasn't
+  // applied every migration the model expects.
+  const lookup: any = await cpDb.execute(sql`SELECT id, name FROM tenants WHERE id = ${tenantId}::uuid`);
+  const tenant = ((lookup.rows ?? lookup) as any[])[0] as { id: string; name: string } | undefined;
   if (!tenant) { result.notes.push("tenant not found"); return result; }
 
   structuredLog("warn", "TENANT PURGE starting", { tenantId, name: tenant.name, actor: opts.actorEmail });
 
   // 1. Storage
-  const [storageRow] = await cpDb.select().from(tenantStorage).where(eq(tenantStorage.tenantId, tenantId)).limit(1);
-  const prefix = storageRow?.prefix || `tenants/${tenantId}/`;
+  const stRow: any = await cpDb.execute(sql`SELECT prefix FROM tenant_storage WHERE tenant_id = ${tenantId}::uuid`);
+  const prefix = ((stRow.rows ?? stRow) as any[])[0]?.prefix || `tenants/${tenantId}/`;
   try {
     result.storageObjectsDeleted = await deletePrefix(prefix);
   } catch (err: any) {
@@ -98,8 +100,8 @@ export async function purgeTenant(tenantId: string, opts: { actorEmail?: string 
   }
 
   // 2. Database
-  const [dbRow] = await cpDb.select().from(tenantDatabases).where(eq(tenantDatabases.tenantId, tenantId)).limit(1);
-  const isDedicated = !!dbRow?.databaseUrl;
+  const dbLookup: any = await cpDb.execute(sql`SELECT database_url FROM tenant_databases WHERE tenant_id = ${tenantId}::uuid`);
+  const isDedicated = !!((dbLookup.rows ?? dbLookup) as any[])[0]?.database_url;
   if (isDedicated) {
     await closeOrgPool(tenantId).catch(() => {});
     const dec = await decommissionLogicalTenantDatabase(tenantId);
