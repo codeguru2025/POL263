@@ -397,7 +397,7 @@ export const tenantInvoices = pgTable(
     currency: text("currency").default("USD").notNull(),
     /** Human-readable breakdown for the PDF, e.g.
      *  [{label:"412 active policies × $0.10", amount:"41.20"}] or per-currency revenue-share lines. */
-    lineItems: jsonb("line_items").$type<Array<{ label: string; amount: string; currency?: string }>>(),
+    lineItems: jsonb("line_items").$type<Array<{ label: string; amount: string; currency?: string; nativeAmount?: string }>>(),
     /** open | paid | void */
     status: text("status").default("open").notNull(),
     /** null for non-period invoices (kind='setup'). */

@@ -15,6 +15,7 @@ import { cpDb } from "./control-plane-db";
 import {
   tenants as cpTenants,
   billingPlans,
+  billingFeatures,
   tenantSubscriptions,
   tenantInvoices,
   billingSettings,
@@ -25,9 +26,16 @@ import {
 } from "@shared/control-plane-schema";
 import { getPaynowConfig } from "./paynow-config";
 import { computeNextPeriod, computeInvoiceAmount, effectiveBillingIntervalMonths } from "./tenant-billing-math";
+import {
+  resolveEffectivePricing,
+  computePerPolicyInvoice,
+  computeRevenueShareInvoice,
+  type GlobalBillingDefaults,
+} from "./billing-model-math";
+import { getPolicyStatusCounts, getReceiptedCollectionsByCurrency, getFxToUsdMap } from "./tenant-billing-usage";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
-import { invalidateTenantModuleCache } from "./module-gate";
+import { invalidateTenantModuleCache, getTenantModuleSet } from "./module-gate";
 import { structuredLog } from "./logger";
 import { sendRestoredEmail } from "./tenant-billing-email";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
@@ -64,11 +72,44 @@ function generateMerchantReference(orgId: string): string {
   return `BILL-${orgId.slice(0, 8)}-${date}-${rand}`;
 }
 
+/** Global billing defaults (billing_settings singleton) that plan/subscription values fall back to. */
+async function getGlobalBillingDefaults(): Promise<GlobalBillingDefaults> {
+  const [row] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
+  return {
+    platformFeeRatePercent: row?.platformFeeRatePercent ?? null,
+    defaultMonthlyMinimumUsd: row?.defaultMonthlyMinimumUsd ?? null,
+    defaultOutstandingFeeCapUsd: row?.defaultOutstandingFeeCapUsd ?? null,
+  };
+}
+
+/**
+ * The tenant's purchasable billing features = the active billing_features catalog rows whose key
+ * the tenant actually has enabled (getTenantModuleSet). Their price deltas stack onto the plan's
+ * base fee / per-policy rate / revenue-share percent — so "revenue share depends on the features
+ * chosen", without a bespoke plan per combination. Explicit per-tenant feature overrides land in
+ * Phase 1c; today the enabled-module set is the binding.
+ */
+async function resolveTenantBillingFeatures(orgId: string) {
+  const moduleSet = await getTenantModuleSet(orgId);
+  if (!moduleSet.size) return [];
+  const rows = await cpDb.select().from(billingFeatures).where(eq(billingFeatures.isActive, true));
+  return rows.filter((f) => moduleSet.has(f.key));
+}
+
 /**
  * Idempotent per subscription+period: if an open invoice already exists for this
  * subscription's currentPeriodEnd, returns it (created:false) instead of creating
  * a duplicate. Callers (the sweep) use `created` to decide whether to send a
  * reminder email — only on first generation, not on every idempotent re-check.
+ *
+ * The invoice amount depends on the tenant's billing model (billing-model-math.ts):
+ *   flat          — plan.priceMonthlyUsd (unchanged)
+ *   per_policy    — base fee + per-status $/policy on the overage, floored at the monthly minimum;
+ *                   policy counts read live from the tenant DB
+ *   revenue_share — X% of receipted collections per currency since the last settlement, converted
+ *                   to USD, floored at the minimum
+ * For the two usage models `lastSettlementAt` is advanced to the cut time in the same transaction,
+ * so the next period bills only fresh activity.
  */
 export async function generateInvoiceForSubscription(subscription: TenantSubscription, plan: BillingPlan): Promise<{ invoice: TenantInvoice; created: boolean }> {
   const [existing] = await cpDb
@@ -82,28 +123,77 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
     .limit(1);
   if (existing) return { invoice: existing, created: false };
 
-  const [invoice] = await cpDb
-    .insert(tenantInvoices)
-    .values({
-      tenantId: subscription.tenantId,
-      subscriptionId: subscription.id,
-      planId: plan.id,
-      amount: computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle),
-      currency: "USD",
-      status: "open",
-      periodStart: subscription.currentPeriodStart,
-      periodEnd: subscription.currentPeriodEnd,
-      dueDate: subscription.currentPeriodEnd,
-      paymentToken: crypto.randomBytes(24).toString("hex"),
-      merchantReference: generateMerchantReference(subscription.tenantId),
-    })
-    .returning();
+  const [features, globals] = await Promise.all([
+    resolveTenantBillingFeatures(subscription.tenantId),
+    getGlobalBillingDefaults(),
+  ]);
+  const pricing = resolveEffectivePricing(plan, features, subscription, globals);
 
-  await cpDb.insert(tenantBillingEvents).values({
-    tenantId: subscription.tenantId,
-    invoiceId: invoice.id,
-    type: "invoice_generated",
-    detail: { amount: invoice.amount, periodStart: invoice.periodStart, periodEnd: invoice.periodEnd },
+  const now = new Date();
+  let amount: string;
+  let lineItems: Array<{ label: string; amount: string; currency?: string; nativeAmount?: string }> | undefined;
+  const eventDetail: Record<string, unknown> = { billingModel: pricing.billingModel };
+
+  if (pricing.billingModel === "per_policy") {
+    const counts = await getPolicyStatusCounts(subscription.tenantId);
+    const computed = computePerPolicyInvoice(pricing, counts);
+    amount = computed.amountUsd;
+    lineItems = computed.lineItems;
+    eventDetail.policyCounts = counts;
+    eventDetail.minimumApplied = computed.minimumApplied;
+  } else if (pricing.billingModel === "revenue_share") {
+    const since = subscription.lastSettlementAt ?? subscription.currentPeriodStart ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const [collections, fx] = await Promise.all([
+      getReceiptedCollectionsByCurrency(subscription.tenantId, since, now),
+      getFxToUsdMap(subscription.tenantId),
+    ]);
+    const computed = computeRevenueShareInvoice(pricing, collections, fx);
+    amount = computed.amountUsd;
+    lineItems = computed.lineItems;
+    eventDetail.usageWindow = { since, until: now };
+    eventDetail.collections = collections;
+    eventDetail.currencyBreakdown = computed.currencyBreakdown;
+    eventDetail.minimumApplied = computed.minimumApplied;
+  } else {
+    amount = computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle);
+  }
+
+  const invoice = await cpDb.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(tenantInvoices)
+      .values({
+        tenantId: subscription.tenantId,
+        subscriptionId: subscription.id,
+        planId: plan.id,
+        kind: "subscription",
+        amount,
+        lineItems,
+        currency: "USD",
+        status: "open",
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        dueDate: subscription.currentPeriodEnd,
+        paymentToken: crypto.randomBytes(24).toString("hex"),
+        merchantReference: generateMerchantReference(subscription.tenantId),
+      })
+      .returning();
+
+    await tx.insert(tenantBillingEvents).values({
+      tenantId: subscription.tenantId,
+      invoiceId: row.id,
+      type: "invoice_generated",
+      detail: { amount: row.amount, periodStart: row.periodStart, periodEnd: row.periodEnd, ...eventDetail },
+    });
+
+    // Usage models: mark this cut as the new settlement watermark so the next invoice only counts
+    // activity after it. Flat plans have no usage window, so leave lastSettlementAt untouched.
+    if (pricing.billingModel !== "flat") {
+      await tx.update(tenantSubscriptions)
+        .set({ lastSettlementAt: now, updatedAt: now })
+        .where(eq(tenantSubscriptions.id, subscription.id));
+    }
+
+    return row;
   });
 
   return { invoice, created: true };
