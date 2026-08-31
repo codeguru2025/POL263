@@ -5,9 +5,10 @@
  *   2. the tenant's database — a dedicated logical DB is dropped outright from the DO cluster;
  *      a shared-DB tenant has every organization_id-scoped row deleted (repeated-pass, FK-order
  *      agnostic) plus its organizations row
- *   3. every control-plane row (cascades from deleting the tenants row) — the tenants row is
- *      renamed "... (purged)" and left as a tombstone rather than deleted, so audit history and
- *      any external reference still resolves to a name
+ *   3. a PURGE_TENANT row in platform_audit_logs (the permanent record — no tenant FK), then the
+ *      tenants row itself is DELETEd; every other control-plane tenant table is ON DELETE CASCADE
+ *      to tenants.id, so that one delete removes branding / feature flags / domains / integrations
+ *      / subscription / invoices / db+storage routing / customer-service registry with it
  *
  * Never called automatically unless billingSettings.hardDeleteEnabled is on — otherwise the
  * deletion sweep parks the tenant at licenseStatus='pending_deletion' and a platform owner runs
@@ -15,14 +16,7 @@
  */
 import { eq, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
-import {
-  tenantDatabases,
-  tenantStorage,
-  tenantSubscriptions,
-  tenantInvoices,
-  pendingTenantSignups,
-  tenantBillingEvents,
-} from "@shared/control-plane-schema";
+import { pendingTenantSignups, platformAuditLogs } from "@shared/control-plane-schema";
 import { getDbForOrg, closeOrgPool } from "./tenant-db";
 import { deletePrefix } from "./object-storage";
 import { decommissionLogicalTenantDatabase } from "./do-database-provisioning";
@@ -114,32 +108,29 @@ export async function purgeTenant(tenantId: string, opts: { actorEmail?: string 
     result.leftoverTables = leftoverTables;
   }
 
-  // 3. Control-plane teardown. Null the signup back-reference first (its FK isn't ON DELETE
-  // CASCADE), then drop the rows that cascade, then tombstone the tenant row itself.
-  await cpDb.update(pendingTenantSignups).set({ provisionedTenantId: null }).where(eq(pendingTenantSignups.provisionedTenantId, tenantId)).catch(() => {});
-  await cpDb.delete(tenantInvoices).where(eq(tenantInvoices.tenantId, tenantId)).catch((e) => result.notes.push(`cp invoices: ${e.message}`));
-  await cpDb.delete(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, tenantId)).catch((e) => result.notes.push(`cp subscription: ${e.message}`));
-  await cpDb.delete(tenantDatabases).where(eq(tenantDatabases.tenantId, tenantId)).catch(() => {});
-  await cpDb.delete(tenantStorage).where(eq(tenantStorage.tenantId, tenantId)).catch(() => {});
-  await cpDb.insert(tenantBillingEvents).values({
-    tenantId, type: "tenant_purged",
-    detail: { actor: opts.actorEmail ?? "system", storageObjectsDeleted: result.storageObjectsDeleted, databaseMode: result.databaseMode, rowsDeleted: result.rowsDeleted },
-  }).catch(() => {});
+  // 3. Control-plane teardown. Record the purge in platform_audit_logs (survives — no tenant FK),
+  // null the one non-cascade back-reference, then hard-DELETE the tenants row. Every other
+  // control-plane tenant table (branding, feature flags, domains, integrations, subscriptions,
+  // invoices, databases, storage, customer-service registry, billing events) is ON DELETE CASCADE
+  // to tenants.id, so this single delete cleans them all — no orphans.
+  await cpDb.insert(platformAuditLogs).values({
+    actorEmail: opts.actorEmail ?? "system",
+    action: "PURGE_TENANT",
+    entityType: "Tenant",
+    entityId: tenantId,
+    before: { name: tenant.name },
+    after: {
+      purgedAt: new Date().toISOString(),
+      storageObjectsDeleted: result.storageObjectsDeleted,
+      databaseMode: result.databaseMode,
+      rowsDeleted: result.rowsDeleted,
+      notes: result.notes,
+    },
+  }).catch((e) => structuredLog("error", "purge audit-log insert failed", { tenantId, error: e.message }));
 
-  // Raw SQL for the tombstone so it works even if control-plane migration 0006
-  // (view_only_grace_until) hasn't been applied yet — the data is already gone by this point, so
-  // this must not fail.
-  const purgedName = tenant.name.endsWith("(purged)") ? tenant.name : `${tenant.name} (purged)`;
-  const today = new Date().toISOString().slice(0, 10);
-  await cpDb.execute(sql`
-    UPDATE tenants SET
-      name = ${purgedName},
-      is_active = false,
-      license_status = 'purged',
-      provisioning_state = 'suspended',
-      suspend_reason = ${`Permanently deleted ${today}`}
-    WHERE id = ${tenantId}::uuid`);
-  await cpDb.execute(sql`UPDATE tenants SET view_only_grace_until = NULL WHERE id = ${tenantId}::uuid`).catch(() => {});
+  await cpDb.update(pendingTenantSignups).set({ provisionedTenantId: null }).where(eq(pendingTenantSignups.provisionedTenantId, tenantId)).catch(() => {});
+  await cpDb.execute(sql`DELETE FROM tenants WHERE id = ${tenantId}::uuid`)
+    .catch((e) => result.notes.push(`cp tenant delete: ${e.message}`));
 
   result.ok = result.leftoverTables.length === 0 && result.notes.length === 0;
   structuredLog("warn", "TENANT PURGE complete", { tenantId, ...result });

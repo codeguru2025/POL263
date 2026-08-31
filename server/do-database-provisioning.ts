@@ -46,7 +46,11 @@ async function doApiRequest(path: string, init?: RequestInit): Promise<any> {
     err.body = text;
     throw err;
   }
-  return res.json();
+  // 204 No Content (DELETE endpoints) and any empty body — return null rather than choking on
+  // JSON.parse("").
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 function isDuplicateDbNameError(err: any): boolean {
