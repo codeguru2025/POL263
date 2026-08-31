@@ -10,6 +10,46 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-08-31 — MFA login failing intermittently: otplib v13 `verify()` has ZERO clock-skew tolerance by default
+
+**Symptom:** staff enter their correct authenticator code on `/staff/mfa-verify` and get "Invalid
+code". Retrying a few seconds later often works. Users whose phone clock had drifted from the
+server never got in at all — and after 5 failed attempts (`MFA_PENDING_MAX_ATTEMPTS`) the pending
+challenge is cleared and they have to restart the whole Google-OAuth flow, still failing.
+Production logs showed the tell-tale pattern: `POST /api/auth/mfa/verify-login 400` immediately
+followed ~9s later by `200` for the same login.
+
+**Root cause:** `server/auth.ts` imported `verify as verifyTotp` from `otplib` and called it bare —
+`verifyTotp({ secret, token })` — at all three TOTP check sites (login `verifyPendingMfaCode`,
+`/api/auth/mfa/confirm`, `/api/auth/mfa/disable`). **otplib v13 is a full rewrite** (added in the
+2026-08-18 SOC2/MFA commit `d0ab27f`, so MFA was built against 13.x from day one — not a version
+bump regression). Its verify option for clock tolerance is `epochTolerance` (in *seconds*, not
+"window" in steps like otplib ≤12 and every other TOTP library), and it **defaults to `0`**. Zero
+tolerance means a code is accepted only if generated in the server's exact current 30-second
+window — no allowance for (a) the DigitalOcean server clock vs the user's phone clock drifting a
+few seconds, (b) the seconds a human takes to read six digits and press submit, (c) a code read at
+:28 of a window and submitted at :31 (server is now in the next window). RFC 6238 §5.2 explicitly
+recommends a validation window for exactly this; ±1 step (30s) is the near-universal default.
+Reproduced directly: a token generated 35s in the past → `{valid:false}` bare, `{valid:true,delta:-1}`
+with `epochTolerance:30`.
+
+**Fix:** new `server/totp.ts` — a single wrapper (`verifyTotpCode`, `generateTotpSecret`,
+`generateTotpUri`) so the tolerance lives in ONE place: `verify({ secret, token, epochTolerance:
+TOTP_EPOCH_TOLERANCE_SEC })` with `TOTP_EPOCH_TOLERANCE_SEC = 30` (symmetric ±1 step — absorbs both
+a slow and a fast device clock). `verifyTotpCode` returns a plain boolean, trims the code, and
+never throws. `server/auth.ts` now imports from `./totp`; the three `(await verifyTotp({...})).valid`
+call sites collapse to `await verifyTotpCode(secret, code)`. `tests/unit/mfa-totp.test.ts`
+regression-tests it with real otplib: prev/next-window tokens pass, two-windows-away fail.
+
+**Lesson for next time:** when a crypto/OTP/JWT library is on a **brand-new major version** (otplib
+jumped to 13.x; the well-documented ecosystem knowledge is all 11/12.x), do not assume option names
+or defaults carry over. Check the actual installed version's types for the security-relevant knobs
+— here `epochTolerance` (seconds, default 0) replaced `window` (steps, default 1), and passing the
+old `window:` param is silently ignored. And: MFA/TOTP tests that only mock the library never catch
+a zero-tolerance default — the regression test must run real `otplib` with a time-shifted token.
+
+---
+
 ## 2026-08-26 — Pre-push review: payment-route race condition, 2 misattributed audit-log entries, 1 timing side-channel
 
 Ran a dedicated `/code-review high` pass over the full day's diff before pushing (payment-route

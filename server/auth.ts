@@ -5,7 +5,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import argon2 from "argon2";
 import crypto from "crypto";
-import { generateSecret as generateTotpSecret, generateURI as generateTotpURI, verify as verifyTotp } from "otplib";
+import { generateTotpSecret, generateTotpUri, verifyTotpCode } from "./totp";
 import QRCode from "qrcode";
 import { eq } from "drizzle-orm";
 import { pool } from "./db";
@@ -380,7 +380,7 @@ async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | 
     return null;
   }
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-  let ok = !!code && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: code })).valid;
+  let ok = await verifyTotpCode(user.mfaSecret, code);
   if (!ok && code && Array.isArray(user.mfaBackupCodes)) {
     const codes: (string | null)[] = user.mfaBackupCodes;
     for (let i = 0; i < codes.length; i++) {
@@ -788,7 +788,7 @@ export function setupAuth(app: Express) {
     const user = req.user as any;
     const secret = generateTotpSecret();
     await storage.updateUser(user.id, { mfaSecret: secret } as any);
-    const otpauthUrl = generateTotpURI({ issuer: "POL263", label: user.email, secret });
+    const otpauthUrl = generateTotpUri({ issuer: "POL263", label: user.email, secret });
     const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
     return res.json({ secret, otpauthUrl, qrDataUrl });
   });
@@ -799,7 +799,7 @@ export function setupAuth(app: Express) {
     if (!user.mfaSecret) {
       return res.status(400).json({ message: "Start enrollment first" });
     }
-    if (!code || !(await verifyTotp({ secret: user.mfaSecret, token: code })).valid) {
+    if (!(await verifyTotpCode(user.mfaSecret, code))) {
       return res.status(400).json({ message: "Invalid code" });
     }
     const backupCodes = generateBackupCodes();
@@ -821,7 +821,7 @@ export function setupAuth(app: Express) {
       // session could otherwise strip MFA with nothing but the existing cookie. Require a fresh
       // TOTP/backup code instead — same step-up the login flow itself demands.
       const trimmedCode = typeof code === "string" ? code.trim() : "";
-      let codeOk = !!trimmedCode && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: trimmedCode })).valid;
+      let codeOk = await verifyTotpCode(user.mfaSecret, trimmedCode);
       if (!codeOk && trimmedCode && Array.isArray(user.mfaBackupCodes)) {
         const codes: (string | null)[] = user.mfaBackupCodes;
         for (let i = 0; i < codes.length; i++) {
