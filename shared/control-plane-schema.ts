@@ -494,6 +494,106 @@ export const platformAuditLogs = pgTable("platform_audit_logs", {
 });
 export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
 
+// ─── CUSTOMER SERVICE (WhatsApp / SMSALA) ROUTING REGISTRY ────────────────────
+//
+// Multi-tenant WhatsApp customer service. Tenant resolution happens BEFORE any tenant
+// database is known, so these tables live in the control plane (same reasoning as
+// tenant_domains / tenant_email_domains). They are ROUTING INDEXES — the source of truth for
+// customers/policies stays in the per-tenant `clients` / `policies` tables; these only hold
+// UUIDs as plain columns (no FK into tenant DBs). Resolution is NOT authentication — the
+// existing /api/customer-service/verify + requireVerifiedCustomer flow is unchanged and still
+// enforces secret→tenant, token→client, tenant-match, client-ownership.
+
+/**
+ * MODE B — dedicated tenant WhatsApp number registry. When SMSALA provides a
+ * channel_id / phone_number_id, it maps directly to a tenant, bypassing cross-tenant discovery.
+ * Direct analogue of tenant_domains.
+ */
+export const customerServiceChannels = pgTable(
+  "customer_service_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    /** 'whatsapp' (only value today) */
+    channelType: text("channel_type").notNull(),
+    /** The BSP/SMSALA channel identifier — e.g. a WhatsApp phone_number_id. */
+    channelId: text("channel_id").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_channels_channel_idx").on(t.channelType, t.channelId),
+    index("customer_service_channels_tenant_idx").on(t.tenantId),
+  ],
+);
+
+/**
+ * MODE A — verify-driven identity index. Populated after each successful
+ * /api/customer-service/verify (we then know org + client + policy + the WhatsApp number).
+ * `whatsapp_number` is the normalized last-9-digits form (matching storage.getClientByPhone's
+ * existing convention). Lets a shared WhatsApp number resolve to a tenant/customer without an
+ * O(all clients) cross-tenant scan. NOT a copy of `clients` — a routing index only.
+ */
+export const customerServiceIdentities = pgTable(
+  "customer_service_identities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    policyId: uuid("policy_id"),
+    whatsappNumber: text("whatsapp_number").notNull(),
+    /** 'active' | 'stale' */
+    status: text("status").default("active").notNull(),
+    lastVerifiedAt: timestamp("last_verified_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_identities_unique_idx").on(t.organizationId, t.clientId, t.whatsappNumber),
+    index("customer_service_identities_number_idx").on(t.whatsappNumber),
+  ],
+);
+
+/**
+ * Phase 4 — persistent WhatsApp conversation context + FSM state + agent routing.
+ * organization_id / client_id / policy_id are set ONLY by trusted server code (from the
+ * resolver and from /verify success) — never from the SMSALA/user request body. The raw
+ * verification token is NEVER stored here (it stays in the bot's own conversation state).
+ */
+export const customerServiceConversations = pgTable(
+  "customer_service_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelType: text("channel_type").notNull(),
+    channelId: text("channel_id"),
+    whatsappNumber: text("whatsapp_number").notNull(),
+    organizationId: uuid("organization_id"),
+    clientId: uuid("client_id"),
+    policyId: uuid("policy_id"),
+    /** 'unresolved' | 'tenant_resolved' | 'awaiting_policy' | 'verified' | 'expired' */
+    verificationStatus: text("verification_status").default("unresolved").notNull(),
+    verificationExpiresAt: timestamp("verification_expires_at"),
+    /** FSM: WELCOME | VERIFY | MAIN_MENU | MY_POLICY | MAKE_PAYMENT | MY_DOCUMENTS |
+     *  FUNERAL_ASSISTANCE | TALK_TO_AGENT | EXPIRED | ERROR */
+    currentState: text("current_state").default("WELCOME").notNull(),
+    currentMenu: text("current_menu"),
+    assignedAgentId: uuid("assigned_agent_id"),
+    lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_conversations_channel_number_idx").on(t.channelId, t.whatsappNumber),
+    index("customer_service_conversations_number_idx").on(t.whatsappNumber),
+    index("customer_service_conversations_org_idx").on(t.organizationId),
+  ],
+);
+
+export type CustomerServiceChannel = typeof customerServiceChannels.$inferSelect;
+export type CustomerServiceIdentity = typeof customerServiceIdentities.$inferSelect;
+export type CustomerServiceConversation = typeof customerServiceConversations.$inferSelect;
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export type Tenant = typeof tenants.$inferSelect;

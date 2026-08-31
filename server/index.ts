@@ -283,6 +283,18 @@ if (enableCsrf) {
       message: { error: "rate_limited" },
     })
   );
+  // /resolve is a pre-verification cross-tenant lookup (WhatsApp number → identity index) —
+  // an enumeration surface, so keep it on the same strict budget as /verify.
+  app.use(
+    "/api/customer-service/resolve",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("customer-service-resolve"),
+      windowMs: 60 * 1000,
+      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      message: { error: "rate_limited" },
+    })
+  );
   app.use(
     "/api/customer-service",
     rateLimit({

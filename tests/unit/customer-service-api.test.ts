@@ -78,6 +78,26 @@ vi.mock("../../server/customer-self-service", () => {
   };
 });
 
+// ─── multi-tenant routing layer mocks (internals covered by their own unit tests) ──
+const RES = vi.hoisted(() => ({ resolveConversationContext: vi.fn() }));
+vi.mock("../../server/customer-service-tenant-resolver", () => ({
+  resolveConversationContext: RES.resolveConversationContext,
+  normalizeWhatsAppNumber: (raw: unknown) => {
+    const d = String(raw ?? "").replace(/\D/g, "");
+    return d.length >= 9 ? d.slice(-9) : "";
+  },
+  computeTenantRef: (orgId: string) => "ref_" + orgId.slice(0, 6),
+}));
+vi.mock("../../server/customer-service-conversations", () => ({
+  createConversation: vi.fn(async () => ({ id: "conv-1" })),
+  resolveConversationTenant: vi.fn(async () => ({})),
+  transitionConversation: vi.fn(async () => ({})),
+  getConversationByChannel: vi.fn(async () => undefined),
+}));
+vi.mock("../../server/customer-service-session", () => ({ onVerificationSuccess: vi.fn() }));
+const AH = vi.hoisted(() => ({ requestAgentHandoff: vi.fn(async () => ({ queued: true, organizationId: "org" })) }));
+vi.mock("../../server/customer-service-agent-handoff", () => ({ requestAgentHandoff: AH.requestAgentHandoff }));
+
 import { registerCustomerServiceRoutes } from "../../server/customer-service-routes";
 import { issueVerificationToken } from "../../server/customer-service-integration";
 

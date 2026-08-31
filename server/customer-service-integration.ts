@@ -351,6 +351,21 @@ export async function handleVerifyRequest(req: Request, res: Response): Promise<
     policyId: result.policyId,
   });
 
+  // Fire-and-forget routing-layer hook (Phases 3 + 4): upsert the WhatsApp identity index and
+  // stamp verified context on any matching conversation row. Dynamic import breaks the module
+  // cycle; never blocks or alters the /verify response.
+  void import("./customer-service-session")
+    .then((m) =>
+      m.onVerificationSuccess({
+        organizationId: orgId,
+        clientId: result.clientId,
+        policyId: result.policyId,
+        phoneNumber,
+        channelId: (req.body as any)?.channel_id,
+      }),
+    )
+    .catch(() => {});
+
   return respond(200, {
     verified: true,
     verification_token: token,
