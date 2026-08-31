@@ -382,6 +382,29 @@ export const userPermissionOverrides = pgTable(
   ]
 );
 
+/**
+ * Reusable named permission bundles ("access profiles"). Applying one to a user writes an
+ * "allow" user_permission_override for each permission it lists (existing role-derived access is
+ * untouched); it is a convenience over ticking permissions one by one, not a third RBAC layer.
+ */
+export const accessProfiles = pgTable(
+  "access_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    /** Permission names, e.g. ["read:finance","write:receipt"]. */
+    permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("access_profiles_org_idx").on(t.organizationId),
+    uniqueIndex("access_profiles_org_name_idx").on(t.organizationId, t.name),
+  ]
+);
+
 // ─── CLIENTS (POLICYHOLDERS) ────────────────────────────────
 
 export const securityQuestions = pgTable("security_questions", {

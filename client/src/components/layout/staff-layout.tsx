@@ -438,6 +438,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           title: "Directory",
           items: filterNav([
             { href: "/staff/users", label: "Users", icon: UserCog, permission: "read:user" },
+            { href: "/staff/access-profiles", label: "Access Profiles", icon: ShieldCheck, permission: "write:role", agentHidden: true },
             { href: "/staff/admin/branches", label: "Branch Admin", icon: MapPin, permission: "read:branch", agentHidden: true },
             { href: "/staff/admin/agents", label: "Agent Admin", icon: UserCheck, permission: "read:user", agentHidden: true },
             { href: "/staff/admin/brokers", label: "Broker Admin", icon: Briefcase, permission: "read:user", agentHidden: true },

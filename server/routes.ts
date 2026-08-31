@@ -12934,6 +12934,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerFinanceFormRoutes(app);
   registerPlatformRoutes(app);
   registerPlatformBillingRoutes(app);
+  (await import("./access-profile-routes")).registerAccessProfileRoutes(app);
   registerBillingPublicRoutes(app);
   registerTenantSignupPublicRoutes(app);
   registerInboundEmailPublicRoutes(app);

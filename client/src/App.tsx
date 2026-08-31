@@ -90,6 +90,7 @@ const StaffAttendance = lazy(() => retryLazy(() => import("@/pages/staff/attenda
 const StaffFleetTracking = lazy(() => retryLazy(() => import("@/pages/staff/fleet-tracking")));
 const StaffScheduleReports = lazy(() => retryLazy(() => import("@/pages/staff/schedule-reports")));
 const StaffUsers = lazy(() => retryLazy(() => import("@/pages/staff/users")));
+const StaffAccessProfiles = lazy(() => retryLazy(() => import("@/pages/staff/access-profiles")));
 const StaffHelpCenter = lazy(() => retryLazy(() => import("@/pages/staff/help-center")));
 const StaffReminders = lazy(() => retryLazy(() => import("@/pages/staff/reminders")));
 const StaffOrderServices = lazy(() => retryLazy(() => import("@/pages/staff/order-services")));
@@ -225,6 +226,7 @@ function Router() {
       <SafeRoute path="/staff/fleet-tracking" component={StaffFleetTracking} />
       <SafeRoute path="/staff/schedule-reports" component={StaffScheduleReports} />
       <SafeRoute path="/staff/users" component={StaffUsers} />
+      <SafeRoute path="/staff/access-profiles" component={StaffAccessProfiles} />
       <SafeRoute path="/staff/platform/tenants/:id" component={PlatformTenantConsole} />
       <SafeRoute path="/staff/platform/billing" component={PlatformBilling} />
       <SafeRoute path="/staff/platform/finance" component={PlatformFinance} />
