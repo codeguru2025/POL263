@@ -477,6 +477,104 @@ export function registerPlatformBillingRoutes(app: Express): void {
     return res.json({ ok: true });
   });
 
+  // ── Platform's own finances ─────────────────────────────────────
+  app.get("/api/platform/billing/finance-overview", requireAuth, requirePlatformOwner, async (_req, res) => {
+    const now = new Date();
+    const d30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [plans, subs, invoices, settingsRow] = await Promise.all([
+      cpDb.select().from(billingPlans),
+      cpDb.select().from(tenantSubscriptions),
+      cpDb.select().from(tenantInvoices),
+      cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1),
+    ]);
+    const tenantRows = await cpDb.select({ id: cpTenants.id, name: cpTenants.name }).from(cpTenants);
+    const tenantName = new Map(tenantRows.map((t) => [t.id, t.name]));
+    const planById = new Map(plans.map((p) => [p.id, p]));
+    const s = settingsRow[0];
+    const globalMin = parseFloat(String(s?.defaultMonthlyMinimumUsd ?? "250"));
+
+    const num = (v: unknown) => { const n = parseFloat(String(v ?? "0")); return Number.isFinite(n) ? n : 0; };
+
+    // Collected
+    const paid = invoices.filter((i) => i.status === "paid" && i.paidAt);
+    const sum = (arr: typeof invoices) => arr.reduce((a, i) => a + num(i.amount), 0);
+    const collected = {
+      last30d: sum(paid.filter((i) => new Date(i.paidAt!) >= d30)),
+      thisMonth: sum(paid.filter((i) => new Date(i.paidAt!) >= monthStart)),
+      allTime: sum(paid),
+      count: paid.length,
+    };
+
+    // Outstanding + aging
+    const open = invoices.filter((i) => i.status === "open");
+    const aging = { current: 0, d1_7: 0, d8_30: 0, d30plus: 0 };
+    for (const i of open) {
+      const daysOverdue = Math.floor((now.getTime() - new Date(i.dueDate).getTime()) / (24 * 60 * 60 * 1000));
+      const amt = num(i.amount);
+      if (daysOverdue <= 0) aging.current += amt;
+      else if (daysOverdue <= 7) aging.d1_7 += amt;
+      else if (daysOverdue <= 30) aging.d8_30 += amt;
+      else aging.d30plus += amt;
+    }
+    const outstanding = { total: sum(open), count: open.length, aging };
+
+    // Per-model rollup + MRR estimate
+    const lastInvoiceBySub = new Map<string, typeof invoices[number]>();
+    for (const i of [...invoices].sort((a, b) => new Date(a.issuedAt).getTime() - new Date(b.issuedAt).getTime())) {
+      if (i.subscriptionId) lastInvoiceBySub.set(i.subscriptionId, i);
+    }
+    const models = ["flat", "per_policy", "revenue_share"] as const;
+    const byModel = Object.fromEntries(models.map((m) => [m, { tenants: 0, mrrEstimate: 0, outstanding: 0 }])) as Record<string, { tenants: number; mrrEstimate: number; outstanding: number }>;
+    let mrrEstimate = 0;
+    for (const sub of subs) {
+      if (!["active", "trialing", "past_due"].includes(sub.status)) continue;
+      const plan = planById.get(sub.planId);
+      const model = (sub.billingModelOverride || plan?.billingModel || "flat") as string;
+      const bucket = byModel[model] ?? byModel.flat;
+      bucket.tenants++;
+      const recent = lastInvoiceBySub.get(sub.id);
+      const recentFresh = recent && new Date(recent.issuedAt) >= new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000);
+      let estimate: number;
+      if (recentFresh) estimate = num(recent!.amount);
+      else if (model === "flat") estimate = num(sub.baseFeeOverrideUsd ?? plan?.baseFeeUsd ?? plan?.priceMonthlyUsd);
+      else estimate = num(sub.monthlyMinimumOverrideUsd ?? plan?.monthlyMinimumUsd ?? globalMin);
+      bucket.mrrEstimate += estimate;
+      mrrEstimate += estimate;
+    }
+    for (const i of open) {
+      const sub = subs.find((x) => x.id === i.subscriptionId);
+      const plan = sub && planById.get(sub.planId);
+      const model = (sub?.billingModelOverride || plan?.billingModel || "flat") as string;
+      (byModel[model] ?? byModel.flat).outstanding += num(i.amount);
+    }
+
+    // Top debtors + recent payments
+    const debtByTenant = new Map<string, number>();
+    for (const i of open) debtByTenant.set(i.tenantId, (debtByTenant.get(i.tenantId) ?? 0) + num(i.amount));
+    const topDebtors = Array.from(debtByTenant.entries())
+      .map(([id, amount]) => ({ tenantId: id, name: tenantName.get(id) ?? "—", amount: amount.toFixed(2) }))
+      .sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount)).slice(0, 10);
+    const recentPayments = [...paid]
+      .sort((a, b) => new Date(b.paidAt!).getTime() - new Date(a.paidAt!).getTime()).slice(0, 20)
+      .map((i) => ({ id: i.id, tenant: tenantName.get(i.tenantId) ?? "—", kind: i.kind, amount: i.amount, currency: i.currency, paidAt: i.paidAt, manual: !!i.markedPaidBy }));
+
+    return res.json({
+      currency: "USD",
+      mrrEstimate: mrrEstimate.toFixed(2),
+      arrEstimate: (mrrEstimate * 12).toFixed(2),
+      collected: { last30d: collected.last30d.toFixed(2), thisMonth: collected.thisMonth.toFixed(2), allTime: collected.allTime.toFixed(2), count: collected.count },
+      outstanding: {
+        total: outstanding.total.toFixed(2), count: outstanding.count,
+        aging: { current: aging.current.toFixed(2), d1_7: aging.d1_7.toFixed(2), d8_30: aging.d8_30.toFixed(2), d30plus: aging.d30plus.toFixed(2) },
+      },
+      byModel: Object.fromEntries(Object.entries(byModel).map(([k, v]) => [k, { tenants: v.tenants, mrrEstimate: v.mrrEstimate.toFixed(2), outstanding: v.outstanding.toFixed(2) }])),
+      topDebtors,
+      recentPayments,
+    });
+  });
+
   // ── Manual sweep trigger (testing/on-demand) ────────────────────
   app.post("/api/platform/billing/sweep", requireAuth, requirePlatformOwner, async (_req, res) => {
     try {

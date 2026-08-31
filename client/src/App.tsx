@@ -64,6 +64,7 @@ const QuoteViewPage = lazy(() => retryLazy(() => import("@/pages/public/quote-vi
 const StaffMyVCard = lazy(() => retryLazy(() => import("@/pages/staff/my-vcard")));
 const PlatformTenantConsole = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-console")));
 const PlatformBilling = lazy(() => retryLazy(() => import("@/pages/staff/platform-billing")));
+const PlatformFinance = lazy(() => retryLazy(() => import("@/pages/staff/platform-finance")));
 const PlatformTenantHealth = lazy(() => retryLazy(() => import("@/pages/staff/platform-tenant-health")));
 const ProductBuilder = lazy(() => retryLazy(() => import("@/pages/staff/products")));
 const StaffPolicies = lazy(() => retryLazy(() => import("@/pages/staff/policies")));
@@ -226,6 +227,7 @@ function Router() {
       <SafeRoute path="/staff/users" component={StaffUsers} />
       <SafeRoute path="/staff/platform/tenants/:id" component={PlatformTenantConsole} />
       <SafeRoute path="/staff/platform/billing" component={PlatformBilling} />
+      <SafeRoute path="/staff/platform/finance" component={PlatformFinance} />
       <SafeRoute path="/staff/platform/health" component={PlatformTenantHealth} />
       <SafeRoute path="/staff/help" component={StaffHelpCenter} />
       <SafeRoute path="/staff/reminders" component={StaffReminders} />
