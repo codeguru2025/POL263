@@ -37,7 +37,7 @@ import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache, getTenantModuleSet } from "./module-gate";
 import { structuredLog } from "./logger";
-import { sendRestoredEmail, sendInvoiceReminderEmail } from "./tenant-billing-email";
+import { sendRestoredEmail, sendInvoiceReminderEmail, sendInvoicePaidReceiptEmail } from "./tenant-billing-email";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
@@ -336,6 +336,11 @@ export async function applyTenantInvoicePayment(
     if (!(result as any).setupOnly) {
       sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
     }
+
+    // Branded PDF receipt for the paid invoice.
+    cpDb.select().from(tenantInvoices).where(eq(tenantInvoices.id, invoiceId)).limit(1)
+      .then(([paidInv]) => paidInv && sendInvoicePaidReceiptEmail(paidInv))
+      .catch((err) => structuredLog("error", "sendInvoicePaidReceiptEmail failed", { invoiceId, error: (err as Error).message }));
 
     // A setup-fee invoice was just raised — email it to the tenant admins.
     if ((result as any).setupInvoiceRaised) {

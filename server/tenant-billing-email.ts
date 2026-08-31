@@ -8,11 +8,29 @@
  */
 import { eq, and } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
-import { tenants as cpTenants, tenantInvoices, type TenantInvoice } from "@shared/control-plane-schema";
+import { tenants as cpTenants, tenantInvoices, billingPlans, type TenantInvoice } from "@shared/control-plane-schema";
 import { getDbForOrg } from "./tenant-db";
 import { users, userRoles, roles } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { sendEmail, isEmailConfigured } from "./email-service";
+import { buildTenantBillingPdf } from "./tenant-billing-pdf";
+
+type Attachment = { filename: string; content: Buffer; contentType?: string };
+
+/** Render the POL263-branded PDF for an invoice (or its receipt) — best-effort, never throws. */
+async function billingPdfAttachment(invoice: TenantInvoice, variant: "invoice" | "receipt"): Promise<Attachment[]> {
+  try {
+    const name = await tenantName(invoice.tenantId);
+    const [plan] = invoice.planId
+      ? await cpDb.select({ name: billingPlans.name }).from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1)
+      : [undefined];
+    const { buffer, filename } = await buildTenantBillingPdf({ invoice, tenantName: name, planName: plan?.name, variant });
+    return [{ filename, content: buffer, contentType: "application/pdf" }];
+  } catch (err) {
+    structuredLog("error", "billing PDF render failed", { invoiceId: invoice.id, error: (err as Error).message });
+    return [];
+  }
+}
 
 /**
  * Every org's de-facto owner/billing-contact is whoever holds the "administrator"
@@ -41,7 +59,7 @@ function payLink(token: string): string {
   return `${base}/pay/${token}`;
 }
 
-async function send(orgId: string, subject: string, html: string, text: string): Promise<void> {
+async function send(orgId: string, subject: string, html: string, text: string, attachments?: Attachment[]): Promise<void> {
   if (!isEmailConfigured()) {
     structuredLog("info", "Tenant billing email skipped — SMTP not configured", { orgId, subject });
     return;
@@ -51,7 +69,7 @@ async function send(orgId: string, subject: string, html: string, text: string):
     structuredLog("warn", "Tenant billing email skipped — no administrator recipient found", { orgId, subject });
     return;
   }
-  const result = await sendEmail({ to: recipients.join(","), fromName: "POL263 Billing", subject, text, html });
+  const result = await sendEmail({ to: recipients.join(","), fromName: "POL263 Billing", subject, text, html, attachments });
   if (result.ok) {
     structuredLog("info", "Tenant billing email sent", { orgId, subject, to: recipients });
   } else {
@@ -68,12 +86,28 @@ export async function sendInvoiceReminderEmail(invoice: TenantInvoice): Promise<
   const name = await tenantName(invoice.tenantId);
   const link = payLink(invoice.paymentToken);
   const due = new Date(invoice.dueDate).toLocaleDateString();
+  const isSetup = invoice.kind === "setup";
+  const what = isSetup ? "one-time account setup fee" : "subscription renewal";
   await send(
     invoice.tenantId,
-    `${name}: subscription renewal due ${due}`,
-    `<p>Your POL263 subscription renews on <strong>${due}</strong> — amount due: <strong>${invoice.currency} ${invoice.amount}</strong>.</p>
-     <p><a href="${link}">Pay now</a> to renew without interruption.</p>`,
-    `Your POL263 subscription renews on ${due} — amount due: ${invoice.currency} ${invoice.amount}.\nPay now: ${link}`,
+    isSetup ? `${name}: account setup fee — ${invoice.currency} ${invoice.amount}` : `${name}: subscription renewal due ${due}`,
+    `<p>Your POL263 ${what} of <strong>${invoice.currency} ${invoice.amount}</strong> is ${isSetup ? "now payable" : `due on <strong>${due}</strong>`}.</p>
+     <p><a href="${link}">Pay now</a>${isSetup ? " so we can finish setting up your account." : " to renew without interruption."}</p>
+     <p>The invoice is attached as a PDF.</p>`,
+    `Your POL263 ${what} of ${invoice.currency} ${invoice.amount} is ${isSetup ? "now payable" : `due on ${due}`}.\nPay now: ${link}`,
+    await billingPdfAttachment(invoice, "invoice"),
+  );
+}
+
+/** Sent after a tenant invoice is paid — the branded PDF receipt. */
+export async function sendInvoicePaidReceiptEmail(invoice: TenantInvoice): Promise<void> {
+  const name = await tenantName(invoice.tenantId);
+  await send(
+    invoice.tenantId,
+    `${name}: payment received — ${invoice.currency} ${invoice.amount}`,
+    `<p>Thank you — we've received your payment of <strong>${invoice.currency} ${invoice.amount}</strong>. Your receipt is attached.</p>`,
+    `Thank you — we've received your payment of ${invoice.currency} ${invoice.amount}. Your receipt is attached.`,
+    await billingPdfAttachment(invoice, "receipt"),
   );
 }
 
@@ -85,8 +119,9 @@ export async function sendGracePeriodEmail(invoice: TenantInvoice, graceDeadline
     invoice.tenantId,
     `${name}: payment overdue — access suspends ${deadline}`,
     `<p>Your POL263 subscription payment is overdue. Access will be automatically suspended on <strong>${deadline}</strong> if payment isn't received.</p>
-     <p><a href="${link}">Pay now</a> to avoid interruption — amount due: <strong>${invoice.currency} ${invoice.amount}</strong>.</p>`,
+     <p><a href="${link}">Pay now</a> to avoid interruption — amount due: <strong>${invoice.currency} ${invoice.amount}</strong>. Invoice attached.</p>`,
     `Your POL263 subscription payment is overdue. Access will be suspended on ${deadline} if payment isn't received.\nPay now: ${link}`,
+    await billingPdfAttachment(invoice, "invoice"),
   );
 }
 
@@ -97,8 +132,9 @@ export async function sendSuspendedEmail(invoice: TenantInvoice): Promise<void> 
     invoice.tenantId,
     `${name}: access suspended — payment required`,
     `<p>Your POL263 access has been suspended because payment wasn't received within the grace period.</p>
-     <p><a href="${link}">Pay now</a> to restore access instantly — amount due: <strong>${invoice.currency} ${invoice.amount}</strong>.</p>`,
+     <p><a href="${link}">Pay now</a> to restore access instantly — amount due: <strong>${invoice.currency} ${invoice.amount}</strong>. Invoice attached.</p>`,
     `Your POL263 access has been suspended — payment wasn't received within the grace period.\nPay now to restore access instantly: ${link}`,
+    await billingPdfAttachment(invoice, "invoice"),
   );
 }
 
