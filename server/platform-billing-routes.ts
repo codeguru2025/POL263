@@ -297,8 +297,10 @@ export function registerPlatformBillingRoutes(app: Express): void {
   // ── Per-tenant subscription ─────────────────────────────────────
   app.get("/api/platform/tenants/:id/subscription", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
+    const [tenantRow] = await cpDb.select({ billingEmail: cpTenants.billingEmail }).from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
+    const billingEmail = tenantRow?.billingEmail ?? null;
     const [subscription] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, id)).limit(1);
-    if (!subscription) return res.json({ subscription: null, plan: null, effectivePricing: null });
+    if (!subscription) return res.json({ subscription: null, plan: null, effectivePricing: null, billingEmail });
     const [plan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, subscription.planId)).limit(1);
 
     let effectivePricing = null;
@@ -326,7 +328,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
         structuredLog("error", "effective pricing preview failed", { tenantId: id, error: err?.message });
       }
     }
-    return res.json({ subscription, plan: plan || null, effectivePricing });
+    return res.json({ subscription, plan: plan || null, effectivePricing, billingEmail });
   });
 
   // Tenants created before billing existed (or whose auto-trial insert failed soft
@@ -432,6 +434,15 @@ export function registerPlatformBillingRoutes(app: Express): void {
       if (ratesOverride !== undefined) patch.perStatusRatesOverride = ratesOverride;
     } catch (msg) {
       return res.status(400).json({ message: String(msg) });
+    }
+
+    // billing_email lives on the tenant row, not the subscription — updated here for convenience.
+    if (req.body.billingEmail !== undefined) {
+      const be = req.body.billingEmail === null || String(req.body.billingEmail).trim() === "" ? null : String(req.body.billingEmail).trim();
+      if (be !== null && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(be)) {
+        return res.status(400).json({ message: "billingEmail must be a valid email address or blank" });
+      }
+      await cpDb.update(cpTenants).set({ billingEmail: be }).where(eq(cpTenants.id, id));
     }
 
     await cpDb.update(tenantSubscriptions).set(patch).where(eq(tenantSubscriptions.tenantId, id));

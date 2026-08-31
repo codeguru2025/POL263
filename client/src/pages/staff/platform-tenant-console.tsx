@@ -1059,13 +1059,14 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const [graceDaysOverride, setGraceDaysOverride] = useState("");
   const [platformFeeRateOverride, setPlatformFeeRateOverride] = useState("");
   const [outstandingFeeCapUsd, setOutstandingFeeCapUsd] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [startPlanId, setStartPlanId] = useState("");
   const [markPaidInvoice, setMarkPaidInvoice] = useState<BillingInvoiceRow | null>(null);
   const [markPaidReason, setMarkPaidReason] = useState("");
 
   const subKey = ["/api/platform/tenants", tenantId, "subscription"];
-  const { data: subData, isLoading: subLoading } = useQuery<{ subscription: BillingSubscriptionRow | null; plan: BillingPlanRow | null; effectivePricing: EffectivePricing | null }>({ queryKey: subKey });
+  const { data: subData, isLoading: subLoading } = useQuery<{ subscription: BillingSubscriptionRow | null; plan: BillingPlanRow | null; effectivePricing: EffectivePricing | null; billingEmail: string | null }>({ queryKey: subKey });
   const { data: invoices = [] } = useQuery<BillingInvoiceRow[]>({ queryKey: ["/api/platform/tenants", tenantId, "invoices"] });
   const { data: plansData } = useQuery<{ knownModules: string[]; plans: BillingPlanRow[] }>({ queryKey: ["/api/platform/billing/plans"] });
 
@@ -1074,6 +1075,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
       setGraceDaysOverride(subData.subscription.graceDaysOverride == null ? "" : String(subData.subscription.graceDaysOverride));
       setPlatformFeeRateOverride(subData.subscription.platformFeeRateOverride == null ? "" : String(subData.subscription.platformFeeRateOverride));
       setOutstandingFeeCapUsd(subData.subscription.outstandingFeeCapUsd == null ? "" : String(subData.subscription.outstandingFeeCapUsd));
+      setBillingEmail(subData.billingEmail ?? "");
       setSelectedPlanId(subData.subscription.planId);
     }
   }, [subData]);
@@ -1150,7 +1152,15 @@ function BillingTab({ tenantId }: { tenantId: string }) {
             <>
               <div className="flex flex-wrap items-center gap-3">
                 <Badge variant={SUBSCRIPTION_STATUS_VARIANT[subscription.status] ?? "outline"} className="capitalize">{subscription.status.replace("_", " ")}</Badge>
-                <span className="text-sm text-muted-foreground">{plan?.name ?? "Unknown plan"} — {plan ? `$${plan.priceMonthlyUsd}/mo` : ""}</span>
+                <span className="text-sm text-muted-foreground">
+                  {plan?.name ?? "Unknown plan"} — {
+                    subData?.effectivePricing?.billingModel === "revenue_share"
+                      ? `${subData.effectivePricing.revenueSharePercent}% of revenue`
+                      : subData?.effectivePricing?.billingModel === "per_policy"
+                        ? `$${subData.effectivePricing.baseFeeUsd}/mo + per policy`
+                        : plan ? `$${plan.priceMonthlyUsd}/mo` : ""
+                  }
+                </span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="rounded-md border p-3">
@@ -1215,6 +1225,18 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                       Save
                     </Button>
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pt-billing-email">Billing email</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="pt-billing-email" type="email" value={billingEmail}
+                      onChange={(e) => setBillingEmail(e.target.value)} placeholder="Blank = all administrators" />
+                    <Button variant="outline" disabled={updateSubMutation.isPending}
+                      onClick={() => updateSubMutation.mutate({ billingEmail: billingEmail.trim() || null })}>
+                      Save
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Where invoices, receipts and payment reminders are sent. Blank sends to every administrator user.</p>
                 </div>
               </div>
 

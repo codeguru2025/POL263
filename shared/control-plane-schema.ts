@@ -58,6 +58,9 @@ export const tenants = pgTable(
      *  can still log in and READ their data (mutations blocked); after it, the account is eligible
      *  for permanent deletion. Null = not in the deletion lifecycle (legacy suspension, or active). */
     viewOnlyGraceUntil: timestamp("view_only_grace_until"),
+    /** One address for all POL263 billing correspondence (invoices, receipts, dunning). Null =
+     *  fall back to every administrator-role user, as before. */
+    billingEmail: text("billing_email"),
   },
   (t) => [uniqueIndex("tenants_slug_idx").on(t.slug)]
 );

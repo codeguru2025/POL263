@@ -35,10 +35,16 @@ async function billingPdfAttachment(invoice: TenantInvoice, variant: "invoice" |
 /**
  * Every org's de-facto owner/billing-contact is whoever holds the "administrator"
  * role (auto-assigned to adminEmail at tenant creation) — there is no dedicated
- * billingEmail column anywhere, so this is resolved fresh each time from that
- * tenant's own database rather than cached/stored in the control plane.
+ * If tenants.billing_email is set (platform-owner console), that ONE address is used. Otherwise
+ * it falls back to every active administrator-role user, resolved fresh from the tenant's own DB.
  */
 export async function resolveTenantBillingRecipients(orgId: string): Promise<string[]> {
+  try {
+    const [t] = await cpDb.select({ billingEmail: cpTenants.billingEmail }).from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
+    if (t?.billingEmail && t.billingEmail.trim()) return [t.billingEmail.trim()];
+  } catch (err) {
+    structuredLog("error", "billing_email lookup failed, falling back to administrators", { orgId, error: (err as Error).message });
+  }
   try {
     const tdb = await getDbForOrg(orgId);
     const rows = await tdb

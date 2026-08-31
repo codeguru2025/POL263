@@ -12945,9 +12945,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/billing/subscription", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const orgId = (req.user as any).organizationId as string;
     const [subscription] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, orgId)).limit(1);
-    if (!subscription) return res.json({ subscription: null, plan: null });
+    if (!subscription) return res.json({ subscription: null, plan: null, effectivePricing: null });
     const [plan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, subscription.planId)).limit(1);
-    return res.json({ subscription, plan: plan || null });
+
+    let effectivePricing = null;
+    if (plan) {
+      try {
+        const { resolveEffectivePricing } = await import("./billing-model-math");
+        const { getTenantModuleSet } = await import("./module-gate");
+        const { billingFeatures, billingSettings } = await import("@shared/control-plane-schema");
+        const [moduleSet, allFeatures, settingsRow] = await Promise.all([
+          getTenantModuleSet(orgId),
+          cpDb.select().from(billingFeatures).where(eq(billingFeatures.isActive, true)),
+          cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1),
+        ]);
+        const s = settingsRow[0];
+        effectivePricing = resolveEffectivePricing(
+          plan,
+          allFeatures.filter((f) => moduleSet.has(f.key)),
+          subscription,
+          {
+            platformFeeRatePercent: s?.platformFeeRatePercent ?? null,
+            defaultMonthlyMinimumUsd: s?.defaultMonthlyMinimumUsd ?? null,
+            defaultOutstandingFeeCapUsd: s?.defaultOutstandingFeeCapUsd ?? null,
+          },
+        );
+      } catch (err: any) {
+        structuredLog("error", "tenant billing effective-pricing failed", { orgId, error: err?.message });
+      }
+    }
+    return res.json({ subscription, plan: plan || null, effectivePricing });
   });
 
   app.get("/api/billing/invoices", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
