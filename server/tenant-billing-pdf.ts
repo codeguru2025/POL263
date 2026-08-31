@@ -5,6 +5,20 @@
  */
 import PDFDocument from "pdfkit";
 import type { TenantInvoice } from "@shared/control-plane-schema";
+import { resolveImage } from "./object-storage";
+import { structuredLog } from "./logger";
+
+let _logoCache: Buffer | null | undefined;
+async function pol263Logo(): Promise<Buffer | null> {
+  if (_logoCache !== undefined) return _logoCache;
+  try {
+    _logoCache = await resolveImage("/assets/logo.png");
+  } catch (err) {
+    structuredLog("warn", "POL263 logo load failed for billing PDF", { error: (err as Error).message });
+    _logoCache = null;
+  }
+  return _logoCache;
+}
 
 const A4_W = 595.28;
 const A4_H = 841.89;
@@ -61,7 +75,7 @@ export interface TenantBillingPdfInput {
   terms?: string[];
 }
 
-export function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ buffer: Buffer; filename: string }> {
+export async function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ buffer: Buffer; filename: string }> {
   const { invoice, tenantName, planName, variant, terms } = input;
   const isReceipt = variant === "receipt";
   const docTitle = isReceipt ? "Payment Receipt" : (KIND_TITLE[invoice.kind] ?? "Invoice");
@@ -76,6 +90,8 @@ export function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ b
     ? invoice.lineItems
     : [{ label: planName ? `${planName} — ${KIND_TITLE[invoice.kind] ?? "charge"}` : (KIND_TITLE[invoice.kind] ?? "Charge"), amount: String(invoice.amount) }];
 
+  const logo = await pol263Logo();
+
   return new Promise((resolve) => {
     const doc = new PDFDocument({ size: "A4", margin: MARGIN, info: { Title: `${docTitle} ${ref}`, Author: "POL263" } });
     const chunks: Buffer[] = [];
@@ -85,16 +101,19 @@ export function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ b
     let y = MARGIN;
 
     // ── Header ──────────────────────────────────────────────────
-    doc.font("Helvetica-Bold").fontSize(20).fillColor(C_PRIMARY).text("POL263", MARGIN, y);
+    if (logo) {
+      try { doc.image(logo, MARGIN, y, { height: 34, fit: [180, 34] }); } catch { /* fall through to wordmark */ }
+    } else {
+      doc.font("Helvetica-Bold").fontSize(20).fillColor(C_PRIMARY).text("POL263", MARGIN, y);
+    }
     doc.font("Helvetica").fontSize(8).fillColor(C_MUTED)
-      .text("Policy Management System", MARGIN, y + 24)
-      .text("billing@pol263.com", MARGIN, y + 35);
+      .text("Policy Management System  ·  billing@pol263.com", MARGIN, y + 40);
     doc.font("Helvetica-Bold").fontSize(15).fillColor(C_TEXT)
       .text(isReceipt ? "PAYMENT RECEIPT" : docTitle.toUpperCase(), MARGIN, y, { width: COL, align: "right" });
     doc.font("Helvetica").fontSize(9).fillColor(C_MUTED)
       .text(`Reference: ${ref}`, MARGIN, y + 22, { width: COL, align: "right" })
       .text(`${isReceipt ? "Receipt date" : "Issued"}: ${fmtDate(isReceipt ? (input.payment?.receivedOn ?? new Date()) : invoice.issuedAt)}`, MARGIN, y + 34, { width: COL, align: "right" });
-    y += 58;
+    y += 60;
     doc.moveTo(MARGIN, y).lineTo(A4_W - MARGIN, y).lineWidth(1.5).strokeColor(C_PRIMARY).stroke();
     y += 18;
 
@@ -104,7 +123,11 @@ export function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ b
 
     const metaX = MARGIN + COL / 2;
     const meta: [string, string][] = [];
-    if (invoice.periodStart && invoice.periodEnd) meta.push(["Billing period", `${fmtDate(invoice.periodStart)} – ${fmtDate(invoice.periodEnd)}`]);
+    const sameDay = invoice.periodStart && invoice.periodEnd
+      && new Date(invoice.periodStart).toDateString() === new Date(invoice.periodEnd).toDateString();
+    if (invoice.periodStart && invoice.periodEnd && !sameDay) {
+      meta.push(["Billing period", `${fmtDate(invoice.periodStart)} – ${fmtDate(invoice.periodEnd)}`]);
+    }
     if (isReceipt) {
       meta.push(["Payment received", fmtDate(input.payment?.receivedOn ?? invoice.paidAt ?? new Date())]);
       if (input.payment?.method) meta.push(["Method", input.payment.method]);
@@ -181,10 +204,11 @@ export function buildTenantBillingPdf(input: TenantBillingPdfInput): Promise<{ b
       }
     }
 
-    // ── Footer ──────────────────────────────────────────────────
+    // ── Footer (on the current/last page, safely inside the bottom margin) ──
+    const footerY = Math.min(doc.y + 24, A4_H - MARGIN - 12);
     doc.font("Helvetica").fontSize(7).fillColor(C_MUTED)
-      .text(`POL263 · Reference ${ref} · Generated ${fmtDate(new Date())} · This document is electronically issued and needs no signature.`,
-        MARGIN, A4_H - 42, { width: COL, align: "center" });
+      .text(`POL263 · Reference ${ref} · Generated ${fmtDate(new Date())} · Electronically issued — no signature required.`,
+        MARGIN, footerY, { width: COL, align: "center", lineBreak: false });
 
     doc.end();
   });
