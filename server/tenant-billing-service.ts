@@ -337,10 +337,15 @@ export async function applyTenantInvoicePayment(
       sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
     }
 
-    // Branded PDF receipt for the paid invoice.
+    // Branded PDF receipt for the paid invoice + revenue-share settlement reconciliation.
     cpDb.select().from(tenantInvoices).where(eq(tenantInvoices.id, invoiceId)).limit(1)
-      .then(([paidInv]) => paidInv && sendInvoicePaidReceiptEmail(paidInv))
-      .catch((err) => structuredLog("error", "sendInvoicePaidReceiptEmail failed", { invoiceId, error: (err as Error).message }));
+      .then(async ([paidInv]) => {
+        if (!paidInv) return;
+        await sendInvoicePaidReceiptEmail(paidInv).catch((err) => structuredLog("error", "sendInvoicePaidReceiptEmail failed", { invoiceId, error: (err as Error).message }));
+        const { reconcileRevenueShareSettlement } = await import("./tenant-billing-enforcement");
+        await reconcileRevenueShareSettlement(paidInv);
+      })
+      .catch((err) => structuredLog("error", "post-payment reconciliation failed", { invoiceId, error: (err as Error).message }));
 
     // A setup-fee invoice was just raised — email it to the tenant admins.
     if ((result as any).setupInvoiceRaised) {

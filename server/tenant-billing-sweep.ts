@@ -15,6 +15,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, billingPlans, tenantSubscriptions, tenantInvoices, tenantBillingEvents } from "@shared/control-plane-schema";
 import { generateInvoiceForSubscription, getEffectiveGraceDays, getBillingSettings } from "./tenant-billing-service";
+import { enforceOutstandingFeeCap } from "./tenant-billing-enforcement";
 import { sendInvoiceReminderEmail, sendGracePeriodEmail, sendSuspendedEmail } from "./tenant-billing-email";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
@@ -72,6 +73,17 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
 
   for (const sub of subscriptions) {
     try {
+      // Step 0: revenue-share outstanding-fee cap. Bills immediately and blocks access when a
+      // tenant's unpaid + accrued platform fees pass their cap — runs before the normal steps so
+      // a capped tenant is handled even if their renewal isn't due yet.
+      if (sub.status !== "suspended") {
+        const [capPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, sub.planId)).limit(1);
+        if (capPlan) {
+          const fired = await enforceOutstandingFeeCap(sub, capPlan, settings);
+          if (fired) { result.autoSuspensions++; sub.status = "suspended"; continue; }
+        }
+      }
+
       // Step 1: reminder + invoice generation. currentPeriodEnd IS trialEndsAt while
       // trialing, so this is the exact same code path for trial expiry and renewals.
       if (sub.currentPeriodEnd.getTime() <= reminderCutoff.getTime()) {
