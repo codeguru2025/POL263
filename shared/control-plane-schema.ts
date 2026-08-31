@@ -407,6 +407,9 @@ export const tenantInvoices = pgTable(
     /** null for non-period invoices (kind='setup'). */
     periodStart: timestamp("period_start"),
     periodEnd: timestamp("period_end"),
+    /** per_policy / revenue_share: the exact instant usage was tallied for this invoice.
+     *  reconcileRevenueShareSettlement settles platform_receivables created at/before this. */
+    usageCutAt: timestamp("usage_cut_at"),
     dueDate: timestamp("due_date").notNull(),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     paidAt: timestamp("paid_at"),

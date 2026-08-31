@@ -18,6 +18,7 @@ import {
 } from "@shared/control-plane-schema";
 import { applyTenantInvoicePayment } from "./tenant-billing-service";
 import { invalidateTenantModuleCache, invalidateEnforcementCache, ALL_KNOWN_MODULES } from "./module-gate";
+import { invalidateBillingModelCache } from "./platform-fee";
 import { structuredLog } from "./logger";
 import { auditLog } from "./route-helpers";
 
@@ -258,7 +259,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
     // Every tenant on this plan needs its module-gate cache invalidated so a module
     // change takes effect immediately rather than waiting out the 5-minute TTL.
     const subs = await cpDb.select({ tenantId: tenantSubscriptions.tenantId }).from(tenantSubscriptions).where(eq(tenantSubscriptions.planId, id));
-    for (const s of subs) invalidateTenantModuleCache(s.tenantId);
+    for (const s of subs) { invalidateTenantModuleCache(s.tenantId); invalidateBillingModelCache(s.tenantId); }
     await auditLog(req, "UPDATE_BILLING_PLAN", "BillingPlan", id, existing, after);
     return res.json(after);
   });
@@ -436,6 +437,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
     await cpDb.update(tenantSubscriptions).set(patch).where(eq(tenantSubscriptions.tenantId, id));
     const [after] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, id)).limit(1);
     invalidateTenantModuleCache(id);
+    invalidateBillingModelCache(id);
     await auditLog(req, "UPDATE_TENANT_SUBSCRIPTION", "TenantSubscription", id, existing, after, id);
     return res.json(after);
   });

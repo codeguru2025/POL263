@@ -24,8 +24,8 @@ import {
 } from "@shared/control-plane-schema";
 import { platformReceivables, auditLogs } from "@shared/schema";
 import { getDbForOrg } from "./tenant-db";
-import { getFxToUsdMap, getReceiptedCollectionsByCurrency } from "./tenant-billing-usage";
-import { resolveEffectivePricing, computeRevenueShareInvoice } from "./billing-model-math";
+import { getFxToUsdMap, getUnsettledPlatformFeesByCurrency } from "./tenant-billing-usage";
+import { resolveEffectivePricing, computeRevenueShareInvoiceFromFees } from "./billing-model-math";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
 import { structuredLog } from "./logger";
@@ -79,13 +79,13 @@ export async function enforceOutstandingFeeCap(
   if (pricing.billingModel !== "revenue_share") return false;
 
   const now = new Date();
-  const since = sub.lastSettlementAt ?? sub.currentPeriodStart ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const [collections, fx] = await Promise.all([
-    getReceiptedCollectionsByCurrency(sub.tenantId, since, now),
+  // Accrued = unsettled platform_receivables (the single ledger), converted to USD. No minimum
+  // floor here — the cap is about real accrual.
+  const [{ byCurrency }, fx] = await Promise.all([
+    getUnsettledPlatformFeesByCurrency(sub.tenantId),
     getFxToUsdMap(sub.tenantId),
   ]);
-  // Accrued fee WITHOUT the monthly-minimum floor — the cap is about real accrual, not the floor.
-  const rawAccrual = computeRevenueShareInvoice({ ...pricing, monthlyMinimumUsd: "0" }, collections, fx);
+  const rawAccrual = computeRevenueShareInvoiceFromFees({ ...pricing, monthlyMinimumUsd: "0" }, byCurrency, fx);
   const accruedUsd = parseFloat(rawAccrual.amountUsd);
   const unpaidUsd = await unpaidInvoiceExposureUsd(sub.id);
 
@@ -109,8 +109,9 @@ export async function enforceOutstandingFeeCap(
           ...rawAccrual.lineItems,
           { label: `Billed early — unpaid platform fees reached the $${money(cap)} limit`, amount: "0.00" },
         ],
-        periodStart: since,
+        periodStart: sub.lastSettlementAt ?? sub.currentPeriodStart,
         periodEnd: now,
+        usageCutAt: now,
         dueDate: now,
         paymentToken: crypto.randomBytes(24).toString("hex"),
         merchantReference: generateMerchantReference(sub.tenantId),
@@ -146,7 +147,9 @@ export async function enforceOutstandingFeeCap(
  */
 export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): Promise<void> {
   if (invoice.kind !== "revenue_share" && invoice.kind !== "subscription") return;
-  const cutoff = invoice.periodEnd ?? invoice.paidAt ?? invoice.issuedAt;
+  // The exact instant this invoice tallied the ledger — settle nothing accrued after it, so a
+  // later invoice generated before this one was paid keeps its own receivables.
+  const cutoff = invoice.usageCutAt ?? invoice.periodEnd ?? invoice.paidAt ?? invoice.issuedAt;
   if (!cutoff) return;
 
   try {

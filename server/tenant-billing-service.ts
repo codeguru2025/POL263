@@ -29,10 +29,10 @@ import { computeNextPeriod, computeInvoiceAmount, effectiveBillingIntervalMonths
 import {
   resolveEffectivePricing,
   computePerPolicyInvoice,
-  computeRevenueShareInvoice,
+  computeRevenueShareInvoiceFromFees,
   type GlobalBillingDefaults,
 } from "./billing-model-math";
-import { getPolicyStatusCounts, getReceiptedCollectionsByCurrency, getFxToUsdMap } from "./tenant-billing-usage";
+import { getPolicyStatusCounts, getUnsettledPlatformFeesByCurrency, getFxToUsdMap } from "./tenant-billing-usage";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache, getTenantModuleSet } from "./module-gate";
@@ -152,16 +152,18 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
     eventDetail.policyCounts = counts;
     eventDetail.minimumApplied = computed.minimumApplied;
   } else if (pricing.billingModel === "revenue_share") {
-    const since = subscription.lastSettlementAt ?? subscription.currentPeriodStart ?? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const [collections, fx] = await Promise.all([
-      getReceiptedCollectionsByCurrency(subscription.tenantId, since, now),
+    // Bill the tenant's already-accrued, still-unsettled platform_receivables (the per-receipt
+    // 2.5% ledger) — one source of truth, so the invoice and the tenant's own platform-fee
+    // balance stay in lockstep. reconcileRevenueShareSettlement settles exactly these on payment.
+    const [{ byCurrency, count }, fx] = await Promise.all([
+      getUnsettledPlatformFeesByCurrency(subscription.tenantId),
       getFxToUsdMap(subscription.tenantId),
     ]);
-    const computed = computeRevenueShareInvoice(pricing, collections, fx);
+    const computed = computeRevenueShareInvoiceFromFees(pricing, byCurrency, fx);
     amount = computed.amountUsd;
     lineItems = computed.lineItems;
-    eventDetail.usageWindow = { since, until: now };
-    eventDetail.collections = collections;
+    eventDetail.unsettledFeeCount = count;
+    eventDetail.feesByCurrency = byCurrency;
     eventDetail.currencyBreakdown = computed.currencyBreakdown;
     eventDetail.minimumApplied = computed.minimumApplied;
   } else {
@@ -182,6 +184,7 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
         status: "open",
         periodStart: subscription.currentPeriodStart,
         periodEnd: subscription.currentPeriodEnd,
+        usageCutAt: pricing.billingModel === "flat" ? null : now,
         dueDate: subscription.currentPeriodEnd,
         paymentToken: crypto.randomBytes(24).toString("hex"),
         merchantReference: generateMerchantReference(subscription.tenantId),

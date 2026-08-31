@@ -3,6 +3,7 @@ import {
   resolveEffectivePricing,
   computePerPolicyInvoice,
   computeRevenueShareInvoice,
+  computeRevenueShareInvoiceFromFees,
   DEFAULT_PER_STATUS_RATES,
 } from "../../server/billing-model-math";
 
@@ -191,6 +192,34 @@ describe("computeRevenueShareInvoice", () => {
 
   it("no collections → minimum still due", () => {
     const r = computeRevenueShareInvoice(pricing, {}, { USD: 1 });
+    expect(r.amountUsd).toBe("250.00");
+    expect(r.minimumApplied).toBe(true);
+  });
+});
+
+describe("computeRevenueShareInvoiceFromFees (single-ledger path)", () => {
+  const pricing = resolveEffectivePricing(
+    plan({ billingModel: "revenue_share", revenueSharePercent: "2.50", monthlyMinimumUsd: "250.00" }),
+    [], sub(),
+  );
+
+  it("sums already-accrued fees per currency, converts to USD, above the minimum", () => {
+    const r = computeRevenueShareInvoiceFromFees(pricing, { USD: "500.00", ZAR: "4000.00" }, { USD: 1, ZAR: 0.055 });
+    // 500 + 4000*0.055=220 → 720
+    expect(r.amountUsd).toBe("720.00");
+    expect(r.currencyBreakdown).toEqual({ USD: "500.00", ZAR: "4000.00" });
+    expect(r.lineItems.find((l) => l.currency === "ZAR")?.nativeAmount).toBe("4000.00");
+    expect(r.minimumApplied).toBe(false);
+  });
+
+  it("floors at the monthly minimum when accrued fees are below it", () => {
+    const r = computeRevenueShareInvoiceFromFees(pricing, { USD: "90.00" }, { USD: 1 });
+    expect(r.amountUsd).toBe("250.00");
+    expect(r.minimumApplied).toBe(true);
+  });
+
+  it("nothing unsettled → still owes the minimum", () => {
+    const r = computeRevenueShareInvoiceFromFees(pricing, {}, { USD: 1 });
     expect(r.amountUsd).toBe("250.00");
     expect(r.minimumApplied).toBe(true);
   });

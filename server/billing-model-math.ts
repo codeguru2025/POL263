@@ -284,3 +284,48 @@ export function computeRevenueShareInvoice(
   }
   return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown };
 }
+
+/**
+ * Revenue-share invoice from the tenant's ALREADY-ACCRUED platform fees (unsettled
+ * platform_receivables), grouped by the currency each was collected in. The per-receipt accrual
+ * already applied the rate that was in effect at the time, so this just converts each currency's
+ * total to USD, sums, and floors at the monthly minimum. Preferred over computeRevenueShareInvoice
+ * (which re-derives the fee from collections) — one ledger, no double representation.
+ */
+export function computeRevenueShareInvoiceFromFees(
+  pricing: EffectivePricing,
+  feesByCurrency: Record<string, number | string>,
+  fxToUsd: Record<string, number>,
+): ComputedInvoice {
+  const lines: InvoiceLine[] = [];
+  const currencyBreakdown: Record<string, string> = {};
+
+  for (const [ccy, fee] of Object.entries(feesByCurrency)) {
+    const feeInCcy = num(fee);
+    if (feeInCcy <= 0) continue;
+    const rate = ccy === "USD" ? 1 : num(fxToUsd[ccy] ?? 0);
+    currencyBreakdown[ccy] = money(feeInCcy);
+    lines.push({
+      label:
+        ccy === "USD"
+          ? `Platform fees on payments received this period`
+          : `Platform fees on ${ccy} payments received this period (converted to USD at ${rate})`,
+      amount: money(feeInCcy * rate),
+      currency: ccy,
+      nativeAmount: money(feeInCcy),
+    });
+  }
+
+  if (lines.length === 0) lines.push({ label: `Platform fees on payments received this period`, amount: "0.00", currency: "USD" });
+
+  const computed = sumLines(lines);
+  const minimum = num(pricing.monthlyMinimumUsd);
+  if (computed < minimum) {
+    lines.push({
+      label: `Minimum monthly charge — fees this period came to $${money(computed)}, which is below the $${money(minimum)} plan minimum`,
+      amount: money(minimum - computed),
+    });
+    return { amountUsd: money(minimum), lineItems: lines, minimumApplied: true, currencyBreakdown };
+  }
+  return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown };
+}

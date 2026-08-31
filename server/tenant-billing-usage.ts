@@ -10,7 +10,7 @@
 import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { policies, paymentReceipts, serviceReceipts } from "@shared/schema";
+import { policies, paymentReceipts, serviceReceipts, platformReceivables } from "@shared/schema";
 
 /**
  * Live policy count per status, excluding soft-deleted rows. Keys are the RAW database status
@@ -78,6 +78,33 @@ export async function getReceiptedCollectionsByCurrency(
   }
 
   return out;
+}
+
+/**
+ * Sum of the tenant's UNSETTLED platform_receivables (the per-receipt 2.5% accruals), grouped by
+ * the currency each was collected in. This is the revenue-share invoice basis — one ledger, so
+ * the invoice total and the tenant's own platform-fee balance can never diverge. `platform_
+ * receivables` only accrue for revenue-share tenants (gated in storage.createPlatformReceivableInTx).
+ */
+export async function getUnsettledPlatformFeesByCurrency(orgId: string): Promise<{ byCurrency: Record<string, number>; count: number }> {
+  const tdb = await getDbForOrg(orgId);
+  const rows = await tdb
+    .select({
+      currency: platformReceivables.currency,
+      total: sql<string>`coalesce(sum(${platformReceivables.amount}), '0')`,
+      n: sql<number>`count(*)::int`,
+    })
+    .from(platformReceivables)
+    .where(and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.isSettled, false)))
+    .groupBy(platformReceivables.currency);
+
+  const byCurrency: Record<string, number> = {};
+  let count = 0;
+  for (const r of rows) {
+    byCurrency[r.currency.toUpperCase()] = (byCurrency[r.currency.toUpperCase()] ?? 0) + parseFloat(r.total);
+    count += Number(r.n);
+  }
+  return { byCurrency, count };
 }
 
 /** currency code → multiplier to USD (USD itself is 1). Mirrors financial-statements.fxMapFor. */

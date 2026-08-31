@@ -5,6 +5,7 @@ import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
+import { isRevenueShareBillingForOrg } from "./platform-fee";
 import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
@@ -797,8 +798,8 @@ export interface IStorage {
   getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined>;
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
-  createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
-  createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
+  createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null>;
+  createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null>;
   getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
@@ -6530,7 +6531,7 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(platformReceivables).where(and(...conditions))
       .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
-  async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
+  async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null> {
     return withOrgTransaction(entry.organizationId, (tx) => this.createPlatformReceivableInTx(tx, entry));
   }
   // Split out so callers that already have an open transaction for the payment this fee is on
@@ -6539,7 +6540,12 @@ export class DatabaseStorage implements IStorage {
   // crash window a detached, unawaited `computePlatformFee(...).then(() => createPlatformReceivable(...))`
   // has: if the process dies between the payment transaction committing and that promise
   // resolving, the fee is durably lost with no record it was ever owed — see docs/BUGFIX-LOG.md.
-  async createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
+  async createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null> {
+    // Only tenants actually billed on revenue-share accrue platform_receivables — otherwise a
+    // flat/per-policy tenant would pile up unsettled 2.5% rows that are never invoiced. This is
+    // the single chokepoint for every accrual site across the codebase. Cached lookup.
+    if (!(await isRevenueShareBillingForOrg(entry.organizationId))) return null;
+
     const [created] = await tx.insert(platformReceivables).values(entry).returning();
 
     // Immediately draw down any same-currency fee credit this org built up from a past
