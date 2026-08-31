@@ -27,11 +27,13 @@ export function registerBillingPublicRoutes(app: Express): void {
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
     const [tenant] = await cpDb.select({ name: cpTenants.name }).from(cpTenants).where(eq(cpTenants.id, invoice.tenantId)).limit(1);
-    const [plan] = await cpDb.select({ name: billingPlans.name }).from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1);
+    const [plan] = invoice.planId
+      ? await cpDb.select({ name: billingPlans.name }).from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1)
+      : [undefined];
 
     return res.json({
       tenantName: tenant?.name || "Organization",
-      planName: plan?.name || "Plan",
+      planName: plan?.name || (invoice.kind === "setup" ? "Setup fee" : "Plan"),
       amount: invoice.amount,
       currency: invoice.currency,
       dueDate: invoice.dueDate,

@@ -3909,15 +3909,20 @@ export type InsertVehicleTripLog = z.infer<typeof insertVehicleTripLogSchema>;
 
 // ─── POLICY STATUS ENUM ────────────────────────────────────
 
-export const POLICY_STATUSES = ["inactive", "active", "grace", "lapsed", "cancelled"] as const;
+// "archived" is a real, reversible terminal status: lapsed/cancelled policies are moved here so
+// they stop attracting the full per-policy platform fee (archived bills at the cheapest rate).
+// Cancelling a policy AUTO-archives it (see /api/policies/:id/transition); archived policies can
+// still be revived (archived → active) if the member reinstates.
+export const POLICY_STATUSES = ["inactive", "active", "grace", "lapsed", "cancelled", "archived"] as const;
 export type PolicyStatus = typeof POLICY_STATUSES[number];
 
 export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
-  inactive: ["active", "cancelled"],
+  inactive: ["active", "cancelled", "archived"],
   active: ["grace", "cancelled"],
   grace: ["active", "lapsed", "cancelled"],
-  lapsed: ["active", "cancelled"],
-  cancelled: [],
+  lapsed: ["active", "cancelled", "archived"],
+  cancelled: ["archived", "active"],
+  archived: ["active", "inactive"],
 };
 
 export const CLAIM_STATUSES = ["submitted", "verified", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;

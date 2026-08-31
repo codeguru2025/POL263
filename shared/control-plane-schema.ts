@@ -266,10 +266,51 @@ export const billingPlans = pgTable(
     modules: jsonb("modules").notNull().default([]),
     isActive: boolean("is_active").default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
+    // ── Billing model (0005) ──────────────────────────────────────────────────
+    /** flat | per_policy | revenue_share — how the monthly charge is computed. Existing plans
+     *  are all 'flat' and behave exactly as before (priceMonthlyUsd, unchanged). */
+    billingModel: text("billing_model").default("flat").notNull(),
+    /** per_policy / revenue_share base fee. null → falls back to priceMonthlyUsd. */
+    baseFeeUsd: numeric("base_fee_usd", { precision: 12, scale: 2 }),
+    /** per_policy: policies covered by the base fee before per-policy rates apply. */
+    includedPolicyUnits: integer("included_policy_units").default(1000).notNull(),
+    /** per_policy: { "<policy status>": "<usd per policy per month>" }, e.g.
+     *  { active: "0.10", inactive: "0.05", grace: "0.05", lapsed: "0.05", cancelled: "0.05", archived: "0.01" } */
+    perStatusRates: jsonb("per_status_rates").$type<Record<string, string>>(),
+    /** revenue_share: percent of collected/receipted revenue, e.g. "2.50". */
+    revenueSharePercent: numeric("revenue_share_percent", { precision: 5, scale: 2 }),
+    /** Monthly floor — the tenant pays max(computed amount, this). Basic default $250. */
+    monthlyMinimumUsd: numeric("monthly_minimum_usd", { precision: 12, scale: 2 }).default("250.00").notNull(),
+    /** One-time setup fee invoiced at trial→paid conversion. null → falls back to priceMonthlyUsd. */
+    setupFeeUsd: numeric("setup_fee_usd", { precision: 12, scale: 2 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => [uniqueIndex("billing_plans_key_idx").on(t.key)]
+);
+
+/**
+ * Purchasable feature catalog (0005). Keyed by the same strings as server/module-gate.ts's
+ * ALL_KNOWN_MODULES. Each feature carries a price impact that plan design adds on top of the
+ * plan's base fee / per-policy rate / revenue-share percent, so choosing WhatsApp + SMS +
+ * payments raises what a tenant pays without needing a bespoke plan per combination.
+ * Seeded with every known module at zero delta — the platform owner fills the numbers in.
+ */
+export const billingFeatures = pgTable(
+  "billing_features",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    baseFeeDeltaUsd: numeric("base_fee_delta_usd", { precision: 12, scale: 2 }).default("0").notNull(),
+    perPolicyRateDeltaUsd: numeric("per_policy_rate_delta_usd", { precision: 8, scale: 4 }).default("0").notNull(),
+    revenueSharePercentDelta: numeric("revenue_share_percent_delta", { precision: 5, scale: 2 }).default("0").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("billing_features_key_idx").on(t.key)],
 );
 
 // ─── BILLING: SUBSCRIPTIONS ───────────────────────────────────────────────────
@@ -303,9 +344,27 @@ export const tenantSubscriptions = pgTable(
     currentPeriodEnd: timestamp("current_period_end").notNull(),
     /** null = inherit billingSettings.graceDays (global default) */
     graceDaysOverride: integer("grace_days_override"),
-    /** null = inherit billingSettings.platformFeeRatePercent (global default) */
+    /** revenue_share: percent-of-revenue override for THIS tenant. null = inherit the plan's
+     *  revenueSharePercent, else billingSettings.platformFeeRatePercent, else 2.5%. Also read by
+     *  server/platform-fee.ts's per-receipt accrual. */
     platformFeeRateOverride: numeric("platform_fee_rate_override", { precision: 5, scale: 2 }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+    // ── Per-tenant billing-model overrides (0005) — null = inherit the plan ────
+    /** flat | per_policy | revenue_share — override the plan's model for this tenant. */
+    billingModelOverride: text("billing_model_override"),
+    perStatusRatesOverride: jsonb("per_status_rates_override").$type<Record<string, string>>(),
+    includedPolicyUnitsOverride: integer("included_policy_units_override"),
+    monthlyMinimumOverrideUsd: numeric("monthly_minimum_override_usd", { precision: 12, scale: 2 }),
+    baseFeeOverrideUsd: numeric("base_fee_override_usd", { precision: 12, scale: 2 }),
+    /** revenue_share: max unpaid platform fees before this tenant is dunned/blocked (credit limit).
+     *  null = inherit billingSettings.defaultOutstandingFeeCapUsd (may also be null = no cap). */
+    outstandingFeeCapUsd: numeric("outstanding_fee_cap_usd", { precision: 12, scale: 2 }),
+    setupFeeOverrideUsd: numeric("setup_fee_override_usd", { precision: 12, scale: 2 }),
+    /** not_applicable | pending | invoiced | paid | waived */
+    setupFeeStatus: text("setup_fee_status").default("not_applicable").notNull(),
+    /** per_policy / revenue_share: start of the counting window for the next invoice
+     *  (advanced to the invoice's periodEnd each time one is generated). */
+    lastSettlementAt: timestamp("last_settlement_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -326,19 +385,24 @@ export const tenantInvoices = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    subscriptionId: uuid("subscription_id")
-      .notNull()
-      .references(() => tenantSubscriptions.id),
-    /** Price snapshot at issue time — later plan-price edits never change an issued invoice */
-    planId: uuid("plan_id")
-      .notNull()
-      .references(() => billingPlans.id),
+    /** null for non-subscription invoices (e.g. kind='setup') */
+    subscriptionId: uuid("subscription_id").references(() => tenantSubscriptions.id),
+    /** Price snapshot at issue time — later plan-price edits never change an issued invoice.
+     *  null for non-subscription invoices. */
+    planId: uuid("plan_id").references(() => billingPlans.id),
+    /** subscription | setup | per_policy | revenue_share | adjustment (0005). Existing rows are
+     *  all 'subscription' (the flat-plan renewal invoice). */
+    kind: text("kind").default("subscription").notNull(),
     amount: numeric("amount").notNull(),
     currency: text("currency").default("USD").notNull(),
+    /** Human-readable breakdown for the PDF, e.g.
+     *  [{label:"412 active policies × $0.10", amount:"41.20"}] or per-currency revenue-share lines. */
+    lineItems: jsonb("line_items").$type<Array<{ label: string; amount: string; currency?: string }>>(),
     /** open | paid | void */
     status: text("status").default("open").notNull(),
-    periodStart: timestamp("period_start").notNull(),
-    periodEnd: timestamp("period_end").notNull(),
+    /** null for non-period invoices (kind='setup'). */
+    periodStart: timestamp("period_start"),
+    periodEnd: timestamp("period_end"),
     dueDate: timestamp("due_date").notNull(),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     paidAt: timestamp("paid_at"),
@@ -427,6 +491,13 @@ export const billingSettings = pgTable("billing_settings", {
   moduleEnforcementEnabled: boolean("module_enforcement_enabled").default(false).notNull(),
   /** Default platform revenue-share rate applied to cleared receipts, e.g. "2.50" = 2.5%. Per-tenant override: tenantSubscriptions.platformFeeRateOverride */
   platformFeeRatePercent: numeric("platform_fee_rate_percent", { precision: 5, scale: 2 }).default("2.50").notNull(),
+  // ── Billing-model global defaults (0005) ──────────────────────────────────
+  /** Monthly floor for per_policy / revenue_share tenants when a plan/subscription doesn't set its own. */
+  defaultMonthlyMinimumUsd: numeric("default_monthly_minimum_usd", { precision: 12, scale: 2 }).default("250.00").notNull(),
+  /** Global credit limit for revenue_share unpaid fees. null = no cap unless a tenant sets its own. */
+  defaultOutstandingFeeCapUsd: numeric("default_outstanding_fee_cap_usd", { precision: 12, scale: 2 }),
+  /** Days a suspended tenant can still VIEW its data before permanent deletion (Phase 6). */
+  deletionGraceDays: integer("deletion_grace_days").default(30).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -603,6 +674,7 @@ export type TenantEmailDomain = typeof tenantEmailDomains.$inferSelect;
 export type TenantBranding = typeof tenantBranding.$inferSelect;
 export type BackupSyncRun = typeof backupSyncRuns.$inferSelect;
 export type BillingPlan = typeof billingPlans.$inferSelect;
+export type BillingFeature = typeof billingFeatures.$inferSelect;
 export type TenantSubscription = typeof tenantSubscriptions.$inferSelect;
 export type TenantInvoice = typeof tenantInvoices.$inferSelect;
 export type BillingSettings = typeof billingSettings.$inferSelect;

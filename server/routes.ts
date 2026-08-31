@@ -4374,6 +4374,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await txDb.insert(policyStatusHistory).values({
         policyId: policy.id, fromStatus: policy.status, toStatus, reason, changedBy: effectiveUserId,
       });
+      // Cancelling a policy auto-archives it in the same transaction so it stops attracting the
+      // full per-policy platform fee. It can still be revived later (archived → active).
+      if (toStatus === "cancelled") {
+        const [archivedRow] = await txDb.update(policies).set({ status: "archived" })
+          .where(and(eq(policies.id, policy.id), eq(policies.organizationId, user.organizationId)))
+          .returning();
+        await txDb.insert(policyStatusHistory).values({
+          policyId: policy.id, fromStatus: "cancelled", toStatus: "archived", changedBy: effectiveUserId,
+          reason: "Auto-archived on cancellation",
+        });
+        return archivedRow;
+      }
       return row;
     });
 

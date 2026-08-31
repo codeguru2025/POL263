@@ -1,8 +1,10 @@
 export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
-  inactive: ["cancelled"],
+  inactive: ["cancelled", "archived"],
   active: ["grace", "cancelled"],
   grace: ["lapsed"],
-  lapsed: ["cancelled"],
+  lapsed: ["cancelled", "archived"],
+  cancelled: ["active"],
+  archived: ["active"],
 };
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -11,4 +13,5 @@ export const STATUS_LABELS: Record<string, string> = {
   grace: "Grace",
   lapsed: "Lapsed",
   cancelled: "Cancelled",
+  archived: "Archived",
 };

@@ -121,6 +121,12 @@ export async function applyTenantInvoicePayment(
       if (!invoice) return { ok: false as const, error: "Invoice not found" };
       if (invoice.status === "paid") return { ok: true as const, alreadyPaid: true };
 
+      // Non-subscription invoices (kind='setup' etc, added in 0005) have no subscription/plan to
+      // extend — that path is handled elsewhere. Every existing invoice is kind='subscription'.
+      if (!invoice.subscriptionId || !invoice.planId) {
+        return { ok: false as const, error: "Invoice is not linked to a subscription" };
+      }
+
       // Locked too, not just the invoice row — otherwise two different open invoices for the
       // same subscription paid concurrently would both read the same stale currentPeriodEnd
       // and the second UPDATE would silently overwrite the first's period extension.
