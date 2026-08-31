@@ -9,7 +9,7 @@
  * (getPaynowConfig()), never a tenant's own integration (getOrgPaynowConfig) —
  * tenant billing money flows tenant -> platform, the reverse of premium payments.
  */
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 import { cpDb } from "./control-plane-db";
 import {
@@ -37,7 +37,7 @@ import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache, getTenantModuleSet } from "./module-gate";
 import { structuredLog } from "./logger";
-import { sendRestoredEmail } from "./tenant-billing-email";
+import { sendRestoredEmail, sendInvoiceReminderEmail } from "./tenant-billing-email";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
@@ -64,6 +64,12 @@ export async function getBillingSettings() {
 export { getEffectiveGraceDays, addBillingCycle } from "./tenant-billing-math";
 
 // ─── INVOICE GENERATION ─────────────────────────────────────────────────────────
+
+/** 2-dp money string from any numeric-ish input. */
+function money(v: unknown): string {
+  const n = parseFloat(String(v ?? "0"));
+  return (Math.round((Number.isFinite(n) ? n : 0) * 100 + Number.EPSILON) / 100).toFixed(2);
+}
 
 function generateMerchantReference(orgId: string): string {
   const now = new Date();
@@ -211,8 +217,29 @@ export async function applyTenantInvoicePayment(
       if (!invoice) return { ok: false as const, error: "Invoice not found" };
       if (invoice.status === "paid") return { ok: true as const, alreadyPaid: true };
 
-      // Non-subscription invoices (kind='setup' etc, added in 0005) have no subscription/plan to
-      // extend — that path is handled elsewhere. Every existing invoice is kind='subscription'.
+      const now = new Date();
+
+      // Setup-fee invoice (0005): a one-time onboarding charge — mark it paid and flip the
+      // subscription's setup-fee status, but DON'T touch the billing period or reactivate the
+      // tenant (a suspended tenant paying their setup fee stays suspended until the renewal too).
+      if (invoice.kind === "setup") {
+        await tx.update(tenantInvoices).set({
+          status: "paid", paidAt: now,
+          markedPaidBy: opts.source === "manual" ? (opts.actorId ?? null) : null,
+          notes: opts.note ?? invoice.notes, updatedAt: now,
+        }).where(eq(tenantInvoices.id, invoiceId));
+        if (invoice.subscriptionId) {
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "paid", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, invoice.subscriptionId));
+        }
+        await tx.insert(tenantBillingEvents).values({
+          tenantId: invoice.tenantId, invoiceId: invoice.id, type: "setup_fee_paid",
+          detail: { source: opts.source, amount: invoice.amount },
+        });
+        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", setupOnly: true };
+      }
+
       if (!invoice.subscriptionId || !invoice.planId) {
         return { ok: false as const, error: "Invoice is not linked to a subscription" };
       }
@@ -225,7 +252,6 @@ export async function applyTenantInvoicePayment(
       const [plan] = await tx.select().from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1);
       if (!plan) return { ok: false as const, error: "Plan not found" };
 
-      const now = new Date();
       const intervalMonths = effectiveBillingIntervalMonths(subscription.billingCycle, plan.billingIntervalMonths);
       const { periodStart: cycleStart, periodEnd: cycleEnd } = computeNextPeriod(now, subscription.currentPeriodEnd, intervalMonths);
 
@@ -258,11 +284,45 @@ export async function applyTenantInvoicePayment(
         detail: { source: opts.source, actorId: opts.actorId ?? null, newPeriodEnd: cycleEnd },
       });
 
+      // First time this subscription becomes active (trial → paid, or a late first payment) and a
+      // setup fee is still owed → raise the one-time setup invoice now. Not retroactive: only
+      // subscriptions provisioned with setupFeeStatus='pending' ever reach here.
+      let setupInvoiceRaised = false;
+      if (subscription.status !== "active" && subscription.setupFeeStatus === "pending") {
+        const setupFeeUsd = money(
+          subscription.setupFeeOverrideUsd ?? plan.setupFeeUsd ?? plan.priceMonthlyUsd,
+        );
+        if (parseFloat(setupFeeUsd) > 0) {
+          await tx.insert(tenantInvoices).values({
+            tenantId: subscription.tenantId,
+            subscriptionId: subscription.id,
+            planId: plan.id,
+            kind: "setup",
+            amount: setupFeeUsd,
+            currency: "USD",
+            status: "open",
+            lineItems: [{ label: "One-time account setup fee", amount: setupFeeUsd }],
+            dueDate: new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000),
+            paymentToken: crypto.randomBytes(24).toString("hex"),
+            merchantReference: generateMerchantReference(subscription.tenantId),
+          });
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "invoiced", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, subscription.id));
+          setupInvoiceRaised = true;
+        } else {
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "waived", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, subscription.id));
+        }
+      }
+
       return {
         ok: true as const,
         tenantId: subscription.tenantId,
         wasSuspended: subscription.status === "suspended",
         priorStatus: subscription.status,
+        setupInvoiceRaised,
       };
     });
 
@@ -273,7 +333,18 @@ export async function applyTenantInvoicePayment(
     invalidateTenantActiveCache(tenantId);
     invalidateTenantModuleCache(tenantId);
 
-    sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
+    if (!(result as any).setupOnly) {
+      sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
+    }
+
+    // A setup-fee invoice was just raised — email it to the tenant admins.
+    if ((result as any).setupInvoiceRaised) {
+      cpDb.select().from(tenantInvoices)
+        .where(and(eq(tenantInvoices.tenantId, tenantId), eq(tenantInvoices.kind, "setup"), eq(tenantInvoices.status, "open")))
+        .orderBy(desc(tenantInvoices.issuedAt)).limit(1)
+        .then(([setupInv]) => setupInv && sendInvoiceReminderEmail(setupInv))
+        .catch((err) => structuredLog("error", "setup-fee invoice email failed", { tenantId, error: (err as Error).message }));
+    }
 
     // First-ever conversion to a paid, working subscription — commission dedicated
     // infrastructure. NOT gated on priorStatus === "trialing" alone: the billing sweep moves a

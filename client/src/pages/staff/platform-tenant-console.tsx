@@ -979,12 +979,25 @@ interface BillingSubscriptionRow {
   trialEndsAt: string | null; currentPeriodStart: string; currentPeriodEnd: string;
   graceDaysOverride: number | null;
   platformFeeRateOverride: string | null;
+  setupFeeStatus: "not_applicable" | "pending" | "invoiced" | "paid" | "waived";
+  outstandingFeeCapUsd: string | null;
+  billingModelOverride: "flat" | "per_policy" | "revenue_share" | null;
+  monthlyMinimumOverrideUsd: string | null;
+}
+interface EffectivePricing {
+  billingModel: "flat" | "per_policy" | "revenue_share";
+  baseFeeUsd: string; revenueSharePercent: string; monthlyMinimumUsd: string;
+  setupFeeUsd: string; outstandingFeeCapUsd: string | null;
 }
 interface BillingPlanRow { id: string; key: string; name: string; priceMonthlyUsd: string; modules: string[]; isActive: boolean }
 interface BillingInvoiceRow {
-  id: string; amount: string; currency: string; status: string;
-  periodStart: string; periodEnd: string; dueDate: string; issuedAt: string; paidAt: string | null; markedPaidBy: string | null;
+  id: string; amount: string; currency: string; status: string; kind?: string;
+  lineItems?: Array<{ label: string; amount: string; currency?: string }> | null;
+  periodStart: string | null; periodEnd: string | null; dueDate: string; issuedAt: string; paidAt: string | null; markedPaidBy: string | null;
 }
+const INVOICE_KIND_LABELS: Record<string, string> = {
+  subscription: "Subscription", setup: "Setup fee", per_policy: "Per policy", revenue_share: "Revenue share", adjustment: "Adjustment",
+};
 
 const SUBSCRIPTION_STATUS_VARIANT: Record<string, "default" | "outline" | "destructive" | "secondary"> = {
   trialing: "outline", active: "default", past_due: "secondary", suspended: "destructive", cancelled: "secondary",
@@ -995,13 +1008,14 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const queryClient = useQueryClient();
   const [graceDaysOverride, setGraceDaysOverride] = useState("");
   const [platformFeeRateOverride, setPlatformFeeRateOverride] = useState("");
+  const [outstandingFeeCapUsd, setOutstandingFeeCapUsd] = useState("");
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [startPlanId, setStartPlanId] = useState("");
   const [markPaidInvoice, setMarkPaidInvoice] = useState<BillingInvoiceRow | null>(null);
   const [markPaidReason, setMarkPaidReason] = useState("");
 
   const subKey = ["/api/platform/tenants", tenantId, "subscription"];
-  const { data: subData, isLoading: subLoading } = useQuery<{ subscription: BillingSubscriptionRow | null; plan: BillingPlanRow | null }>({ queryKey: subKey });
+  const { data: subData, isLoading: subLoading } = useQuery<{ subscription: BillingSubscriptionRow | null; plan: BillingPlanRow | null; effectivePricing: EffectivePricing | null }>({ queryKey: subKey });
   const { data: invoices = [] } = useQuery<BillingInvoiceRow[]>({ queryKey: ["/api/platform/tenants", tenantId, "invoices"] });
   const { data: plansData } = useQuery<{ knownModules: string[]; plans: BillingPlanRow[] }>({ queryKey: ["/api/platform/billing/plans"] });
 
@@ -1009,6 +1023,7 @@ function BillingTab({ tenantId }: { tenantId: string }) {
     if (subData?.subscription) {
       setGraceDaysOverride(subData.subscription.graceDaysOverride == null ? "" : String(subData.subscription.graceDaysOverride));
       setPlatformFeeRateOverride(subData.subscription.platformFeeRateOverride == null ? "" : String(subData.subscription.platformFeeRateOverride));
+      setOutstandingFeeCapUsd(subData.subscription.outstandingFeeCapUsd == null ? "" : String(subData.subscription.outstandingFeeCapUsd));
       setSelectedPlanId(subData.subscription.planId);
     }
   }, [subData]);
@@ -1027,6 +1042,12 @@ function BillingTab({ tenantId }: { tenantId: string }) {
   const createSubMutation = useMutation({
     mutationFn: async () => { await apiRequest("POST", `/api/platform/tenants/${tenantId}/subscription`, { planId: startPlanId, status: "active" }); },
     onSuccess: () => { invalidate(); toast({ title: "Subscription started" }); },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const waiveSetupMutation = useMutation({
+    mutationFn: async () => { await apiRequest("POST", `/api/platform/tenants/${tenantId}/setup-fee/waive`, {}); },
+    onSuccess: () => { invalidate(); toast({ title: "Setup fee waived" }); },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
@@ -1124,16 +1145,51 @@ function BillingTab({ tenantId }: { tenantId: string }) {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="pt-billing-fee-rate">Platform fee rate override (%)</Label>
+                  <Label htmlFor="pt-billing-fee-rate">Revenue-share rate override (%)</Label>
                   <div className="flex items-center gap-2">
                     <Input id="pt-billing-fee-rate" type="number" min={0} max={100} step="0.01" value={platformFeeRateOverride}
-                      onChange={(e) => setPlatformFeeRateOverride(e.target.value)} placeholder="Inherit global default" />
+                      onChange={(e) => setPlatformFeeRateOverride(e.target.value)} placeholder="Inherit plan / global" />
                     <Button variant="outline" disabled={updateSubMutation.isPending}
                       onClick={() => updateSubMutation.mutate({ platformFeeRateOverride: platformFeeRateOverride === "" ? null : parseFloat(platformFeeRateOverride) })}>
                       Save
                     </Button>
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pt-billing-cap">Unpaid-fee limit override (USD)</Label>
+                  <div className="flex items-center gap-2">
+                    <Input id="pt-billing-cap" type="number" min={0} step="0.01" value={outstandingFeeCapUsd}
+                      onChange={(e) => setOutstandingFeeCapUsd(e.target.value)} placeholder="Inherit global / no limit" />
+                    <Button variant="outline" disabled={updateSubMutation.isPending}
+                      onClick={() => updateSubMutation.mutate({ outstandingFeeCapUsd: outstandingFeeCapUsd === "" ? null : parseFloat(outstandingFeeCapUsd) })}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-md border p-3 text-sm space-y-1">
+                  <p className="text-muted-foreground text-xs uppercase tracking-wide">Setup fee</p>
+                  <p className="capitalize">{subscription.setupFeeStatus.replace(/_/g, " ")}</p>
+                  {(subscription.setupFeeStatus === "pending" || subscription.setupFeeStatus === "invoiced") && (
+                    <Button size="sm" variant="outline" className="mt-1" disabled={waiveSetupMutation.isPending}
+                      onClick={() => waiveSetupMutation.mutate()}>
+                      {waiveSetupMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                      Waive setup fee
+                    </Button>
+                  )}
+                </div>
+                {subData?.effectivePricing && (
+                  <div className="rounded-md border p-3 text-sm space-y-0.5">
+                    <p className="text-muted-foreground text-xs uppercase tracking-wide">What this tenant pays</p>
+                    {subData.effectivePricing.billingModel === "flat" && <p>Flat ${subData.effectivePricing.baseFeeUsd}/mo</p>}
+                    {subData.effectivePricing.billingModel === "per_policy" && <p>${subData.effectivePricing.baseFeeUsd}/mo base + per-policy rates</p>}
+                    {subData.effectivePricing.billingModel === "revenue_share" && <p>{subData.effectivePricing.revenueSharePercent}% of revenue</p>}
+                    <p className="text-muted-foreground">Min ${subData.effectivePricing.monthlyMinimumUsd}/mo · setup ${subData.effectivePricing.setupFeeUsd}
+                      {subData.effectivePricing.outstandingFeeCapUsd ? ` · unpaid limit $${subData.effectivePricing.outstandingFeeCapUsd}` : ""}</p>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1147,12 +1203,13 @@ function BillingTab({ tenantId }: { tenantId: string }) {
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow><TableHead>Period</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Due</TableHead><TableHead>Paid</TableHead><TableHead /></TableRow>
+                <TableRow><TableHead>Type</TableHead><TableHead>Period</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Due</TableHead><TableHead>Paid</TableHead><TableHead /></TableRow>
               </TableHeader>
               <TableBody>
                 {invoices.map((inv) => (
                   <TableRow key={inv.id}>
-                    <TableCell className="text-sm">{new Date(inv.periodStart).toLocaleDateString()} – {new Date(inv.periodEnd).toLocaleDateString()}</TableCell>
+                    <TableCell className="text-sm">{INVOICE_KIND_LABELS[inv.kind ?? "subscription"] ?? inv.kind}</TableCell>
+                    <TableCell className="text-sm">{inv.periodStart && inv.periodEnd ? `${new Date(inv.periodStart).toLocaleDateString()} – ${new Date(inv.periodEnd).toLocaleDateString()}` : "—"}</TableCell>
                     <TableCell className="font-mono text-sm">{inv.currency} {inv.amount}</TableCell>
                     <TableCell>
                       <Badge variant={inv.status === "paid" ? "default" : inv.status === "void" ? "secondary" : "outline"} className="capitalize">{inv.status}</Badge>

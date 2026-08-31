@@ -435,6 +435,24 @@ export function registerPlatformBillingRoutes(app: Express): void {
     return res.json(after);
   });
 
+  // ── Setup fee ────────────────────────────────────────────────────
+  app.post("/api/platform/tenants/:id/setup-fee/waive", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    const [sub] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, id)).limit(1);
+    if (!sub) return res.status(404).json({ message: "No subscription exists for this tenant" });
+    if (sub.setupFeeStatus === "paid") return res.status(409).json({ message: "Setup fee has already been paid" });
+
+    // Void any open setup invoice, then mark waived.
+    await cpDb.update(tenantInvoices)
+      .set({ status: "void", updatedAt: new Date() })
+      .where(and(eq(tenantInvoices.tenantId, id), eq(tenantInvoices.kind, "setup"), eq(tenantInvoices.status, "open")));
+    await cpDb.update(tenantSubscriptions)
+      .set({ setupFeeStatus: "waived", updatedAt: new Date() })
+      .where(eq(tenantSubscriptions.tenantId, id));
+    await auditLog(req, "WAIVE_SETUP_FEE", "TenantSubscription", id, { setupFeeStatus: sub.setupFeeStatus }, { setupFeeStatus: "waived" }, id);
+    return res.json({ ok: true, setupFeeStatus: "waived" });
+  });
+
   // ── Invoices ─────────────────────────────────────────────────────
   app.get("/api/platform/tenants/:id/invoices", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
