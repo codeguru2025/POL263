@@ -13,4 +13,4 @@ uploads
 testsprite_tests/tmp/
 .design-sync/
 .ds-sync/
-ds-bundle/
+ds-bundle/script/_tmp_*
