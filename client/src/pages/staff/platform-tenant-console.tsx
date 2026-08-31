@@ -153,7 +153,7 @@ export default function PlatformTenantConsole() {
               <StorageTab tenantId={id} storage={config.storage} onSaved={invalidate} />
             </TabsContent>
             <TabsContent value="lifecycle" className="mt-6">
-              <LifecycleTab tenantId={id} lifecycle={config.lifecycle} onSaved={invalidate} />
+              <LifecycleTab tenantId={id} tenantName={config.name} lifecycle={config.lifecycle} onSaved={invalidate} />
             </TabsContent>
             <TabsContent value="billing" className="mt-6">
               <BillingTab tenantId={id} />
@@ -853,11 +853,22 @@ function StorageTab({ tenantId, storage, onSaved }: { tenantId: string; storage:
 // ── Lifecycle ──────────────────────────────────────────────────────
 const LICENSE_STATUSES = ["trial", "active", "suspended", "expired"] as const;
 
-function LifecycleTab({ tenantId, lifecycle, onSaved }: { tenantId: string; lifecycle: TenantConfig["lifecycle"]; onSaved: () => void }) {
+function LifecycleTab({ tenantId, tenantName, lifecycle, onSaved }: { tenantId: string; tenantName: string; lifecycle: TenantConfig["lifecycle"]; onSaved: () => void }) {
   const { toast } = useToast();
   const [suspendReason, setSuspendReason] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [licenseStatus, setLicenseStatus] = useState(lifecycle.licenseStatus);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeConfirmName, setPurgeConfirmName] = useState("");
+
+  const purgeMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/platform/tenants/${tenantId}/purge`, { confirmName: purgeConfirmName })).json(),
+    onSuccess: (r: any) => {
+      onSaved(); setPurgeOpen(false); setPurgeConfirmName("");
+      toast({ title: "Tenant permanently deleted", description: `${r.storageObjectsDeleted} file(s) removed · database: ${r.databaseMode}${r.notes?.length ? ` · ${r.notes.length} note(s)` : ""}` });
+    },
+    onError: (e: any) => toast({ title: "Purge failed", description: e.message, variant: "destructive" }),
+  });
 
   useEffect(() => { setLicenseStatus(lifecycle.licenseStatus); }, [lifecycle.licenseStatus]);
 
@@ -944,7 +955,46 @@ function LifecycleTab({ tenantId, lifecycle, onSaved }: { tenantId: string; life
             </Button>
           </div>
         )}
+
+        {!lifecycle.isActive && lifecycle.licenseStatus !== "purged" && (
+          <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 space-y-3">
+            <div>
+              <p className="font-medium text-destructive">Delete permanently</p>
+              <p className="text-xs text-muted-foreground">
+                Irreversibly deletes this tenant's database, uploaded files, and DigitalOcean resources.
+                Only available while suspended. The tenant record is kept as a tombstone for audit history.
+              </p>
+            </div>
+            <Button variant="destructive" onClick={() => { setPurgeConfirmName(""); setPurgeOpen(true); }}>
+              <Trash2 className="h-4 w-4 mr-2" /> Delete permanently
+            </Button>
+          </div>
+        )}
       </div>
+
+      <AlertDialog open={purgeOpen} onOpenChange={setPurgeOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently delete "{tenantName}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone. All of this tenant's data, files, and DigitalOcean database
+              resources will be destroyed. Type the tenant's exact name to confirm.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input value={purgeConfirmName} onChange={(e) => setPurgeConfirmName(e.target.value)} placeholder={tenantName} />
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={purgeConfirmName.trim() !== tenantName.trim() || purgeMutation.isPending}
+              onClick={(e) => { e.preventDefault(); purgeMutation.mutate(); }}
+            >
+              {purgeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Delete permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

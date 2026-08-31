@@ -166,3 +166,31 @@ export async function provisionLogicalTenantDatabase(tenantId: string): Promise<
     return null;
   }
 }
+
+/**
+ * Phase 6: permanently drop a tenant's logical database + its least-privilege role from the shared
+ * DO cluster. Irreversible. Returns { ok } — false (with a logged reason) on any failure so the
+ * caller can decide whether to still tear down the rest. A missing DB/role is treated as success.
+ */
+export async function decommissionLogicalTenantDatabase(tenantId: string): Promise<{ ok: boolean; reason?: string }> {
+  const clusterId = process.env.DIGITALOCEAN_TENANT_DB_CLUSTER_ID;
+  if (!clusterId || !getToken()) return { ok: false, reason: "DO not configured" };
+
+  const logicalDbName = `tenant_${tenantId.replace(/-/g, "")}`;
+  const roleName = `pol263_tenant_${tenantId.replace(/-/g, "").slice(0, 12)}`;
+
+  try {
+    for (const [kind, name] of [["dbs", logicalDbName], ["users", roleName]] as const) {
+      try {
+        await doApiRequest(`/databases/${clusterId}/${kind}/${encodeURIComponent(name)}`, { method: "DELETE" });
+      } catch (err: any) {
+        if (err?.status !== 404) throw err; // already gone — fine
+      }
+    }
+    structuredLog("warn", "DO logical tenant database decommissioned", { tenantId, logicalDbName, roleName });
+    return { ok: true };
+  } catch (err) {
+    structuredLog("error", "decommissionLogicalTenantDatabase failed", { tenantId, error: (err as Error).message });
+    return { ok: false, reason: (err as Error).message };
+  }
+}

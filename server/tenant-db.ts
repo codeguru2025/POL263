@@ -400,6 +400,18 @@ export function getTenantPoolStats(): { activePools: number; maxPools: number; t
   return { activePools: tenantIds.length, maxPools: MAX_TENANT_POOLS, tenantIds };
 }
 
+/** Close and forget a tenant's dedicated pool (no-op for shared-DB tenants). Used by the Phase-6
+ *  purge so DO can drop the logical database without active connections blocking it. */
+export async function closeOrgPool(orgId: string): Promise<void> {
+  const pool = poolCache.get(orgId);
+  poolCache.delete(orgId);
+  dbCache.delete(orgId);
+  poolLastAccess.delete(orgId);
+  if (pool && pool !== defaultPool) {
+    try { await pool.end(); } catch { /* already closed */ }
+  }
+}
+
 /**
  * Execute a callback inside a database transaction for the given tenant.
  * Rolls back on error; commits on success.

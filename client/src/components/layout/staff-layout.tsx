@@ -886,6 +886,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
       </nav>
 
       <main id="main-content" tabIndex={-1} className={cn("flex-1 min-h-0 overflow-x-hidden overflow-y-auto", showAgentBottomNav && "pb-16")}>
+        {(user as any)?.tenantViewOnly && (
+          <div className="bg-destructive text-destructive-foreground text-sm px-4 py-2.5 text-center">
+            Your account is suspended and in <strong>read-only mode</strong>. Settle the outstanding balance to restore full access — your data will be permanently deleted if it stays unpaid.
+          </div>
+        )}
         <div className={cn(APP_SHELL_MAX, "px-3 py-4 sm:px-6 sm:py-8 min-h-0")}>{children}</div>
       </main>
 

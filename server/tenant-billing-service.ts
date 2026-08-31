@@ -58,7 +58,11 @@ export async function getBillingSettings() {
   const [row] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
   if (row) return row;
   // Singleton not yet seeded — return schema defaults without writing (Phase 7 UI seeds it on first save).
-  return { id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false, updatedAt: new Date() };
+  return {
+    id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false,
+    platformFeeRatePercent: "2.50", defaultMonthlyMinimumUsd: "250.00", defaultOutstandingFeeCapUsd: null,
+    deletionGraceDays: 30, hardDeleteEnabled: false, updatedAt: new Date(),
+  };
 }
 
 export { getEffectiveGraceDays, addBillingCycle } from "./tenant-billing-math";
@@ -275,6 +279,7 @@ export async function applyTenantInvoicePayment(
         licenseStatus: "active",
         suspendedAt: null,
         suspendReason: null,
+        viewOnlyGraceUntil: null,
       }).where(eq(cpTenants.id, subscription.tenantId));
 
       await tx.insert(tenantBillingEvents).values({

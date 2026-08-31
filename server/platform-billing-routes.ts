@@ -105,6 +105,10 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (deletionGraceDays !== undefined && (!Number.isInteger(deletionGraceDays) || deletionGraceDays < 1)) {
       return res.status(400).json({ message: "deletionGraceDays must be a positive integer" });
     }
+    const { hardDeleteEnabled } = req.body;
+    if (hardDeleteEnabled !== undefined && typeof hardDeleteEnabled !== "boolean") {
+      return res.status(400).json({ message: "hardDeleteEnabled must be a boolean" });
+    }
     if (trialDays !== undefined && (!Number.isInteger(trialDays) || trialDays < 0)) {
       return res.status(400).json({ message: "trialDays must be a non-negative integer" });
     }
@@ -135,6 +139,7 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (defaultMonthlyMinimumUsd !== undefined) patch.defaultMonthlyMinimumUsd = defaultMonthlyMinimumUsd;
     if (defaultOutstandingFeeCapUsd !== undefined) patch.defaultOutstandingFeeCapUsd = defaultOutstandingFeeCapUsd;
     if (deletionGraceDays !== undefined) patch.deletionGraceDays = deletionGraceDays;
+    if (hardDeleteEnabled !== undefined) patch.hardDeleteEnabled = hardDeleteEnabled;
 
     if (existing) {
       await cpDb.update(billingSettings).set(patch).where(eq(billingSettings.id, "global"));
@@ -433,6 +438,28 @@ export function registerPlatformBillingRoutes(app: Express): void {
     invalidateTenantModuleCache(id);
     await auditLog(req, "UPDATE_TENANT_SUBSCRIPTION", "TenantSubscription", id, existing, after, id);
     return res.json(after);
+  });
+
+  // ── Permanent deletion (Phase 6) ────────────────────────────────
+  app.post("/api/platform/tenants/:id/purge", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    const [tenant] = await cpDb.select().from(cpTenants).where(eq(cpTenants.id, id)).limit(1);
+    if (!tenant) return res.status(404).json({ message: "Tenant not found" });
+    if (tenant.licenseStatus === "purged") return res.status(409).json({ message: "This tenant has already been purged" });
+
+    // Typed-confirmation guard — the request body must echo the tenant's exact name.
+    if (String(req.body?.confirmName || "").trim() !== tenant.name.trim()) {
+      return res.status(400).json({ message: `Type the tenant's exact name ("${tenant.name}") to confirm permanent deletion` });
+    }
+    if (tenant.isActive) {
+      return res.status(400).json({ message: "Suspend the tenant first — only suspended tenants can be purged" });
+    }
+
+    const { purgeTenant } = await import("./tenant-purge");
+    const result = await purgeTenant(id, { actorEmail: (req.user as any)?.email });
+    await auditLog(req, "PURGE_TENANT", "Tenant", id, { name: tenant.name }, result as any, id);
+    structuredLog("warn", "Tenant purged by platform owner", { tenantId: id, actor: (req.user as any)?.email, result });
+    return res.json(result);
   });
 
   // ── Setup fee ────────────────────────────────────────────────────

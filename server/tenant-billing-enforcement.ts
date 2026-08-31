@@ -118,11 +118,13 @@ export async function enforceOutstandingFeeCap(
       await tx.update(tenantSubscriptions).set({ lastSettlementAt: now, updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
     }
     await tx.update(tenantSubscriptions).set({ status: "suspended", updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
+    const graceDays = Number((settingsInput.deletionGraceDays as number | undefined) ?? 30) || 30;
     await tx.update(cpTenants).set({
       isActive: false,
       licenseStatus: "suspended",
       suspendedAt: now,
       suspendReason: `Unpaid platform fees exceeded the $${money(cap)} limit`,
+      viewOnlyGraceUntil: new Date(now.getTime() + graceDays * 24 * 60 * 60 * 1000),
     }).where(eq(cpTenants.id, sub.tenantId));
     await tx.insert(tenantBillingEvents).values({
       tenantId: sub.tenantId,

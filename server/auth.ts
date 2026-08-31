@@ -116,27 +116,39 @@ export function applyPlatformOwnerTenantOverride(req: Request): void {
 // doesn't add a control-plane round trip to every request platform-wide; invalidateTenantActiveCache()
 // clears a specific tenant's entry immediately after a lifecycle change so enforcement is near-instant
 // rather than waiting out the TTL.
-const tenantActiveCache = new Map<string, { isActive: boolean; cachedAt: number }>();
+type TenantAccess = "active" | "view_only" | "denied";
+const tenantActiveCache = new Map<string, { access: TenantAccess; cachedAt: number }>();
 const TENANT_ACTIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export function invalidateTenantActiveCache(orgId: string) {
   tenantActiveCache.delete(orgId);
 }
 
-async function isTenantAccessAllowed(orgId: string): Promise<boolean> {
+/**
+ * "active"    — normal access.
+ * "view_only" — tenant is suspended but still inside its deletion-grace window: staff may log in
+ *               and READ, but every mutation is blocked (enforceTenantViewOnly middleware).
+ * "denied"    — suspended with no view-only window (legacy suspension), or window elapsed.
+ */
+async function resolveTenantAccess(orgId: string): Promise<TenantAccess> {
   const cached = tenantActiveCache.get(orgId);
-  if (cached && Date.now() - cached.cachedAt < TENANT_ACTIVE_CACHE_TTL_MS) return cached.isActive;
+  if (cached && Date.now() - cached.cachedAt < TENANT_ACTIVE_CACHE_TTL_MS) return cached.access;
   try {
-    const [row] = await cpDb.select({ isActive: cpTenants.isActive }).from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
+    const [row] = await cpDb
+      .select({ isActive: cpTenants.isActive, viewOnlyGraceUntil: cpTenants.viewOnlyGraceUntil })
+      .from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
     // No control-plane row for this org (not yet registered, or legacy) — don't block.
-    const isActive = row ? row.isActive : true;
-    tenantActiveCache.set(orgId, { isActive, cachedAt: Date.now() });
-    return isActive;
+    let access: TenantAccess = "active";
+    if (row && !row.isActive) {
+      access = row.viewOnlyGraceUntil && row.viewOnlyGraceUntil.getTime() > Date.now() ? "view_only" : "denied";
+    }
+    tenantActiveCache.set(orgId, { access, cachedAt: Date.now() });
+    return access;
   } catch (err) {
     // Control plane unreachable — fail open. A transient outage there must never lock out the
     // entire platform; getOrganization()/getOrgPaynowConfig() apply the same fail-open resilience.
     structuredLog("error", "Tenant active-status lookup failed, failing open", { orgId, error: (err as Error).message });
-    return true;
+    return "active";
   }
 }
 
@@ -527,9 +539,14 @@ export function setupAuth(app: Express) {
       // platform-owner console). Never applied to the platform owner themselves — they must always
       // be able to log in to reactivate a tenant they suspended.
       if (user && orgId && !isPlatformOwnerEmail(user.email)) {
-        const allowed = await isTenantAccessAllowed(orgId);
-        if (!allowed) {
+        const access = await resolveTenantAccess(orgId);
+        if (access === "denied") {
           return done(null, null);
+        }
+        if (access === "view_only") {
+          // Let them in to read their data during the deletion-grace window; every mutation is
+          // rejected by enforceTenantViewOnly (registered in registerRoutes).
+          user.tenantViewOnly = true;
         }
       }
       done(null, user || null);
@@ -1247,7 +1264,7 @@ export function setupAuth(app: Express) {
       const effectivePermissions = await storage.getUserEffectivePermissions(user.id, effectiveOrganizationId);
 
       return res.json({
-        user: { ...sanitizeUser(user), effectiveOrganizationId },
+        user: { ...sanitizeUser(user), effectiveOrganizationId, tenantViewOnly: !!user.tenantViewOnly },
         roles: userRoles.map((r) => ({ name: r.name, branchId: r.branchId })),
         permissions: effectivePermissions,
       });
@@ -1309,6 +1326,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   session.lastActivityAt = now;
   next();
 }
+
+export { enforceTenantViewOnly } from "./tenant-view-only";
 
 /**
  * Permissions powerful enough (account/org-wide user and settings management) that SOC 2 access-

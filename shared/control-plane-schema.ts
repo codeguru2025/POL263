@@ -54,6 +54,10 @@ export const tenants = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     suspendedAt: timestamp("suspended_at"),
     suspendReason: text("suspend_reason"),
+    /** Phase 6: set when the billing sweep suspends a tenant. Until this time the tenant's staff
+     *  can still log in and READ their data (mutations blocked); after it, the account is eligible
+     *  for permanent deletion. Null = not in the deletion lifecycle (legacy suspension, or active). */
+    viewOnlyGraceUntil: timestamp("view_only_grace_until"),
   },
   (t) => [uniqueIndex("tenants_slug_idx").on(t.slug)]
 );
@@ -498,6 +502,10 @@ export const billingSettings = pgTable("billing_settings", {
   defaultOutstandingFeeCapUsd: numeric("default_outstanding_fee_cap_usd", { precision: 12, scale: 2 }),
   /** Days a suspended tenant can still VIEW its data before permanent deletion (Phase 6). */
   deletionGraceDays: integer("deletion_grace_days").default(30).notNull(),
+  /** Phase 6 opt-in: when true the deletion sweep purges a tenant automatically once its
+   *  view-only window closes. Default false — the sweep parks it at pending_deletion and
+   *  notifies the platform owner to run the (irreversible) purge by hand. */
+  hardDeleteEnabled: boolean("hard_delete_enabled").default(false).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

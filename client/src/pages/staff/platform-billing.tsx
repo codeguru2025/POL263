@@ -22,6 +22,7 @@ interface BillingSettingsData {
   trialDays: number; graceDays: number; reminderLeadDays: number; moduleEnforcementEnabled: boolean;
   platformFeeRatePercent: string;
   defaultMonthlyMinimumUsd: string; defaultOutstandingFeeCapUsd: string | null; deletionGraceDays: number;
+  hardDeleteEnabled: boolean;
 }
 type BillingModel = "flat" | "per_policy" | "revenue_share";
 interface BillingPlanRow {
@@ -70,6 +71,7 @@ function SettingsCard() {
   const [defaultMonthlyMinimumUsd, setDefaultMonthlyMinimumUsd] = useState("250.00");
   const [defaultOutstandingFeeCapUsd, setDefaultOutstandingFeeCapUsd] = useState("");
   const [deletionGraceDays, setDeletionGraceDays] = useState("30");
+  const [hardDeleteEnabled, setHardDeleteEnabled] = useState(false);
 
   useEffect(() => {
     if (data) {
@@ -81,6 +83,7 @@ function SettingsCard() {
       setDefaultMonthlyMinimumUsd(String(data.defaultMonthlyMinimumUsd ?? "250.00"));
       setDefaultOutstandingFeeCapUsd(data.defaultOutstandingFeeCapUsd ?? "");
       setDeletionGraceDays(String(data.deletionGraceDays ?? 30));
+      setHardDeleteEnabled(!!data.hardDeleteEnabled);
     }
   }, [data]);
 
@@ -152,6 +155,17 @@ function SettingsCard() {
           </div>
           <Switch checked={moduleEnforcementEnabled} onCheckedChange={(v) => setModuleEnforcementEnabled(v === true)} />
         </div>
+        <div className="flex items-center justify-between rounded-lg border border-destructive/40 p-4">
+          <div className="space-y-0.5">
+            <Label className="font-medium">Automatic permanent deletion</Label>
+            <p className="text-xs text-muted-foreground">
+              When on, a suspended tenant's data is permanently deleted (database + files + DigitalOcean
+              resources) automatically once its view-only window closes. Off by default — the tenant is
+              instead flagged for a manual, confirmed deletion.
+            </p>
+          </div>
+          <Switch checked={hardDeleteEnabled} onCheckedChange={(v) => setHardDeleteEnabled(v === true)} />
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={() => saveMutation.mutate({
@@ -163,6 +177,7 @@ function SettingsCard() {
               defaultMonthlyMinimumUsd,
               defaultOutstandingFeeCapUsd: defaultOutstandingFeeCapUsd.trim() || null,
               deletionGraceDays: parseInt(deletionGraceDays, 10) || 30,
+              hardDeleteEnabled,
             } as any)}
             disabled={saveMutation.isPending}
           >

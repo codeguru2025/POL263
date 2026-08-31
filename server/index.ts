@@ -362,6 +362,11 @@ if (enableCsrf) {
   setupAuth(app);
   setupClientAuth(app);
 
+  // Phase 6: read-only lock for suspended tenants inside their deletion-grace window. Runs after
+  // passport has populated req.user, before any route handler.
+  const { enforceTenantViewOnly } = await import("./tenant-view-only");
+  app.use("/api", enforceTenantViewOnly);
+
   await registerRoutes(httpServer, app);
 
   if (process.env.NODE_ENV === "production") {

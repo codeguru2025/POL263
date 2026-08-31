@@ -120,11 +120,13 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
         const graceDeadline = new Date(sub.currentPeriodEnd.getTime() + graceDays * 24 * 60 * 60 * 1000);
         if (graceDeadline.getTime() <= now.getTime()) {
           await cpDb.update(tenantSubscriptions).set({ status: "suspended", updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
+          const viewOnlyUntil = new Date(now.getTime() + ((settings as any).deletionGraceDays ?? 30) * 24 * 60 * 60 * 1000);
           await cpDb.update(cpTenants).set({
             isActive: false,
             licenseStatus: "suspended",
             suspendedAt: now,
             suspendReason: "Auto-suspended: payment not received within grace period",
+            viewOnlyGraceUntil: viewOnlyUntil,
           }).where(eq(cpTenants.id, sub.tenantId));
           invalidateTenantActiveCache(sub.tenantId);
           invalidateTenantModuleCache(sub.tenantId);
@@ -140,6 +142,18 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
       result.errors.push(msg);
       structuredLog("error", "Tenant billing sweep: subscription processing failed", { subscriptionId: sub.id, tenantId: sub.tenantId, error: (err as Error).message });
     }
+  }
+
+  // ── Deletion lifecycle: suspended tenants inside/after their view-only window ──
+  try {
+    const { processTenantDeletionLifecycle } = await import("./tenant-deletion-sweep");
+    const del = await processTenantDeletionLifecycle();
+    (result as any).deletionWarningsSent = del.warningsSent;
+    (result as any).tenantsPendingDeletion = del.pendingDeletion;
+    (result as any).tenantsPurged = del.purged;
+  } catch (err) {
+    result.errors.push(`deletion lifecycle: ${(err as Error).message}`);
+    structuredLog("error", "Tenant deletion lifecycle failed", { error: (err as Error).message });
   }
 
   structuredLog("info", "Tenant billing sweep complete", { trigger, durationMs: Date.now() - startedAt.getTime(), ...result });
