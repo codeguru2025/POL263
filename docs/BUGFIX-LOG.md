@@ -10,6 +10,164 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-01 — Full-app audit: 4 parallel domains, 11 fixes (1 critical secret leak, 3 critical billing-correctness bugs, 1 high RBAC bypass, N+1s, a fail-open judgment call)
+
+**Context:** Augustus asked to check the entire app for edge cases, N+1 queries, and vulnerabilities.
+Ran 4 parallel audits (security, N+1/performance, edge cases in the newest billing-model code,
+transaction atomicity) against the current `release/customer-service-api` branch. All findings
+verified against real code before fixing (no fixes taken on an auditor's word alone).
+
+**1. CRITICAL — `GET /api/organizations` and `PATCH /api/organizations/:id` leaked
+`paynowIntegrationKey`, `paynowAuthEmail`, and the tenant's dedicated-DB connection string to any
+authenticated staff user of any role.** `GET /api/organizations/:id` already scrubbed these three
+fields for non-platform-owners, but the list endpoint and the PATCH endpoint's two response
+branches never did. A low-privilege account (even `driver`/`mortuary_attendant`) could read the
+PayNow secret via a plain `GET /api/organizations` — enough to forge a paid PayNow webhook
+callback — and a `manager`/`administrator` got the same leak just by saving any org setting.
+**Fix:** new `sanitizeOrgForClient()` in `server/route-helpers.ts`, applied at all 3 sites in
+`server/routes.ts`.
+
+**2. HIGH — `GET /api/reports/export/:type` collapsed every report type's permission into one
+`read:policy` check.** The route's own `finance`/`payroll`/`commissions`/`platform`/etc. cases
+serve data whose dedicated endpoints require `read:finance`/`read:payroll`/`read:commission`, but
+the export route never checked those. A `staff` or `agent` account (which has `read:policy` but
+none of the others) could export full payroll (names + national IDs + salaries), commissions, or
+platform-finance data through this one route despite every other endpoint correctly blocking it.
+**Fix:** `REPORT_EXPORT_EXTRA_PERMISSION` lookup table in `server/routes.ts`, checked before the
+switch.
+
+**3. LOW — legacy SHA-256 password/security-answer comparison in `client-auth.ts` used `===`
+instead of `crypto.timingSafeEqual`**, unlike every other secret comparison in the codebase.
+Fixed to timing-safe (fixed-length hex digests, safe to compare directly).
+
+**4. CRITICAL — paying an outstanding-fee-cap invoice silently pushed the tenant's real renewal a
+full billing cycle later.** `applyTenantInvoicePayment` (`server/tenant-billing-service.ts`) only
+special-cased `kind: "setup"` invoices; a cap invoice (`kind: "revenue_share"`, raised early by
+`enforceOutstandingFeeCap` with its own accrual-window `periodStart`/`periodEnd`, not the
+subscription's actual cycle) fell into the generic branch and unconditionally advanced
+`currentPeriodEnd` by a full cycle from `now`. Every cap invoice paid was a full cycle of lost
+subscription revenue. **Fix:** cap invoices now get the same "mark paid, don't touch the period or
+tenant active status" treatment as setup invoices.
+
+**5. CRITICAL — a currency with no configured FX rate had its platform-fee revenue silently
+zeroed on the invoice, then those receivables were marked settled anyway.** `computeRevenueShareInvoiceFromFees`
+(`server/billing-model-math.ts`) defaulted a missing rate to `0`, producing a real (nonzero)
+line item billed as `$0.00`; `reconcileRevenueShareSettlement` then settled *every* unsettled
+receivable up to the cutoff with no per-currency check, permanently writing off that revenue with
+no error. **Fix:** a currency with no rate is now excluded from the invoice entirely
+(`skippedCurrencies`, logged as a warning) rather than zeroed, and settlement only marks currencies
+the invoice actually billed (derived from its own line items).
+
+**6. CRITICAL — revenue-share settlement reconciliation ran fire-and-forget after payment; a crash
+or transient DB error silently lost it forever, double-billing the tenant's fees next cycle.**
+`applyTenantInvoicePayment` fired `reconcileRevenueShareSettlement` in a detached `.then()` with no
+durable record of failure — the invoice was already marked "paid" by then, so simply re-running
+payment application would never retry it (short-circuits on `status === "paid"`). **Fix:** new
+`tenant_invoices.settled_at` column (migration `control-plane/0009_invoice_settled_at.sql`), set on
+every deterministic completion (including "nothing to settle here" no-ops) but deliberately left
+null on a thrown error; a new backstop step in the daily tenant-billing sweep
+(`retryUnsettledRevenueShareInvoices`) finds and retries any paid invoice stuck unsettled for over
+an hour.
+
+**7. HIGH — a tenant's 7-day/1-day pre-deletion warning emails were permanently suppressed after
+their first suspension cycle.** `tenant-deletion-sweep.ts`'s `alreadyDid()` checked the append-only
+`tenant_billing_events` log for the warning type ever having fired for this tenant, with no
+scoping to the current suspension — so a tenant suspended, warned, reactivated, then suspended
+again months later got zero warning before permanent deletion. **Fix:** `alreadyDid()` now scopes
+to events at/after the tenant's current `suspendedAt`.
+
+**8. MEDIUM — a transient control-plane outage made `isRevenueShareBillingForOrg` unconditionally
+assume `true`, letting a flat/per-policy tenant accrue phantom, never-invoiced `platform_receivables`.**
+(Augustus's call, confirmed via AskUserQuestion.) **Fix:** `server/platform-fee.ts` now falls back
+to that org's own last successfully-resolved billing model on an outage, only defaulting to `true`
+when the org has genuinely never been resolved before.
+
+**9. LOW — "waive setup fee" (`platform-billing-routes.ts`) did two non-transactional writes** (void
+the open invoice, then flip `setupFeeStatus`); a crash between them left the invoice voided but the
+subscription still thinking a fee was owed. Wrapped in one `cpDb.transaction`.
+
+**10. N+1 — `POST /api/product-versions/:id/recalculate-premiums` never got switched to the batched
+premium-recalc path built in the 2026-08-04 fix for `GET /api/policies`** — still one ~6-query
+loop iteration per policy, real timeout risk on a large product version. Routed through the
+existing `batchRecalculatePolicyPremiums`.
+
+**11. N+1 — `POST /api/groups/:id/add-ons/bulk-apply` and `storage.bulkImportGroupMembers`
+(historical Excel import) issued one INSERT per policy/member/contribution, fully sequential** — a
+300-member society's bulk-apply did 300 serial round trips. Both converted to multi-row `INSERT`s.
+(`resolveExternalRef`'s per-row N+1 inside the generic legacy-import commit path was assessed and
+deliberately left as-is — that loop's dominant cost is the inherently-sequential
+`getNextMemberNumberInTx` member-number generation, so batching just the lookup wouldn't
+meaningfully help, and the surrounding logic is complex enough that the risk outweighed the
+marginal gain on an admin/one-time-per-tenant path.)
+
+**Also same session:** added `server/turnstile.ts` (Cloudflare Turnstile bot/abuse-protection
+verification, no-op until `TURNSTILE_SECRET_KEY` is configured) and wired it into
+`/api/client-auth/claim`, `/login`, and `/reset-password` — the server-side enforcement half of a
+Cloudflare rollout Augustus asked about; the client-side widget is deferred until he generates a
+real Turnstile site key to test against (building/shipping an untestable frontend blind isn't
+good practice). CSP (`server/index.ts`) pre-allowlists `challenges.cloudflare.com` for when it
+lands.
+
+**Verified:** `npm run check` clean throughout; `npm run test` 591/592 (the one failure,
+`customer-service-api.test.ts`, is a pre-existing flake unrelated to any of these changes — passes
+standalone in isolation). New `tests/unit/turnstile.test.ts` covers the no-op/pass/fail-closed/
+fail-open paths.
+
+**Lesson for next time:** the billing-model expansion (2026-08-31, `project_billing_models` memory)
+shipped 9 phases in one session with no live walkthrough against real tenant data — this is the
+second same-week audit to find CRITICAL bugs in exactly that code (see also `project_audit_2026_08_26`
+and this file's 2026-08-26 entries). Any large single-session feature shipment in this codebase is
+worth a dedicated audit pass soon after, not just a typecheck+test-suite green light — tests here
+covered the math functions in isolation but none of these 3 billing bugs were unit-testable without
+already knowing to look for them (period-extension conflation, missing-FX-rate settlement, and
+fire-and-forget reconciliation are all integration-shaped bugs).
+
+---
+
+## 2026-09-01 — Group ledger historical import 500s on Falakhe: legacy-import routes never resolved the tenant-local user id
+
+**Symptom:** Augustus tried to upload burial-society group ledger history for Falakhe (`POST
+/api/groups/ledger/import/preview`) and got a 500. Pulled DO runtime logs (`GET
+/v2/apps/{id}/deployments/{active}/logs?type=RUN`, see 2026-08-04 entry for the method) and found:
+`error: "Failed query: insert into \"import_batches\" ... "` at 2026-09-01T10:34:39Z, immediately
+after a successful preview validation (6 of 7 rows valid, 1 flagged as a spreadsheet totals row —
+that flagging was correct and not the bug).
+
+**Root cause:** Falakhe runs on a dedicated per-tenant Postgres database (commissioned 2026-08-04,
+see that day's entry) with its own local `users` table — every user-reference FK on tenant-scoped
+tables must be resolved/mirrored via `resolveOrSyncTenantUserId(orgId, userId)` before being used,
+never the raw shared-DB `user.id` (this pattern is used at 20+ other call sites in `routes.ts`
+already). The three legacy-import routes added in the 2026-08-12 group-ledger-import phase
+(`POST /api/groups/ledger/import/preview`, `.../batches/:id/commit`, `.../batches/:id/rollback`)
+all skipped it — passed `user.id` straight through to `storage.createImportBatch`
+(`created_by_user_id`), `storage.commitImportBatch` (`group_ledger_entries.created_by`), and
+`storage.rollbackImportBatch` (`rolled_back_by_user_id`), each of which FKs to the tenant DB's own
+`users` table. Confirmed by direct query: the staff user's id did not exist in Falakhe's dedicated-
+DB `users` table at all. The identical bug existed in the platform-owner-only generic import routes
+in `platform-routes.ts` (`createImportBatch`/`commitImportBatch`/`rollbackImportBatch`, all three
+call sites) — latent since 2026-08-04 (when Falakhe became the first dedicated-DB tenant) but never
+triggered because no platform-owner import had run against a dedicated-DB tenant since.
+
+**Fix:** `server/routes.ts` (3 call sites) and `server/platform-routes.ts` (3 call sites, plus the
+missing `resolveOrSyncTenantUserId` import) now resolve the tenant-local id before every
+`createImportBatch`/`commitImportBatch`/`rollbackImportBatch` call.
+
+**Verified:** `npm run check` clean, `npm run test` 587/587 passing. Confirmed the FK gap directly
+against Falakhe's dedicated DB before fixing (staff user absent from its `users` table) rather than
+guessing from the stack-trace-less Drizzle error message.
+
+**Lesson for next time:** any *new* route added against a tenant-scoped table must be checked for
+this pattern if the org can be on a dedicated database — grep the new route for a raw `user.id` (or
+an `actor.userId`/`{ userId: user.id }` passthrough) landing on a FK'd `*_user_id`/`created_by`
+column, and search for whether the feature has a platform-owner-only twin (generic import, legacy
+import, etc.) that needs the identical fix — this bug shipped in `routes.ts` for one feature and
+`platform-routes.ts` for its sibling, three call sites each, and both went unnoticed for weeks
+because Falakhe was the only dedicated-DB tenant and neither path had been exercised against it
+until today. See also `feedback_debugging_patterns.md` memory (`resolveOrSyncTenantUserId, not
+"?? user.id"`) — this is the same class of bug, just a passthrough instead of a `??`.
+
+---
+
 ## 2026-08-31 — MFA login failing intermittently: otplib v13 `verify()` has ZERO clock-skew tolerance by default
 
 **Symptom:** staff enter their correct authenticator code on `/staff/mfa-verify` and get "Invalid

@@ -31,13 +31,17 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        // https://challenges.cloudflare.com: Cloudflare Turnstile widget script + its iframe
+        // challenge (server/turnstile.ts) — harmless to allow even before a site key is
+        // configured, since the widget simply isn't rendered until VITE_TURNSTILE_SITE_KEY is set.
         scriptSrc: process.env.NODE_ENV === "production"
-          ? ["'self'"]
-          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          ? ["'self'", "https://challenges.cloudflare.com"]
+          : ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://challenges.cloudflare.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:", "https:", "blob:"],
         connectSrc: ["'self'", "ws:", "wss:", "https:"],
+        frameSrc: ["'self'", "https://challenges.cloudflare.com"],
       },
     },
     crossOriginEmbedderPolicy: false,

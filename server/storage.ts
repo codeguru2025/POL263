@@ -5240,29 +5240,33 @@ export class DatabaseStorage implements IStorage {
    *  historical contributions, or none of them, never a half-imported society. */
   async bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }> {
     return withOrgTransaction(orgId, async (tx) => {
-      let contributionsCreated = 0;
-      for (const row of rows) {
-        const [member] = await tx.insert(groupMembers).values({
-          organizationId: orgId,
-          groupId,
-          fullName: row.fullName,
-          memberNumber: row.memberNumber || undefined,
-          joinedDate: row.joinedDate || undefined,
-        }).returning();
-        for (const c of row.contributions || []) {
-          await tx.insert(groupContributions).values({
-            organizationId: orgId,
-            groupId,
-            groupMemberId: member.id,
-            amount: c.amount,
-            currency: c.currency,
-            contributionDate: c.contributionDate,
-            notes: c.notes || undefined,
-          });
-          contributionsCreated++;
-        }
+      if (rows.length === 0) return { membersCreated: 0, contributionsCreated: 0 };
+      // Two multi-row INSERTs instead of one round trip per member plus one per contribution —
+      // this backs "import a whole society's roster + years of contribution history," plausibly
+      // thousands of rows held open on one tenant DB connection for the whole request. A single
+      // multi-VALUES INSERT with no ON CONFLICT reliably returns rows in VALUES order, so
+      // insertedMembers[i] corresponds to rows[i].
+      const insertedMembers = await tx.insert(groupMembers).values(rows.map((row) => ({
+        organizationId: orgId,
+        groupId,
+        fullName: row.fullName,
+        memberNumber: row.memberNumber || undefined,
+        joinedDate: row.joinedDate || undefined,
+      }))).returning();
+
+      const contributionRows = rows.flatMap((row, i) => (row.contributions || []).map((c) => ({
+        organizationId: orgId,
+        groupId,
+        groupMemberId: insertedMembers[i].id,
+        amount: c.amount,
+        currency: c.currency,
+        contributionDate: c.contributionDate,
+        notes: c.notes || undefined,
+      })));
+      if (contributionRows.length > 0) {
+        await tx.insert(groupContributions).values(contributionRows);
       }
-      return { membersCreated: rows.length, contributionsCreated };
+      return { membersCreated: rows.length, contributionsCreated: contributionRows.length };
     });
   }
 

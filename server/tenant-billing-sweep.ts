@@ -15,7 +15,7 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, billingPlans, tenantSubscriptions, tenantInvoices, tenantBillingEvents } from "@shared/control-plane-schema";
 import { generateInvoiceForSubscription, getEffectiveGraceDays, getBillingSettings } from "./tenant-billing-service";
-import { enforceOutstandingFeeCap } from "./tenant-billing-enforcement";
+import { enforceOutstandingFeeCap, retryUnsettledRevenueShareInvoices } from "./tenant-billing-enforcement";
 import { sendInvoiceReminderEmail, sendGracePeriodEmail, sendSuspendedEmail } from "./tenant-billing-email";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
@@ -166,6 +166,16 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
       result.errors.push(msg);
       structuredLog("error", "Tenant billing sweep: subscription processing failed", { subscriptionId: sub.id, tenantId: sub.tenantId, error: (err as Error).message });
     }
+  }
+
+  // ── Backstop: retry any paid revenue-share/subscription invoice whose post-payment
+  // settlement (reconcileRevenueShareSettlement) never completed — see that function's docstring.
+  try {
+    const retried = await retryUnsettledRevenueShareInvoices();
+    (result as any).revenueShareSettlementsRetried = retried;
+  } catch (err) {
+    result.errors.push(`revenue-share settlement retry: ${(err as Error).message}`);
+    structuredLog("error", "Revenue-share settlement retry sweep failed", { error: (err as Error).message });
   }
 
   // ── Deletion lifecycle: suspended tenants inside/after their view-only window ──

@@ -482,13 +482,16 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (!sub) return res.status(404).json({ message: "No subscription exists for this tenant" });
     if (sub.setupFeeStatus === "paid") return res.status(409).json({ message: "Setup fee has already been paid" });
 
-    // Void any open setup invoice, then mark waived.
-    await cpDb.update(tenantInvoices)
-      .set({ status: "void", updatedAt: new Date() })
-      .where(and(eq(tenantInvoices.tenantId, id), eq(tenantInvoices.kind, "setup"), eq(tenantInvoices.status, "open")));
-    await cpDb.update(tenantSubscriptions)
-      .set({ setupFeeStatus: "waived", updatedAt: new Date() })
-      .where(eq(tenantSubscriptions.tenantId, id));
+    // Void any open setup invoice, then mark waived — one transaction so a crash between the two
+    // writes can't leave the invoice voided but the subscription still thinking a fee is owed.
+    await cpDb.transaction(async (tx) => {
+      await tx.update(tenantInvoices)
+        .set({ status: "void", updatedAt: new Date() })
+        .where(and(eq(tenantInvoices.tenantId, id), eq(tenantInvoices.kind, "setup"), eq(tenantInvoices.status, "open")));
+      await tx.update(tenantSubscriptions)
+        .set({ setupFeeStatus: "waived", updatedAt: new Date() })
+        .where(eq(tenantSubscriptions.tenantId, id));
+    });
     await auditLog(req, "WAIVE_SETUP_FEE", "TenantSubscription", id, { setupFeeStatus: sub.setupFeeStatus }, { setupFeeStatus: "waived" }, id);
     return res.json({ ok: true, setupFeeStatus: "waived" });
   });

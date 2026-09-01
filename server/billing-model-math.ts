@@ -53,6 +53,13 @@ export interface ComputedInvoice {
    * at once, so P4/P5 record the native breakdown alongside the single USD headline amount.
    */
   currencyBreakdown?: Record<string, string>;
+  /**
+   * Revenue-share only: currencies that had a nonzero fee but no configured FX rate, so they were
+   * excluded from this invoice entirely (never zeroed-and-billed) rather than being billed as
+   * $0.00 — the fees stay in `platform_receivables` as unsettled and will be picked up by the
+   * next invoice once a rate exists. Callers should log this so it gets noticed and fixed.
+   */
+  skippedCurrencies?: string[];
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -252,10 +259,12 @@ export function computeRevenueShareInvoice(
   const pct = num(pricing.revenueSharePercent);
   const lines: InvoiceLine[] = [];
   const currencyBreakdown: Record<string, string> = {};
+  const skippedCurrencies: string[] = [];
 
   for (const [ccy, collected] of Object.entries(collectionsByCurrency)) {
     const amt = num(collected);
     if (amt <= 0) continue;
+    if (ccy !== "USD" && !(ccy in fxToUsd)) { skippedCurrencies.push(ccy); continue; }
     const feeInCcy = (amt * pct) / 100;
     const rate = ccy === "USD" ? 1 : num(fxToUsd[ccy] ?? 0);
     const feeUsd = feeInCcy * rate;
@@ -280,9 +289,9 @@ export function computeRevenueShareInvoice(
       label: `Minimum monthly charge — usage this month came to $${money(computed)}, which is below the $${money(minimum)} plan minimum`,
       amount: money(minimum - computed),
     });
-    return { amountUsd: money(minimum), lineItems: lines, minimumApplied: true, currencyBreakdown };
+    return { amountUsd: money(minimum), lineItems: lines, minimumApplied: true, currencyBreakdown, skippedCurrencies };
   }
-  return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown };
+  return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown, skippedCurrencies };
 }
 
 /**
@@ -299,10 +308,12 @@ export function computeRevenueShareInvoiceFromFees(
 ): ComputedInvoice {
   const lines: InvoiceLine[] = [];
   const currencyBreakdown: Record<string, string> = {};
+  const skippedCurrencies: string[] = [];
 
   for (const [ccy, fee] of Object.entries(feesByCurrency)) {
     const feeInCcy = num(fee);
     if (feeInCcy <= 0) continue;
+    if (ccy !== "USD" && !(ccy in fxToUsd)) { skippedCurrencies.push(ccy); continue; }
     const rate = ccy === "USD" ? 1 : num(fxToUsd[ccy] ?? 0);
     currencyBreakdown[ccy] = money(feeInCcy);
     lines.push({
@@ -325,7 +336,7 @@ export function computeRevenueShareInvoiceFromFees(
       label: `Minimum monthly charge — fees this period came to $${money(computed)}, which is below the $${money(minimum)} plan minimum`,
       amount: money(minimum - computed),
     });
-    return { amountUsd: money(minimum), lineItems: lines, minimumApplied: true, currencyBreakdown };
+    return { amountUsd: money(minimum), lineItems: lines, minimumApplied: true, currencyBreakdown, skippedCurrencies };
   }
-  return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown };
+  return { amountUsd: money(computed), lineItems: lines, minimumApplied: false, currencyBreakdown, skippedCurrencies };
 }

@@ -10,7 +10,7 @@
  *
  * Every step is guarded by a tenant_billing_events marker so it fires exactly once.
  */
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, gte, isNotNull } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, billingSettings, tenantBillingEvents } from "@shared/control-plane-schema";
 import { resolveTenantBillingRecipients } from "./tenant-billing-email";
@@ -19,9 +19,20 @@ import { structuredLog } from "./logger";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-async function alreadyDid(tenantId: string, type: string): Promise<boolean> {
+/**
+ * Scoped to the CURRENT suspension cycle (events at/after `since`, normally the tenant's
+ * `suspendedAt`) — not "has this event ever happened for this tenant." tenant_billing_events is
+ * append-only and never cleared on reactivation, so an unscoped check would find a stale warning
+ * event from a PRIOR suspension (paid off and reactivated since) and permanently suppress every
+ * future deletion warning for that tenant, even on a completely unrelated later suspension.
+ */
+async function alreadyDid(tenantId: string, type: string, since: Date | null): Promise<boolean> {
   const [row] = await cpDb.select({ id: tenantBillingEvents.id }).from(tenantBillingEvents)
-    .where(and(eq(tenantBillingEvents.tenantId, tenantId), eq(tenantBillingEvents.type, type))).limit(1);
+    .where(and(
+      eq(tenantBillingEvents.tenantId, tenantId),
+      eq(tenantBillingEvents.type, type),
+      ...(since ? [gte(tenantBillingEvents.createdAt, since)] : []),
+    )).limit(1);
   return !!row;
 }
 async function markDone(tenantId: string, type: string, detail: Record<string, unknown>): Promise<void> {
@@ -76,12 +87,12 @@ export async function processTenantDeletionLifecycle(): Promise<{ warningsSent: 
 
       // ── Warnings ──
       if (msLeft > 0) {
-        if (msLeft <= 7 * DAY && !(await alreadyDid(t.id, "deletion_warning_7d"))) {
+        if (msLeft <= 7 * DAY && !(await alreadyDid(t.id, "deletion_warning_7d", t.suspendedAt))) {
           await sendDeletionWarning(t.id, t.name, deleteOn, Math.ceil(msLeft / DAY));
           await markDone(t.id, "deletion_warning_7d", { deleteOn });
           out.warningsSent++;
         }
-        if (msLeft <= 1 * DAY && !(await alreadyDid(t.id, "deletion_warning_1d"))) {
+        if (msLeft <= 1 * DAY && !(await alreadyDid(t.id, "deletion_warning_1d", t.suspendedAt))) {
           await sendDeletionWarning(t.id, t.name, deleteOn, 1);
           await markDone(t.id, "deletion_warning_1d", { deleteOn });
           out.warningsSent++;

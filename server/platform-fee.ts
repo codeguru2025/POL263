@@ -9,6 +9,7 @@
 import { eq } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenantSubscriptions, billingPlans, billingSettings } from "@shared/control-plane-schema";
+import { structuredLog } from "./logger";
 
 const DEFAULT_PLATFORM_FEE_RATE_PERCENT = 2.5;
 
@@ -18,6 +19,10 @@ const DEFAULT_PLATFORM_FEE_RATE_PERCENT = 2.5;
 // Cached (5-min TTL, same pattern as the rest of this file); invalidate on a subscription change.
 const revShareCache = new Map<string, { value: boolean; at: number }>();
 const REV_SHARE_TTL_MS = 5 * 60 * 1000;
+// Separate from revShareCache above: never expires, only updated on a SUCCESSFUL lookup — used
+// only as the fallback when the control plane is unreachable, so a transient outage fails toward
+// this tenant's actual last-known billing model instead of unconditionally assuming revenue-share.
+const lastKnownGood = new Map<string, boolean>();
 
 export function invalidateBillingModelCache(orgId: string): void {
   revShareCache.delete(orgId);
@@ -36,11 +41,21 @@ export async function isRevenueShareBillingForOrg(orgId: string): Promise<boolea
     const model = row?.override || row?.planModel || "flat";
     const value = model === "revenue_share";
     revShareCache.set(orgId, { value, at: Date.now() });
+    lastKnownGood.set(orgId, value);
     return value;
-  } catch {
-    // Control plane unreachable — fail toward accruing (same fail-open stance as the rate lookup
-    // below), so a revenue-share tenant never silently loses accrual during a transient outage.
-    return true;
+  } catch (err) {
+    // Control plane unreachable — fail toward this tenant's own last confirmed billing model
+    // (NOT unconditionally "revenue-share"), so a transient outage can't make a flat/per-policy
+    // tenant accrue phantom, never-invoiced platform_receivables. Only defaults to true when we've
+    // truly never resolved this org before (first request ever hits an outage) — accruing then
+    // reconciling later is the safer failure than silently dropping a real revenue-share tenant's
+    // fees, and this case is rare (every active org is resolved successfully on its first request
+    // in the overwhelming majority of cases).
+    const fallback = lastKnownGood.get(orgId);
+    structuredLog("error", "isRevenueShareBillingForOrg: control plane lookup failed, using fallback", {
+      orgId, fallback: fallback ?? "none (defaulting to true)", error: (err as Error)?.message,
+    });
+    return fallback ?? true;
   }
 }
 

@@ -166,6 +166,12 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
     eventDetail.feesByCurrency = byCurrency;
     eventDetail.currencyBreakdown = computed.currencyBreakdown;
     eventDetail.minimumApplied = computed.minimumApplied;
+    if (computed.skippedCurrencies && computed.skippedCurrencies.length > 0) {
+      eventDetail.skippedCurrenciesNoFxRate = computed.skippedCurrencies;
+      structuredLog("warn", "Revenue-share invoice excluded currencies with no configured FX rate — fees left unsettled for next cycle", {
+        tenantId: subscription.tenantId, skippedCurrencies: computed.skippedCurrencies,
+      });
+    }
   } else {
     amount = computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle);
   }
@@ -244,11 +250,34 @@ export async function applyTenantInvoicePayment(
           tenantId: invoice.tenantId, invoiceId: invoice.id, type: "setup_fee_paid",
           detail: { source: opts.source, amount: invoice.amount },
         });
-        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", setupOnly: true };
+        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", noPeriodChange: true };
       }
 
       if (!invoice.subscriptionId || !invoice.planId) {
         return { ok: false as const, error: "Invoice is not linked to a subscription" };
+      }
+
+      // Outstanding-fee-cap invoice (enforceOutstandingFeeCap, tenant-billing-enforcement.ts): an
+      // early, mid-cycle bill for platform fees that exceeded the cap. Its own periodStart/
+      // periodEnd mark the accrual window being billed early — NOT the subscription's renewal
+      // cycle — so paying it must not advance currentPeriodEnd (that's what the real periodic
+      // "subscription" invoice below does; conflating the two silently pushed the tenant's actual
+      // renewal a full cycle later every time a cap invoice was paid). Cap enforcement also never
+      // suspends on its own (see that function's docstring), so this doesn't touch tenant active
+      // status either — any real suspension is unrelated and stays gated on its own overdue
+      // "subscription" invoice. reconcileRevenueShareSettlement (called below, unconditionally)
+      // still settles the matching receivables via this invoice's usageCutAt/periodEnd.
+      if (invoice.kind === "revenue_share") {
+        await tx.update(tenantInvoices).set({
+          status: "paid", paidAt: now,
+          markedPaidBy: opts.source === "manual" ? (opts.actorId ?? null) : null,
+          notes: opts.note ?? invoice.notes, updatedAt: now,
+        }).where(eq(tenantInvoices.id, invoiceId));
+        await tx.insert(tenantBillingEvents).values({
+          tenantId: invoice.tenantId, invoiceId: invoice.id, type: "cap_invoice_paid",
+          detail: { source: opts.source, amount: invoice.amount },
+        });
+        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", noPeriodChange: true };
       }
 
       // Locked too, not just the invoice row — otherwise two different open invoices for the
@@ -341,7 +370,7 @@ export async function applyTenantInvoicePayment(
     invalidateTenantActiveCache(tenantId);
     invalidateTenantModuleCache(tenantId);
 
-    if (!(result as any).setupOnly) {
+    if (!(result as any).noPeriodChange) {
       sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
     }
 

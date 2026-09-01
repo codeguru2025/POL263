@@ -416,6 +416,10 @@ export const tenantInvoices = pgTable(
     dueDate: timestamp("due_date").notNull(),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     paidAt: timestamp("paid_at"),
+    /** Set by reconcileRevenueShareSettlement once it actually completes for this invoice (kind
+     *  revenue_share/subscription only) — lets the daily sweep find and retry any paid invoice
+     *  whose post-payment settlement never finished, instead of silently losing it. */
+    settledAt: timestamp("settled_at"),
     /** Opaque public identifier for the unauthenticated pay page, crypto.randomBytes(24).hex */
     paymentToken: text("payment_token").notNull(),
     merchantReference: text("merchant_reference"),

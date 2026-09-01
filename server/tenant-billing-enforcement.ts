@@ -11,7 +11,7 @@
  * so everything here is best-effort and idempotent, run outside the payment transaction — the
  * same shape as tenant-db-commissioning.
  */
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import {
   billingPlans,
@@ -92,6 +92,11 @@ export async function enforceOutstandingFeeCap(
     getFxToUsdMap(sub.tenantId),
   ]);
   const rawAccrual = computeRevenueShareInvoiceFromFees({ ...pricing, monthlyMinimumUsd: "0" }, byCurrency, fx);
+  if (rawAccrual.skippedCurrencies && rawAccrual.skippedCurrencies.length > 0) {
+    structuredLog("warn", "Outstanding-fee-cap check excluded currencies with no configured FX rate", {
+      tenantId: sub.tenantId, skippedCurrencies: rawAccrual.skippedCurrencies,
+    });
+  }
   const accruedUsd = parseFloat(rawAccrual.amountUsd);
   const openInvoicedUsd = await openFeeInvoiceTotalUsd(sub.id);
   // The unsettled ledger already includes whatever an open invoice covers (receivables settle
@@ -142,27 +147,49 @@ export async function enforceOutstandingFeeCap(
  * platform_receivables rows in the tenant's own DB (everything accrued up to the invoice's cut)
  * and leave an audit-trail entry so the settlement is visible in the tenant's books. Idempotent —
  * a second call finds nothing left unsettled.
+ *
+ * Marks `invoice.settledAt` on every deterministic exit (including "nothing to do" cases like a
+ * flat/per_policy tenant's ordinary `kind: "subscription"` invoice, which is the overwhelming
+ * majority of calls) — but deliberately leaves it unset if an exception is thrown, so the daily
+ * billing sweep's backstop (`retryUnsettledRevenueShareInvoices` below) can find and retry this
+ * exact invoice later. Previously this ran fire-and-forget straight after payment with no durable
+ * record of failure — a crash or transient DB error here silently lost the settlement, and the
+ * tenant's next revenue-share invoice would bill the same never-settled fees again.
  */
 export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): Promise<void> {
+  const markSettled = () => cpDb.update(tenantInvoices).set({ settledAt: new Date() }).where(eq(tenantInvoices.id, invoice.id));
+
   if (invoice.kind !== "revenue_share" && invoice.kind !== "subscription") return;
   // The exact instant this invoice tallied the ledger — settle nothing accrued after it, so a
   // later invoice generated before this one was paid keeps its own receivables.
   const cutoff = invoice.usageCutAt ?? invoice.periodEnd ?? invoice.paidAt ?? invoice.issuedAt;
-  if (!cutoff) return;
+  if (!cutoff) { await markSettled(); return; }
 
   try {
     // Only act when the tenant is actually on revenue-share billing.
     const [sub] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.id, invoice.subscriptionId ?? "")).limit(1);
-    if (!sub) return;
+    if (!sub) { await markSettled(); return; }
     const [plan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, sub.planId)).limit(1);
     const [settings] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
-    if (!plan) return;
+    if (!plan) { await markSettled(); return; }
     const pricing = resolveEffectivePricing(plan, [], sub, {
       platformFeeRatePercent: settings?.platformFeeRatePercent ?? null,
       defaultMonthlyMinimumUsd: settings?.defaultMonthlyMinimumUsd ?? null,
       defaultOutstandingFeeCapUsd: settings?.defaultOutstandingFeeCapUsd ?? null,
     });
-    if (pricing.billingModel !== "revenue_share") return;
+    if (pricing.billingModel !== "revenue_share") { await markSettled(); return; }
+
+    // Only settle currencies this invoice actually billed a nonzero amount for. A currency with
+    // no configured FX rate is excluded by computeRevenueShareInvoiceFromFees (skippedCurrencies)
+    // rather than billed as $0.00 — settling it anyway here would write off that revenue
+    // permanently with no error. Every real fee line item carries its currency; the only line
+    // without one is the "minimum charge" padding line, which doesn't correspond to a currency.
+    const billedCurrencies = Array.from(new Set(
+      ((invoice.lineItems as Array<{ currency?: string }> | null) ?? [])
+        .map((l) => l.currency)
+        .filter((c): c is string => !!c),
+    ));
+    if (billedCurrencies.length === 0) { await markSettled(); return; }
 
     const tdb = await getDbForOrg(invoice.tenantId);
     const unsettled = await tdb
@@ -172,8 +199,9 @@ export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): P
         eq(platformReceivables.organizationId, invoice.tenantId),
         eq(platformReceivables.isSettled, false),
         lte(platformReceivables.createdAt, cutoff),
+        inArray(platformReceivables.currency, billedCurrencies),
       ));
-    if (unsettled.length === 0) return;
+    if (unsettled.length === 0) { await markSettled(); return; }
 
     const byCurrency: Record<string, number> = {};
     for (const r of unsettled) byCurrency[r.currency] = (byCurrency[r.currency] ?? 0) + parseFloat(r.amount);
@@ -184,6 +212,7 @@ export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): P
         eq(platformReceivables.organizationId, invoice.tenantId),
         eq(platformReceivables.isSettled, false),
         lte(platformReceivables.createdAt, cutoff),
+        inArray(platformReceivables.currency, billedCurrencies),
       ));
 
     await tdb.insert(auditLogs).values({
@@ -202,10 +231,34 @@ export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): P
       },
     });
 
+    await markSettled();
     structuredLog("info", "Revenue-share settlement reconciled", {
       tenantId: invoice.tenantId, invoiceId: invoice.id, receivablesSettled: unsettled.length,
     });
   } catch (err) {
+    // Deliberately does NOT mark settledAt — see docstring. retryUnsettledRevenueShareInvoices
+    // (the daily sweep) will pick this invoice up and retry.
     structuredLog("error", "reconcileRevenueShareSettlement failed", { invoiceId: invoice.id, error: (err as Error).message });
   }
+}
+
+/**
+ * Daily-sweep backstop for reconcileRevenueShareSettlement: finds paid revenue_share/subscription
+ * invoices whose settlement never completed (settledAt still null) and retries them. Only
+ * considers invoices paid more than an hour ago so it never races the fire-and-forget call that
+ * fires immediately after payment in applyTenantInvoicePayment.
+ */
+export async function retryUnsettledRevenueShareInvoices(): Promise<number> {
+  const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+  const stuck = await cpDb.select().from(tenantInvoices).where(and(
+    eq(tenantInvoices.status, "paid"),
+    isNull(tenantInvoices.settledAt),
+    lte(tenantInvoices.paidAt, cutoff),
+    inArray(tenantInvoices.kind, ["revenue_share", "subscription"]),
+  ));
+  for (const invoice of stuck) {
+    structuredLog("warn", "Retrying previously-failed revenue-share settlement", { invoiceId: invoice.id, tenantId: invoice.tenantId, paidAt: invoice.paidAt });
+    await reconcileRevenueShareSettlement(invoice);
+  }
+  return stuck.length;
 }

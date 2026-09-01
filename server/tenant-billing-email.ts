@@ -13,7 +13,8 @@ import { getDbForOrg } from "./tenant-db";
 import { users, userRoles, roles } from "@shared/schema";
 import { structuredLog } from "./logger";
 import { sendEmail, isEmailConfigured } from "./email-service";
-import { buildTenantBillingPdf } from "./tenant-billing-pdf";
+import { buildTenantBillingPdf, REVENUE_SHARE_BILLING_TERMS } from "./tenant-billing-pdf";
+import { isRevenueShareBillingForOrg } from "./platform-fee";
 
 type Attachment = { filename: string; content: Buffer; contentType?: string };
 
@@ -24,7 +25,13 @@ async function billingPdfAttachment(invoice: TenantInvoice, variant: "invoice" |
     const [plan] = invoice.planId
       ? await cpDb.select({ name: billingPlans.name }).from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1)
       : [undefined];
-    const { buffer, filename } = await buildTenantBillingPdf({ invoice, tenantName: name, planName: plan?.name, variant });
+    // Terms & Conditions only apply to revenue-share billing (the wording is specific to the 2.5%
+    // fee/cap/suspension mechanics) — a cap invoice is always revenue-share, an ordinary
+    // "subscription" invoice could be any billing model, and "setup" never gets terms.
+    const isRevShareInvoice = invoice.kind === "revenue_share"
+      || (invoice.kind === "subscription" && await isRevenueShareBillingForOrg(invoice.tenantId));
+    const terms = isRevShareInvoice ? REVENUE_SHARE_BILLING_TERMS : undefined;
+    const { buffer, filename } = await buildTenantBillingPdf({ invoice, tenantName: name, planName: plan?.name, variant, terms });
     return [{ filename, content: buffer, contentType: "application/pdf" }];
   } catch (err) {
     structuredLog("error", "billing PDF render failed", { invoiceId: invoice.id, error: (err as Error).message });

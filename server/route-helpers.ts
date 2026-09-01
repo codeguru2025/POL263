@@ -116,6 +116,17 @@ export function safeError(err: any): string {
   return err?.message || "Internal server error";
 }
 
+/**
+ * Strips fields from an `organizations` row that must never reach a non-platform-owner client:
+ * the PayNow secret key/auth email (usable to forge a paid-webhook callback) and the tenant's
+ * dedicated database connection string (direct, app-bypassing DB access for dedicated-DB tenants).
+ * Every route that returns an org row to a non-platform-owner must go through this.
+ */
+export function sanitizeOrgForClient<T extends Record<string, any>>(org: T): Omit<T, "paynowIntegrationKey" | "databaseUrl" | "paynowAuthEmail"> {
+  const { paynowIntegrationKey, databaseUrl, paynowAuthEmail, ...safe } = org;
+  return safe;
+}
+
 export function getAddOnPrice(ao: any, paymentSchedule: string): number {
   if (ao.pricingMode === "percentage") {
     return parseFloat(String(ao.priceAmount ?? ao.priceMonthly ?? 0));

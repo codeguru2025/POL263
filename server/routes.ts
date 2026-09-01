@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -1867,7 +1867,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (user.organizationId) {
         const org = await storage.getOrganization(user.organizationId);
-        return res.json(org ? [org] : []);
+        return res.json(org ? [sanitizeOrgForClient(org)] : []);
       }
       return res.json([]);
     } catch (err: any) {
@@ -1887,8 +1887,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
     const isPlatformOwner = (user as any).isPlatformOwner ?? (user as any).email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    const { paynowIntegrationKey: _pik, databaseUrl: _du, paynowAuthEmail: _pae, ...safeOrg } = org as any;
-    return res.json(isPlatformOwner ? org : safeOrg);
+    return res.json(isPlatformOwner ? org : sanitizeOrgForClient(org as any));
   });
 
   app.patch("/api/organizations/:id", requireAuth, async (req, res) => {
@@ -1981,14 +1980,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
     if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0) {
-      return res.json(before);
+      return res.json(isPlatformOwner ? before : sanitizeOrgForClient(before as any));
     }
     const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
     if (Object.keys(sanitizedTenant).length > 0) {
       await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
     }
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
-    return res.json({ ...updated, ...sanitizedTenant });
+    const result = { ...updated, ...sanitizedTenant };
+    return res.json(isPlatformOwner ? result : sanitizeOrgForClient(result as any));
   });
 
   /**
@@ -4846,21 +4846,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const pv = await storage.getProductVersion(pvId, user.organizationId);
     if (!pv) return res.status(404).json({ message: "Product version not found" });
 
+    // Batched (preloads members/dependents/add-ons/products org-wide once, then computes each
+    // policy's premium in-memory and writes drifted rows in bounded chunks of 5) instead of the
+    // old per-policy loop, which issued ~6 sequential DB round trips per policy — a product
+    // version with hundreds/thousands of policies could exceed the tenant DB pool's connection
+    // cap on a single request (same class of bug as GET /api/policies before its 2026-08-04 fix
+    // — see docs/BUGFIX-LOG.md — this admin endpoint had never been switched over).
     const allPolicies = await storage.getPoliciesByProductVersion(pvId, user.organizationId);
+    const activePolicies = allPolicies.filter((p: any) => p.status !== "cancelled");
+    const recalced = await batchRecalculatePolicyPremiums(activePolicies, user.organizationId);
     let updated = 0;
-    let skipped = 0;
-    for (const p of allPolicies) {
-      if (p.status === "cancelled") continue;
-      try {
-        const before = parseFloat(String(p.premiumAmount ?? "0"));
-        const recalced = await recalculatePolicyPremiumIfNeeded(p, user.organizationId);
-        const after = parseFloat(String(recalced?.premiumAmount ?? before));
-        if (Math.abs(after - before) >= 0.01) updated++;
-      } catch (err: any) {
-        skipped++;
-        structuredLog("warn", "recalculate-premiums: skipped policy", { policyId: p.id, error: err?.message });
-      }
+    for (let i = 0; i < activePolicies.length; i++) {
+      const before = parseFloat(String(activePolicies[i].premiumAmount ?? "0"));
+      const after = parseFloat(String(recalced[i]?.premiumAmount ?? before));
+      if (Math.abs(after - before) >= 0.01) updated++;
     }
+    const skipped = allPolicies.length - activePolicies.length;
     await auditLog(req, "BATCH_RECALCULATE_PREMIUMS", "ProductVersion", pvId, null, { pvId, total: allPolicies.length, updated, skipped });
     return res.json({ total: allPolicies.length, updated, skipped });
   });
@@ -11794,15 +11795,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!addOn) return res.status(404).json({ message: "Add-on not found" });
     const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
     const tdb = await getDbForOrg(user.organizationId);
+    // One multi-row INSERT instead of one round trip per policy — a 300-member society's "apply
+    // add-on to whole group" click was previously fully sequential (300 serial round trips).
     let applied = 0;
-    for (const p of policiesList) {
+    if (policiesList.length > 0) {
+      const valueRows = sql.join(policiesList.map((p) => sql`(${p.id}, ${addOnId})`), sql`, `);
       const result = await tdb.execute(sql`
         INSERT INTO policy_add_ons (policy_id, add_on_id)
-        VALUES (${p.id}, ${addOnId})
+        VALUES ${valueRows}
         ON CONFLICT (policy_id, add_on_id) WHERE policy_member_id IS NULL DO NOTHING
         RETURNING id
       `);
-      if ((result.rows ?? result).length > 0) applied++;
+      applied = (result.rows ?? result).length;
     }
     await auditLog(req, "BULK_APPLY_GROUP_ADDON", "Group", groupId, null, { addOnId, addOnName: addOn.name, applied, totalPolicies: policiesList.length });
     return res.json({ applied, totalPolicies: policiesList.length, alreadyHadIt: policiesList.length - applied });
@@ -11997,6 +12001,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const seenInFile = new Set<string>();
       const validRows: any[] = [];
       const errorReport: { rowIndex: number; field: string; message: string }[] = [];
+      // createdByUserId is NOT NULL and FK'd to this org's own users table — must resolve to a
+      // tenant-local id (mirrors the caller in) for orgs on a dedicated database.
+      const createdByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
 
       cached.rows.forEach((rawRow, idx) => {
         const result = transformAndValidateRow("group_ledger_entry", rawRow, idx, columnMapping);
@@ -12026,7 +12033,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         errorRows: errorReport.length,
         previewSnapshot: validRows,
         errorReport,
-        createdByUserId: user.id,
+        createdByUserId,
       });
 
       return res.status(201).json({ batchId: batch.id, totalRows: batch.totalRows, successRows: batch.successRows, errorRows: batch.errorRows, sampleErrors: errorReport.slice(0, 50) });
@@ -12052,7 +12059,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (batch.status !== "previewed") return res.status(400).json({ message: `Batch is already ${batch.status}` });
       if (batch.successRows === 0) return res.status(400).json({ message: "No valid rows to import" });
 
-      const result = await storage.commitImportBatch(user.organizationId, batchId, { userId: user.id });
+      const commitUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const result = await storage.commitImportBatch(user.organizationId, batchId, { userId: commitUserId });
       await auditLog(req, "bulk_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, result);
       return res.json(result);
     } catch (err: any) {
@@ -12070,7 +12078,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!batch || batch.entityType !== "group_ledger_entry") return res.status(404).json({ message: "Import batch not found" });
       if (batch.status !== "committed") return res.status(400).json({ message: `Batch is ${batch.status}, not committed — nothing to roll back.` });
 
-      const result = await storage.rollbackImportBatch(user.organizationId, batchId, { userId: user.id });
+      const rollbackUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const result = await storage.rollbackImportBatch(user.organizationId, batchId, { userId: rollbackUserId });
       if (!result.ok) return res.status(409).json({ message: result.reason });
 
       await auditLog(req, "rollback_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, { rolledBack: true });
@@ -13394,9 +13403,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
+  // This route serves report types spanning several permission domains behind one handler —
+  // the base `read:policy` guard above only covers the policy-shaped report types. Anything
+  // exposing finance/payroll/commission data must be additionally checked here against the
+  // same permission its own dedicated endpoint requires (e.g. GET /api/payments needs
+  // read:finance, GET /api/payroll/employees needs read:payroll) — otherwise a role with only
+  // read:policy (e.g. "staff", "agent") could export data none of its other endpoints expose.
+  const REPORT_EXPORT_EXTRA_PERMISSION: Record<string, string> = {
+    finance: "read:finance",
+    "underwriter-payable": "read:finance",
+    expenditures: "read:finance",
+    platform: "read:finance",
+    payments: "read:finance",
+    cashups: "read:finance",
+    receipts: "read:finance",
+    payroll: "read:payroll",
+    commissions: "read:commission",
+    "commission-payments": "read:commission",
+  };
+
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
+    const requiredExtraPermission = REPORT_EXPORT_EXTRA_PERMISSION[reportType];
+    if (requiredExtraPermission) {
+      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      if (!perms.includes(requiredExtraPermission)) {
+        return res.status(403).json({ message: "Insufficient permissions for this report type" });
+      }
+    }
     const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
     const CURRENCIES = ["USD", "ZAR", "ZIG"] as const;
