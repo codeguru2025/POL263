@@ -916,16 +916,20 @@ export function setupAuth(app: Express) {
     }
 
     const otp = String(Math.floor(100000 + Math.random() * 900000));
+    // Dial code for a local-format ("0…") number: staff belong to the org's home country.
+    const countryCode = user.organizationId
+      ? (await storage.getCountryFlagSettings(user.organizationId)).homeCountryCode
+      : undefined;
     let sendResult: { ok: boolean; message: string };
     if (channel === "sms") {
       const { sendSms, sendPlatformSms } = await import("./sms-service");
       const message = `Your POL263 verification code is ${otp}. It expires shortly — do not share it.`;
       sendResult = user.organizationId
-        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp" })
+        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp", countryCode })
         : await sendPlatformSms({ to: storedNumber, message, kind: "otp" });
     } else {
       const { sendWhatsAppOtp } = await import("./whatsapp-service");
-      sendResult = await sendWhatsAppOtp({ to: storedNumber, code: otp });
+      sendResult = await sendWhatsAppOtp({ to: storedNumber, code: otp, countryCode });
     }
     if (!sendResult.ok) {
       structuredLog("error", "MFA alt-channel send failed", { userId: user.id, channel, error: sendResult.message });

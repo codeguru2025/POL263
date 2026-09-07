@@ -1469,11 +1469,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/country-flag-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const before = await storage.getCountryFlagSettings(user.organizationId);
-    const { isEnabled, flagLabel, homeLabel } = req.body;
+    const { isEnabled, flagLabel, homeLabel, homeCountryCode, flagCountryCode } = req.body;
     const data: Record<string, any> = {};
     if (typeof isEnabled === "boolean") data.isEnabled = isEnabled;
     if (typeof flagLabel === "string" && flagLabel.trim()) data.flagLabel = flagLabel.trim();
     if (typeof homeLabel === "string" && homeLabel.trim()) data.homeLabel = homeLabel.trim();
+    // Dial codes: digits only, no "+" — used to normalize local-format phone numbers for SMS/WhatsApp.
+    const cleanDialCode = (v: unknown) => (typeof v === "string" ? v.replace(/\D/g, "") : "");
+    if (cleanDialCode(homeCountryCode)) data.homeCountryCode = cleanDialCode(homeCountryCode);
+    if (cleanDialCode(flagCountryCode)) data.flagCountryCode = cleanDialCode(flagCountryCode);
     const updated = await storage.upsertCountryFlagSettings(user.organizationId, data);
     await auditLog(req, "UPDATE_COUNTRY_FLAG_SETTINGS", "CountryFlagSettings", user.organizationId, before, updated);
     return res.json(updated);

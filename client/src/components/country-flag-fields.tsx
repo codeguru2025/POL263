@@ -7,6 +7,10 @@ export interface CountryFlagSettings {
   isEnabled: boolean;
   flagLabel: string;
   homeLabel: string;
+  /** Dial codes (digits only) for SMS/WhatsApp phone normalization. Optional here so older
+   *  API responses (pre-migration) still type-check; callers default to "263"/"27". */
+  homeCountryCode?: string;
+  flagCountryCode?: string;
   updatedAt: string;
 }
 

@@ -934,6 +934,8 @@ export class DatabaseStorage implements IStorage {
       isEnabled: false,
       flagLabel: "South Africa",
       homeLabel: "Zimbabwe",
+      homeCountryCode: "263",
+      flagCountryCode: "27",
       updatedAt: new Date(),
     };
   }

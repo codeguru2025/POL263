@@ -294,6 +294,11 @@ export async function dispatchNotification(
     if (templates.length > 0) {
       let clientEmail: string | null | undefined;
       let clientPhone: string | null | undefined;
+      // Dial code for local-format ("0…") recipient numbers, resolved once per dispatch: the
+      // cross-border code when this notification is about a flagged policy, the org home code
+      // otherwise. Left undefined until the first SMS template needs it.
+      let smsCountryCode: string | undefined;
+      let smsCountryCodeResolved = false;
       for (const tmpl of templates) {
         const renderedSubject = renderTemplate(tmpl.subject || "", ctx);
         const renderedBody = renderTemplate(tmpl.bodyTemplate, ctx);
@@ -349,12 +354,22 @@ export async function dispatchNotification(
               const client = await storage.getClient(clientId, orgId);
               clientPhone = client?.phone ?? null;
             }
+            if (clientPhone && !smsCountryCodeResolved) {
+              smsCountryCodeResolved = true;
+              const cf = await storage.getCountryFlagSettings(orgId);
+              let crossBorder = false;
+              if (cf.isEnabled && ctx.policyId) {
+                const pol = await storage.getPolicy(ctx.policyId, orgId);
+                crossBorder = !!pol?.isSouthAfrica;
+              }
+              smsCountryCode = crossBorder ? cf.flagCountryCode : cf.homeCountryCode;
+            }
             if (clientPhone) {
               // sendSms() never throws — check its result explicitly, same reasoning as the
               // email branch above: the optimistic "sent" log written before this call needs
               // correcting on a real failure, or a message that never arrived stays recorded
               // as delivered with no way for staff/the client to ever discover it.
-              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional" });
+              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional", countryCode: smsCountryCode });
               if (!result.ok) {
                 await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
               }

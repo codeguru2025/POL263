@@ -150,6 +150,14 @@ export const countryFlagSettings = pgTable("country_flag_settings", {
   flagLabel: text("flag_label").default("South Africa").notNull(),
   /** Label for the default/home case, e.g. "Zimbabwe". */
   homeLabel: text("home_label").default("Zimbabwe").notNull(),
+  /** Dial code (digits only, no "+") for the default/home case, e.g. "263" (Zimbabwe). Prepended
+   *  to a recipient phone stored in local "0…" format when sending SMS/WhatsApp. Defaults to
+   *  "263" — the value hardcoded everywhere before this was configurable. */
+  homeCountryCode: text("home_country_code").default("263").notNull(),
+  /** Dial code (digits only, no "+") for the flagged/cross-border case, e.g. "27" (South Africa).
+   *  Used instead of homeCountryCode when the policy being notified about carries the cross-border
+   *  flag, so a multi-country tenant reaches each client on the right network. */
+  flagCountryCode: text("flag_country_code").default("27").notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export const insertCountryFlagSettingsSchema = createInsertSchema(countryFlagSettings).omit({ updatedAt: true });

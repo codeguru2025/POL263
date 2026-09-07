@@ -136,13 +136,15 @@ export default function StaffSettings() {
     queryKey: ["/api/country-flag-settings"],
     enabled: !isControlPlaneMode && canManageSettings,
   });
-  const [countryFlagForm, setCountryFlagForm] = useState({ isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe" });
+  const [countryFlagForm, setCountryFlagForm] = useState({ isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe", homeCountryCode: "263", flagCountryCode: "27" });
   useEffect(() => {
     if (countryFlagSettings) {
       setCountryFlagForm({
         isEnabled: countryFlagSettings.isEnabled,
         flagLabel: countryFlagSettings.flagLabel,
         homeLabel: countryFlagSettings.homeLabel,
+        homeCountryCode: countryFlagSettings.homeCountryCode ?? "263",
+        flagCountryCode: countryFlagSettings.flagCountryCode ?? "27",
       });
     }
   }, [countryFlagSettings]);
@@ -975,6 +977,32 @@ export default function StaffSettings() {
                       placeholder="e.g. Zimbabwe"
                     />
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="country-home-dial">Home dialing code</Label>
+                      <Input
+                        id="country-home-dial"
+                        inputMode="numeric"
+                        value={countryFlagForm.homeCountryCode}
+                        onChange={(e) => setCountryFlagForm({ ...countryFlagForm, homeCountryCode: e.target.value.replace(/\D/g, "") })}
+                        placeholder="263"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="country-flag-dial">Flagged country dialing code</Label>
+                      <Input
+                        id="country-flag-dial"
+                        inputMode="numeric"
+                        value={countryFlagForm.flagCountryCode}
+                        onChange={(e) => setCountryFlagForm({ ...countryFlagForm, flagCountryCode: e.target.value.replace(/\D/g, "") })}
+                        placeholder="27"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Used when sending a text message to a client whose number is saved in local format (starting with 0).
+                    A client on a flagged-country policy gets the flagged code; everyone else gets the home code.
+                  </p>
                   <Button
                     onClick={() => saveCountryFlagMutation.mutate()}
                     disabled={saveCountryFlagMutation.isPending || !countryFlagForm.flagLabel.trim() || !countryFlagForm.homeLabel.trim()}

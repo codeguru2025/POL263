@@ -14,6 +14,7 @@
  */
 
 import { structuredLog } from "./logger";
+import { normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
 
 export interface SendSmsOptions {
@@ -23,6 +24,10 @@ export interface SendSmsOptions {
    *  broadcasts. Some vendors (Africala included) require this to route correctly / avoid
    *  regulatory filtering — never send account notifications as "promotional". */
   kind?: "transactional" | "promotional" | "otp";
+  /** Dial code (digits only, no "+") to prepend when `to` is in local "0…" format. Resolved by
+   *  the caller from the recipient's country (org home vs. cross-border — see
+   *  country_flag_settings). Falls back to SMS_DEFAULT_COUNTRY_CODE / "263" when omitted. */
+  countryCode?: string;
 }
 
 /** Credentials resolved for a specific org — never read from process.env inside a provider. */
@@ -38,19 +43,13 @@ export interface SmsProvider {
 }
 
 /**
- * Strips everything but digits and prepends SMS_DEFAULT_COUNTRY_CODE when given a local-format
- * number (leading 0, no country code) — mirrors the equivalent normalization already done for
- * Paynow EcoCash numbers (server/payment-service.ts's buildRemoteParams), except configurable
- * rather than hardcoded to "263", since SMS recipients aren't restricted to one country's mobile
- * money rails the way EcoCash/OneMoney inherently are.
+ * Normalize a recipient number to bare international digits. Thin wrapper over
+ * server/phone.ts's normalizeMsisdn — kept as a named export for the existing call sites/tests.
+ * `defaultCountryCode` is the per-recipient dial code the caller resolved (org home vs.
+ * cross-border); when omitted it falls back to SMS_DEFAULT_COUNTRY_CODE / "263".
  */
-export function normalizePhoneForSms(raw: string): string {
-  let digits = String(raw || "").replace(/\D/g, "");
-  const defaultCountryCode = (process.env.SMS_DEFAULT_COUNTRY_CODE || "263").replace(/\D/g, "");
-  if (digits.startsWith("0") && digits.length <= 11) {
-    digits = defaultCountryCode + digits.slice(1);
-  }
-  return digits;
+export function normalizePhoneForSms(raw: string, defaultCountryCode?: string): string {
+  return normalizeMsisdn(raw, defaultCountryCode);
 }
 
 class AfricalaProvider implements SmsProvider {
@@ -68,7 +67,7 @@ class AfricalaProvider implements SmsProvider {
     }
 
     const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2"; // default: Transactional
-    const destinationAddress = normalizePhoneForSms(opts.to);
+    const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 
     try {
       const res = await fetch("https://api2.smsala.com/SendSmsV2", {

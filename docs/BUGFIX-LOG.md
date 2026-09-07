@@ -10,6 +10,48 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-07 — SMS phone normalization prepended one global country code, misdelivering a cross-border tenant's clients
+
+**Symptom:** A South African client's phone saved in local format (`0821234567`) would be sent to
+the SMS provider as `263821234567` (Zimbabwe) instead of `27821234567` (South Africa) — an invalid
+or misdirected destination. Same class of bug latent in the WhatsApp MFA-fallback path.
+
+**Root cause:** `server/sms-service.ts`'s `normalizePhoneForSms` prepended a single process-wide
+`SMS_DEFAULT_COUNTRY_CODE` (default `263`) to any `0…` number, with zero per-recipient country
+awareness. This was flagged-not-fixed on 2026-08-26 (see the 2026-09-01 entry's "deliberately not
+fixed") because it needed a schema decision: where does a recipient's country come from? Falakhe
+is a two-country tenant (`policies.is_south_africa`), and the app already has tenant-configurable
+cross-border flagging (`country_flag_settings`) — that's the answer.
+
+**Fix (files):**
+- `server/phone.ts` (new) — `normalizeMsisdn(raw, defaultCountryCode?)`: honors `+CC` / `00CC`
+  international formats as-is, only prepends a code to genuine local `0…` numbers, and takes the
+  code from the caller rather than a global. Single source of truth for both SMS and WhatsApp.
+- `shared/schema.ts` + `migrations/0120_country_flag_dial_codes.sql` — `country_flag_settings`
+  gains `home_country_code` (default `263`) and `flag_country_code` (default `27`).
+- `server/notifications.ts` — the SMS branch resolves the code once per dispatch: `flagCountryCode`
+  when country flagging is on *and* the notified policy carries the cross-border flag,
+  `homeCountryCode` otherwise. Passed to `sendSms` via the new `SendSmsOptions.countryCode`.
+- `server/sms-service.ts` / `server/whatsapp-service.ts` — thread `countryCode` through to
+  `normalizeMsisdn`; `normalizePhoneForSms` kept as a thin wrapper for existing call sites/tests.
+- `server/auth.ts` — MFA SMS/WhatsApp fallback passes the staff user's org home code.
+- `server/routes.ts` + `client/src/pages/staff/settings.tsx` — the two dial codes are editable in
+  Settings → Country Flag (digits-only, layman copy).
+
+**Verified:** `npm run check` clean; new `tests/unit/phone.test.ts` (8 cases incl. the exact
+`0821234567 → 27…` regression) + 3 new SMS-country-code cases in `tests/unit/notifications.test.ts`;
+full suite 603/603. Not live-tested — the Africala integration is still pre-first-send (Sender IDs
+now registered; see project memory).
+
+**Lesson for next time:** when a "prepend a default country code" helper exists, check whether the
+tenant is single-country. The tell is a global env var or hardcoded constant used for a
+per-recipient value. The right generalization here was an *existing* per-org config table
+(`country_flag_settings`) keyed off an *existing* per-policy flag (`is_south_africa`) — not a new
+per-client column and not a new global. Look for a table that already models the distinction
+before adding schema.
+
+---
+
 ## 2026-09-01 — Full-app audit: 4 parallel domains, 11 fixes (1 critical secret leak, 3 critical billing-correctness bugs, 1 high RBAC bypass, N+1s, a fail-open judgment call)
 
 **Context:** Augustus asked to check the entire app for edge cases, N+1 queries, and vulnerabilities.
@@ -255,7 +297,8 @@ country awareness — a real bug for a multi-country tenant (Falakhe has SA clie
 `is_south_africa`), but that's pre-existing code from a different, not-yet-live feature (SMS
 integration is still blocked on Sender ID approval — see project memory), not something touched
 this session, and fixing it properly needs a schema decision (where does a client's country come
-from?) rather than a quick patch. Also noted but not changed: `MFA_REQUIRED_PERMISSIONS`
+from?) rather than a quick patch. _(Fixed 2026-09-07 — see that entry at the top of this log:
+`country_flag_settings` gained per-org home/flag dial codes, selected per policy.)_ Also noted but not changed: `MFA_REQUIRED_PERMISSIONS`
 (`server/auth.ts`) is a hardcoded in-code Set rather than a DB-driven flag on the permissions table
 — a deliberate, defensible tradeoff (an admin-editable "which permissions require MFA" setting
 would itself need protecting), not a bug, but worth remembering if a new privileged permission is

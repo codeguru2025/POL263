@@ -9,6 +9,9 @@ const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule, mockSendSms
     getActiveTemplatesByEvent: vi.fn(),
     getClient: vi.fn(),
     createNotificationLog: vi.fn(),
+    updateNotificationLogStatus: vi.fn(),
+    getCountryFlagSettings: vi.fn(),
+    getPolicy: vi.fn(),
   },
   mockSendEmail: vi.fn(),
   mockPushToClient: vi.fn(),
@@ -48,7 +51,12 @@ describe("dispatchNotification — default-channel email", () => {
     vi.clearAllMocks();
     mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]); // no admin-configured template
-    mockStorage.createNotificationLog.mockResolvedValue(undefined);
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe", homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
     mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
   });
 
@@ -100,5 +108,62 @@ describe("dispatchNotification — default-channel email", () => {
 
     expect(mockSendEmail).not.toHaveBeenCalled();
     expect(mockStorage.getClient).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A recipient number saved in local "0…" format needs a country dial code prepended before the
+ * SMS provider can route it. That code must reflect the recipient's country, not a single global
+ * default — a cross-border tenant (Falakhe: Zimbabwe + South Africa) otherwise misdelivers.
+ * The SMS branch passes country_flag_settings' flag/home code based on the notified policy's
+ * cross-border flag; server/phone.ts does the actual prepending.
+ */
+describe("dispatchNotification — SMS recipient country code", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0821234567", firstName: "Jane", lastName: "Doe" });
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
+    mockHasModule.mockResolvedValue(true);
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([
+      { id: "t-sms", channel: "sms", subject: "", bodyTemplate: "Hi {first_name}" },
+    ]);
+  });
+
+  it("uses the home country code for a non-flagged policy", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: true, homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011" });
+
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ to: "0821234567", countryCode: "263" });
+  });
+
+  it("uses the flagged country code for a cross-border policy", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: true, homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: true });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011" });
+
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ countryCode: "27" });
+  });
+
+  it("uses the home code (never looks at the policy) when country flagging is disabled", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: false, homeCountryCode: "263", flagCountryCode: "27",
+    });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011" });
+
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ countryCode: "263" });
+    expect(mockStorage.getPolicy).not.toHaveBeenCalled();
   });
 });
