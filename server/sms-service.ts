@@ -66,12 +66,12 @@ class AfricalaProvider implements SmsProvider {
       return { ok: false, message: "Africala is not configured for this organization. Set an API token and Sender ID in Settings." };
     }
 
-    // Per SMSala's SendSmsV2 docs: messageType 1=Promotional, 2=Transactional, 3=OTP;
-    // messageEncoding 1=Default (2=ASCII, 3=Octet, 4=Latin1). There is NO "0" — an Africala
-    // support sample used "0" but it contradicts their own documentation, so use "1" (Default)
-    // and let the gateway pick the on-wire encoding.
+    // messageType 1=Promotional, 2=Transactional, 3=OTP.
+    // messageEncoding: SMSala's live panel dropdown maps 0=Default, 1=ASCII, 2=Octets, 3=Latin1,
+    // 8=UCS2 (the numbering in their PDF's encoding table is off by one). "0" (Default) lets the
+    // gateway auto-pick the on-wire encoding — this matches the sample Africala support sent.
     const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
-    const messageEncoding = "1";
+    const messageEncoding = "0";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 
     try {
