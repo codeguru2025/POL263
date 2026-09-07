@@ -255,7 +255,12 @@ export default function StaffSettings() {
   const [smsTestTo, setSmsTestTo] = useState("");
   const sendTestSmsMutation = useMutation({
     mutationFn: async () => (await apiRequest("POST", "/api/sms-config/test", { to: smsTestTo })).json(),
-    onSuccess: (r: any) => toast({ title: "Test message sent", description: r?.message || "Handed to the SMS provider." }),
+    onSuccess: (r: any) =>
+      toast(
+        r?.ok
+          ? { title: "Test message sent", description: r?.message || "Handed to the SMS provider." }
+          : { title: "Test message failed", description: r?.message || "The SMS provider rejected it.", variant: "destructive" },
+      ),
     onError: (e: any) => toast({ title: "Test message failed", description: e.message, variant: "destructive" }),
   });
 

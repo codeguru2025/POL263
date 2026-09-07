@@ -1284,9 +1284,15 @@ export class DatabaseStorage implements IStorage {
       const [created] = await tdb.insert(auditLogs).values(log).returning();
       return created;
     } catch (error: any) {
+      // Drizzle wraps the pg error: the constraint name and SQLSTATE live on error.cause, not
+      // error itself. Check both, plus the raw text and the FK SQLSTATE (23503), so this actually
+      // fires — otherwise every platform-owner action inside a dedicated-DB tenant fails to log.
+      const pg = error?.cause ?? error;
+      const blob = `${error?.message ?? ""} ${pg?.message ?? ""} ${pg?.detail ?? ""}`;
       const fkViolation =
-        error?.message?.includes("audit_logs_actor_id_users_id_fk") ||
-        error?.constraint === "audit_logs_actor_id_users_id_fk";
+        pg?.code === "23503" ||
+        pg?.constraint === "audit_logs_actor_id_users_id_fk" ||
+        blob.includes("audit_logs_actor_id_users_id_fk");
       if (fkViolation && log.actorId) {
         // Platform owners can switch into tenant DBs where their user row does not exist.
         // Keep the audit event by dropping actorId, but preserve actorEmail and request metadata.

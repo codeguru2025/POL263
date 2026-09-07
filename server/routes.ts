@@ -6435,7 +6435,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await auditLog(req, "SEND_TEST_SMS", "Organization", user.organizationId, null, {
       to: rawTo.replace(/\d(?=\d{3})/g, "•"), ok: result.ok,
     });
-    return res.status(result.ok ? 200 : 502).json(result);
+    // Always 200 — a provider rejection ("Ip Address Not Allowed", "Insufficient Credit", …) is a
+    // normal outcome the client must see, not a server error. Returning 5xx here makes the DO
+    // ingress swap our JSON body for a generic 502 page, hiding the real reason. The `ok` field
+    // carries success/failure.
+    return res.json(result);
   });
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {

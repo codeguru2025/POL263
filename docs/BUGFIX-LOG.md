@@ -50,6 +50,36 @@ per-recipient value. The right generalization here was an *existing* per-org con
 per-client column and not a new global. Look for a table that already models the distinction
 before adding schema.
 
+### Same day — "Send test SMS" showed a DO 502 page instead of the provider's rejection reason
+
+**Symptom:** clicking the new Send-test-SMS button returned DigitalOcean's generic
+`Error code: 502 / connection timed out` HTML page, twice — first because of an IPv6 stall, then,
+after that was fixed, still 502.
+
+**Two root causes:**
+1. `api2.smsala.com` is dual-stack; DO App Platform egress (with a dedicated egress IP) is
+   IPv4-only, and undici tried the AAAA records first and stalled ~10s each. Fix: `ipv4Dispatcher`
+   (undici `Agent` with `connect.family=4`) in `server/phone.ts`, used by `sms-service.ts` and
+   `whatsapp-service.ts`, plus a 20s `AbortSignal.timeout`.
+2. `POST /api/sms-config/test` returned **HTTP 502** for a *provider rejection*
+   (`Ip Address Not Allowed`). The DO ingress intercepts any 5xx from the app and swaps the body
+   for its own error page, so the real reason never reached the browser. Fix: always return 200;
+   the `{ok, message}` body carries success/failure, and the client toast branches on `ok`.
+   **Runtime logs (`level:"info" ... "POST /api/sms-config/test 502 in 374ms"` — 374ms, not 60s)
+   were the tell: a fast 502 is an app-chosen status, a slow one is a gateway timeout.**
+
+**Also fixed while here — `createAuditLog`'s FK-violation fallback never fired.** It inspected
+`error.message` / `error.constraint`, but Drizzle wraps the pg error — the constraint name and
+SQLSTATE are on `error.cause`. So every platform-owner action inside a dedicated-DB tenant (whose
+`users` table has no row for that platform owner) failed to audit-log, retried identically, and
+gave up. Now checks `error.cause.code === "23503"` / `error.cause.constraint` / the text of both.
+
+**Lesson for next time:** (a) an app endpoint must never return 5xx for a normal
+business-logic failure the caller needs to see — the platform hides the body. (b) When matching on
+a DB error's constraint name or SQLSTATE, look at `error.cause`, not `error` — the ORM wrapper's
+own `.message` is generic. (c) Response time distinguishes a self-inflicted 502 from a gateway
+timeout.
+
 ### Same day — Africala SMS hardcoded `messageEncoding: "1"` (Unicode)
 
 **Symptom:** every SMS would bill at the Unicode rate (~70 chars/segment) instead of GSM-7
