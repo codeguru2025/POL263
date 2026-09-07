@@ -6414,6 +6414,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ok: true });
   });
 
+  // Diagnostic: the public IPv4 address the server sends from — the exact IP an SMS provider's
+  // allowlist must contain. Answers "which IP did SMSala see?" without another round of guessing.
+  app.get("/api/sms-config/egress-ip", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (_req, res) => {
+    const { ipv4Dispatcher } = await import("./phone");
+    const out: Record<string, string> = {};
+    for (const url of ["https://api.ipify.org", "https://ifconfig.me/ip"]) {
+      try {
+        const r = await fetch(url, { dispatcher: ipv4Dispatcher, signal: AbortSignal.timeout(8000) } as any);
+        out[new URL(url).host] = (await r.text()).trim();
+      } catch (e: any) {
+        out[new URL(url).host] = `error: ${e?.message || "failed"}`;
+      }
+    }
+    return res.json(out);
+  });
+
   // Send a one-off test SMS through the tenant's own SMS config, from the server (so it exercises
   // the real provider path and the app's egress IP — not the operator's browser). Rate-limited to
   // avoid it being used as a free SMS relay.
