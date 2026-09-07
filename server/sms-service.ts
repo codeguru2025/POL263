@@ -14,7 +14,7 @@
  */
 
 import { structuredLog } from "./logger";
-import { ipv4Dispatcher, isGsm7, normalizeMsisdn } from "./phone";
+import { ipv4Dispatcher, normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
 
 export interface SendSmsOptions {
@@ -66,11 +66,12 @@ class AfricalaProvider implements SmsProvider {
       return { ok: false, message: "Africala is not configured for this organization. Set an API token and Sender ID in Settings." };
     }
 
-    // Africala messageType: "1" promotional, "2" transactional, "3" OTP (per SMSala's SendSmsV2 docs).
+    // Per SMSala's SendSmsV2 docs: messageType 1=Promotional, 2=Transactional, 3=OTP;
+    // messageEncoding 1=Default (2=ASCII, 3=Octet, 4=Latin1). There is NO "0" — an Africala
+    // support sample used "0" but it contradicts their own documentation, so use "1" (Default)
+    // and let the gateway pick the on-wire encoding.
     const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
-    // messageEncoding: "0" = GSM-7 (plain text, ~160 chars/segment), "1" = Unicode (~70 and
-    // costlier). Only pay for Unicode when the message actually needs it.
-    const messageEncoding = isGsm7(opts.message) ? "0" : "1";
+    const messageEncoding = "1";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 
     try {
