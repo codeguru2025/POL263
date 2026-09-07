@@ -50,6 +50,25 @@ per-recipient value. The right generalization here was an *existing* per-org con
 per-client column and not a new global. Look for a table that already models the distinction
 before adding schema.
 
+### Same day — Africala SMS hardcoded `messageEncoding: "1"` (Unicode)
+
+**Symptom:** every SMS would bill at the Unicode rate (~70 chars/segment) instead of GSM-7
+(~160), roughly doubling per-message cost. Noticed when Augustus pasted Africala's own sample
+`SendSmsV2` payload, which uses `"0"`.
+
+**Root cause:** `server/sms-service.ts` hardcoded `messageEncoding: "1"` — presumably a
+play-it-safe default written before the real API example was in hand.
+
+**Fix:** `isGsm7()` in `server/phone.ts` (GSM 03.38 basic + extension table); the provider sends
+`"0"` when the message is GSM-7-encodable, `"1"` only when it genuinely needs it (emoji, smart
+quotes, non-Latin). `server/phone.ts` now also holds `isGsm7` alongside `normalizeMsisdn` — both
+are dependency-free messaging helpers, importable from one-off scripts (`script/test-africala-sms.ts`).
+Covered in `tests/unit/phone.test.ts`.
+
+**Lesson for next time:** for a paid third-party API, don't hardcode an enum "to be safe" — the
+safe-looking value (Unicode) was the expensive one. Match the vendor's documented example, and
+for encoding/segment-count fields, compute from the payload.
+
 ---
 
 ## 2026-09-01 — Full-app audit: 4 parallel domains, 11 fixes (1 critical secret leak, 3 critical billing-correctness bugs, 1 high RBAC bypass, N+1s, a fail-open judgment call)

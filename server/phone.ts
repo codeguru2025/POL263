@@ -1,6 +1,10 @@
 /**
- * Phone-number normalization for outbound messaging APIs (SMS, WhatsApp), which want bare
- * international digits — no "+", spaces, or punctuation.
+ * Helpers for outbound messaging APIs (SMS, WhatsApp): recipient-number normalization
+ * (normalizeMsisdn) and message-encoding detection (isGsm7). No database or app dependencies —
+ * safe to import from one-off scripts.
+ *
+ * normalizeMsisdn normalizes a phone number to bare international digits — no "+", spaces, or
+ * punctuation.
  *
  * Rules, applied in order:
  *   - "+27821234567"      → already international            → "27821234567"
@@ -29,4 +33,24 @@ export function normalizeMsisdn(raw: string, defaultCountryCode?: string): strin
   if (digits.startsWith("0") && digits.length <= 11) return code + digits.slice(1);
 
   return digits;
+}
+
+// GSM 03.38 default alphabet + extension table. A message using only these characters sends as
+// plain GSM-7 (Africala messageEncoding "0", ~160 chars/segment); anything outside it — emoji,
+// smart quotes, en/em dashes, non-Latin scripts — needs Unicode ("1", ~70 chars/segment and a
+// higher per-segment cost). Africala's own sample payload uses "0" for plain English; hardcoding
+// "1" doubled the cost of every notification.
+const GSM7_BASIC =
+  "@£$¥èéùìòÇ\nØø\rÅå" +
+  "Δ_ΦΓΛΩΠΨΣΘΞÆæßÉ" +
+  " !\"#¤%&'()*+,-./0123456789:;<=>?¡" +
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§" +
+  "¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM7_EXTENSION = "^{}\\[~]|€\f";
+
+export function isGsm7(text: string): boolean {
+  for (const ch of text) {
+    if (!GSM7_BASIC.includes(ch) && !GSM7_EXTENSION.includes(ch)) return false;
+  }
+  return true;
 }

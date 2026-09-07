@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { normalizeMsisdn } from "../../server/phone";
+import { normalizeMsisdn, isGsm7 } from "../../server/phone";
 
 describe("normalizeMsisdn", () => {
   const orig = process.env.SMS_DEFAULT_COUNTRY_CODE;
@@ -46,5 +46,33 @@ describe("normalizeMsisdn", () => {
   it("handles empty / junk input without throwing", () => {
     expect(normalizeMsisdn("")).toBe("");
     expect(normalizeMsisdn(undefined as any)).toBe("");
+  });
+});
+
+/**
+ * Africala messageEncoding: "0" = GSM-7 (~160 chars/segment), "1" = Unicode (~70, costlier).
+ * The provider call hardcoded "1", doubling the cost of every plain-English notification;
+ * Africala's own sample payload uses "0". isGsm7 drives the choice.
+ */
+describe("isGsm7", () => {
+  it("accepts plain English notification text", () => {
+    expect(isGsm7("Welcome, Adnan. Your policy 192121 with Hamdani is now active.")).toBe(true);
+  });
+
+  it("accepts GSM-7 punctuation and the currency/extension characters", () => {
+    expect(isGsm7("Pay $5 (~5%) now: ref #A-1. Thanks!")).toBe(true);
+    expect(isGsm7("Cost: €10 or £8")).toBe(true); // € £
+  });
+
+  it("rejects emoji", () => {
+    expect(isGsm7("Policy active ✅")).toBe(false);
+  });
+
+  it("rejects curly quotes and en/em dashes", () => {
+    expect(isGsm7("Your “policy” – now active")).toBe(false);
+  });
+
+  it("treats an empty message as GSM-7", () => {
+    expect(isGsm7("")).toBe(true);
   });
 });

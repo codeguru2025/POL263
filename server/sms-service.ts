@@ -14,7 +14,7 @@
  */
 
 import { structuredLog } from "./logger";
-import { normalizeMsisdn } from "./phone";
+import { isGsm7, normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
 
 export interface SendSmsOptions {
@@ -24,7 +24,7 @@ export interface SendSmsOptions {
    *  broadcasts. Some vendors (Africala included) require this to route correctly / avoid
    *  regulatory filtering — never send account notifications as "promotional". */
   kind?: "transactional" | "promotional" | "otp";
-  /** Dial code (digits only, no "+") to prepend when `to` is in local "0…" format. Resolved by
+  /** Dial code (digits only, no "+") to prepend when `to` is in local "0..." format. Resolved by
    *  the caller from the recipient's country (org home vs. cross-border — see
    *  country_flag_settings). Falls back to SMS_DEFAULT_COUNTRY_CODE / "263" when omitted. */
   countryCode?: string;
@@ -52,20 +52,6 @@ export function normalizePhoneForSms(raw: string, defaultCountryCode?: string): 
   return normalizeMsisdn(raw, defaultCountryCode);
 }
 
-// GSM 03.38 default alphabet + extension table. A message using only these characters sends as
-// plain GSM-7 (Africala messageEncoding "0", ~160 chars/segment); anything outside it (emoji,
-// curly quotes, accented letters beyond the set) needs Unicode ("1", ~70 chars/segment and a
-// higher per-segment cost). Africala's own sample payload uses "0" for a plain-English message —
-// hardcoding "1" doubled the cost of every notification.
-const GSM7_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
-const GSM7_EXTENSION = "^{}\\[~]|€";
-export function isGsm7(text: string): boolean {
-  for (const ch of text) {
-    if (!GSM7_BASIC.includes(ch) && !GSM7_EXTENSION.includes(ch)) return false;
-  }
-  return true;
-}
-
 class AfricalaProvider implements SmsProvider {
   readonly name = "africala";
 
@@ -80,7 +66,11 @@ class AfricalaProvider implements SmsProvider {
       return { ok: false, message: "Africala is not configured for this organization. Set an API token and Sender ID in Settings." };
     }
 
-    const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2"; // default: Transactional
+    // Africala messageType: "1" promotional, "2" transactional, "3" OTP (per SMSala's SendSmsV2 docs).
+    const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
+    // messageEncoding: "0" = GSM-7 (plain text, ~160 chars/segment), "1" = Unicode (~70 and
+    // costlier). Only pay for Unicode when the message actually needs it.
+    const messageEncoding = isGsm7(opts.message) ? "0" : "1";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 
     try {
@@ -90,7 +80,7 @@ class AfricalaProvider implements SmsProvider {
         body: JSON.stringify([{
           apiToken,
           messageType,
-          messageEncoding: isGsm7(opts.message) ? "0" : "1",
+          messageEncoding,
           destinationAddress,
           sourceAddress,
           messageText: opts.message,
