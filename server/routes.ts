@@ -173,6 +173,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     message: { message: "Too many AI requests, please try again in a few minutes." },
   });
 
+  // Test-SMS button (POST /api/sms-config/test) — tight cap so it can't be used as a free relay.
+  const smsTestLimiter = rateLimit({
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: getAiRedisStore?.("sms-test"),
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    keyGenerator: (req: any) => req.user?.id ?? req.ip,
+    message: { ok: false, message: "Too many test messages — wait a few minutes and try again." },
+  });
+
   async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
     if (!policy?.id || !policy?.clientId) return [];
     const members = await storage.getPolicyMembers(policy.id, orgId);
@@ -6401,6 +6412,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       apiTokenChanged: !!patch.apiToken,
     });
     return res.json({ ok: true });
+  });
+
+  // Send a one-off test SMS through the tenant's own SMS config, from the server (so it exercises
+  // the real provider path and the app's egress IP — not the operator's browser). Rate-limited to
+  // avoid it being used as a free SMS relay.
+  app.post("/api/sms-config/test", requireAuth, requireTenantScope, requirePermission("manage:settings"), smsTestLimiter, async (req, res) => {
+    const user = req.user as any;
+    const rawTo = typeof req.body?.to === "string" ? req.body.to.trim() : "";
+    if (!rawTo || rawTo.replace(/\D/g, "").length < 8) {
+      return res.status(400).json({ ok: false, message: "Enter a valid phone number to send the test to." });
+    }
+    const { sendSms } = await import("./sms-service");
+    const org = await storage.getOrganization(user.organizationId);
+    const cf = await storage.getCountryFlagSettings(user.organizationId);
+    const result = await sendSms(user.organizationId, {
+      to: rawTo,
+      message: `${org?.name || "POL263"}: this is a test message confirming SMS is working. No action needed.`,
+      kind: "transactional",
+      countryCode: cf.homeCountryCode,
+    });
+    await auditLog(req, "SEND_TEST_SMS", "Organization", user.organizationId, null, {
+      to: rawTo.replace(/\d(?=\d{3})/g, "•"), ok: result.ok,
+    });
+    return res.status(result.ok ? 200 : 502).json(result);
   });
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {

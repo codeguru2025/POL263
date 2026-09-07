@@ -55,8 +55,13 @@ async function main() {
   try {
     const parsed = JSON.parse(body);
     const first = Array.isArray(parsed) ? parsed[0] : parsed;
+    // MessageId can exceed JS's safe-integer range — pull it verbatim from the raw text so it
+    // can be quoted to Africala for a DLR lookup.
+    const rawId = body.match(/"MessageId"\s*:\s*"?(\d+)"?/)?.[1];
     if (first?.OperationCode === 0 && first?.Status === "Success") {
-      console.log(`\n✅ Accepted by Africala. MessageId: ${first.MessageId}`);
+      console.log(`\n✅ Accepted by Africala. MessageId: ${rawId || first.MessageId}`);
+      console.log("   (\"Message Submitted\" = accepted by the aggregator, NOT confirmed delivered to the handset —");
+      console.log("    check the phone, and if nothing arrives ask Africala for the DLR status of this MessageId.)");
     } else {
       console.log(`\n❌ Rejected: ${first?.Remarks || first?.Status || "unknown"}`);
     }

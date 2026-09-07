@@ -252,6 +252,12 @@ export default function StaffSettings() {
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+  const [smsTestTo, setSmsTestTo] = useState("");
+  const sendTestSmsMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/sms-config/test", { to: smsTestTo })).json(),
+    onSuccess: (r: any) => toast({ title: "Test message sent", description: r?.message || "Handed to the SMS provider." }),
+    onError: (e: any) => toast({ title: "Test message failed", description: e.message, variant: "destructive" }),
+  });
 
   // ── Self-service module toggles — see server/module-gate.ts. `inPlan: false` modules render
   // disabled (can't self-grant something not on the billing plan); anything currently on can
@@ -909,6 +915,26 @@ export default function StaffSettings() {
                     {saveSmsConfigMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Save
                   </Button>
+                  <div className="space-y-2 border-t pt-4">
+                    <Label htmlFor="sms-test-to">Send a test message</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="sms-test-to"
+                        value={smsTestTo}
+                        onChange={(e) => setSmsTestTo(e.target.value)}
+                        placeholder="e.g. 0771234567"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => sendTestSmsMutation.mutate()}
+                        disabled={sendTestSmsMutation.isPending || smsTestTo.replace(/\D/g, "").length < 8}
+                      >
+                        {sendTestSmsMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Send test
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Sends one message using the settings above, so you can confirm delivery before switching SMS notices on.</p>
+                  </div>
                 </div>
               </CardSection>
               <CardSection
