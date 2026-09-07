@@ -9,7 +9,15 @@
  * Token / Sender ID resolution: --token / --sender flags, else AFRICALA_API_TOKEN /
  * SMS_SENDER_ID env vars. Nothing is persisted.
  */
+import dns from "node:dns";
+import { Agent, setGlobalDispatcher } from "undici";
 import { normalizeMsisdn, isGsm7 } from "../server/phone";
+
+// SMSala allowlists by source IP. api2.smsala.com is dual-stack (Cloudflare); force IPv4 so the
+// request always egresses from the machine's stable IPv4 address (the one to register with
+// Africala), never a rotating IPv6 privacy address.
+dns.setDefaultResultOrder("ipv4first");
+setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
