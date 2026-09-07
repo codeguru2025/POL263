@@ -18,6 +18,18 @@
  * server/notifications.ts). Fallback order when no code is passed: SMS_DEFAULT_COUNTRY_CODE env,
  * then "263" (Zimbabwe — the value hardcoded before this was configurable).
  */
+
+import { Agent } from "undici";
+
+/**
+ * Dispatcher that forces IPv4 for outbound fetch(). The SMS/WhatsApp provider hosts
+ * (api2.smsala.com, graph.facebook.com) are dual-stack, but DigitalOcean App Platform egress —
+ * especially with a dedicated egress IP — is IPv4-only, and an outbound IPv6 SYN there
+ * black-holes instead of failing fast, hanging the request until the platform's ~60s gateway
+ * timeout (surfacing as a 502). Pass this as `dispatcher` on those fetch calls.
+ */
+export const ipv4Dispatcher = new Agent({ connect: { family: 4 } });
+
 export function normalizeMsisdn(raw: string, defaultCountryCode?: string): string {
   const trimmed = String(raw || "").trim();
   const hasPlus = trimmed.startsWith("+");

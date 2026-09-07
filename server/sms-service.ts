@@ -14,7 +14,7 @@
  */
 
 import { structuredLog } from "./logger";
-import { isGsm7, normalizeMsisdn } from "./phone";
+import { ipv4Dispatcher, isGsm7, normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
 
 export interface SendSmsOptions {
@@ -85,7 +85,11 @@ class AfricalaProvider implements SmsProvider {
           sourceAddress,
           messageText: opts.message,
         }]),
-      });
+        // Force IPv4 — DO App Platform egress is IPv4-only and an IPv6 attempt hangs to timeout.
+        dispatcher: ipv4Dispatcher,
+        // Belt-and-braces: never let a stuck connection hang the request past the gateway timeout.
+        signal: AbortSignal.timeout(20_000),
+      } as any);
 
       const body = await res.json().catch(() => null);
       const first = Array.isArray(body) ? body[0] : null;

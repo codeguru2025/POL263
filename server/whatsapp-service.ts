@@ -15,7 +15,7 @@
  * blind since the template doesn't exist yet as of this writing (business verification pending).
  */
 import { structuredLog } from "./logger";
-import { normalizeMsisdn } from "./phone";
+import { ipv4Dispatcher, normalizeMsisdn } from "./phone";
 
 export interface SendWhatsAppOtpOptions {
   to: string;
@@ -74,7 +74,10 @@ export async function sendWhatsAppOtp(opts: SendWhatsAppOtpOptions): Promise<{ o
           ],
         },
       }),
-    });
+      // Force IPv4 (DO App Platform egress is IPv4-only); cap the wait well under the gateway timeout.
+      dispatcher: ipv4Dispatcher,
+      signal: AbortSignal.timeout(20_000),
+    } as any);
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       structuredLog("error", "WhatsApp OTP send failed", { status: res.status, error: data?.error?.message, to });
