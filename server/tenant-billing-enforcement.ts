@@ -11,7 +11,7 @@
  * so everything here is best-effort and idempotent, run outside the payment transaction — the
  * same shape as tenant-db-commissioning.
  */
-import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import {
   billingPlans,
@@ -51,6 +51,32 @@ async function openFeeInvoiceTotalUsd(subscriptionId: string): Promise<number> {
       inArray(tenantInvoices.kind, ["revenue_share", "subscription"]),
     ));
   return parseFloat(row?.total ?? "0");
+}
+
+/** True if a cap invoice was already raised for this tenant within the last `withinDays` days and
+ *  its invoice is still open (unpaid). Prevents the daily sweep from raising a fresh cap invoice
+ *  every day a tenant sits on an unpaid balance. */
+async function recentUnpaidCapInvoiceExists(tenantId: string, withinDays: number): Promise<boolean> {
+  const since = new Date(Date.now() - withinDays * 24 * 60 * 60 * 1000);
+  const rows = await cpDb
+    .select({ invoiceId: tenantBillingEvents.invoiceId })
+    .from(tenantBillingEvents)
+    .where(and(
+      eq(tenantBillingEvents.tenantId, tenantId),
+      eq(tenantBillingEvents.type, "outstanding_cap_exceeded"),
+      gte(tenantBillingEvents.createdAt, since),
+    ));
+  const invoiceIds = rows.map((r) => r.invoiceId).filter((x): x is string => !!x);
+  if (invoiceIds.length === 0) {
+    // Older events predate the invoiceId being stamped — fall back to "any recent cap event".
+    return rows.length > 0;
+  }
+  const [openOne] = await cpDb
+    .select({ id: tenantInvoices.id })
+    .from(tenantInvoices)
+    .where(and(inArray(tenantInvoices.id, invoiceIds), eq(tenantInvoices.status, "open")))
+    .limit(1);
+  return !!openOne;
 }
 
 /**
@@ -106,6 +132,12 @@ export async function enforceOutstandingFeeCap(
 
   if (exposureUsd <= cap || uninvoicedAccrualUsd < 0.01) return null;
 
+  // Don't pile on. The cap is a "make it visible early" control, not a "re-bill daily" one —
+  // once a cap invoice is out and unpaid, escalation is the past-due → grace → suspend path's
+  // job. Without this the daily sweep raised a fresh (tiny, incremental) cap invoice every single
+  // day a tenant sat on an unpaid balance (Falakhe had ~10 of them, $0.60–$34 each).
+  if (await recentUnpaidCapInvoiceExists(sub.tenantId, graceDays)) return null;
+
   structuredLog("warn", "Outstanding-fee cap exceeded — raising an early invoice (no suspension)", {
     tenantId: sub.tenantId, cap, openInvoicedUsd, uninvoicedAccrualUsd,
   });
@@ -119,9 +151,20 @@ export async function enforceOutstandingFeeCap(
       amount: money(uninvoicedAccrualUsd),
       currency: "USD",
       status: "open",
+      // The line items must describe the amount actually being billed now (uninvoicedAccrualUsd),
+      // NOT the full unsettled ledger — grafting rawAccrual's full-period breakdown onto a small
+      // "delta over the cap" charge produced invoices whose line items summed to far more than
+      // "Total due". Keep it to one plain line that sums to the amount, plus a why line at $0.
       lineItems: [
-        ...rawAccrual.lineItems,
-        { label: `Billed now because unpaid platform fees passed the $${money(cap)} limit`, amount: "0.00" },
+        { label: `Platform fees accrued but not yet invoiced`, amount: money(uninvoicedAccrualUsd) },
+        {
+          label: openInvoicedUsd > 0.005
+            ? `Billed now instead of at month-end: your unpaid platform fees total $${money(exposureUsd)} `
+              + `($${money(openInvoicedUsd)} already on an earlier unpaid invoice, plus $${money(uninvoicedAccrualUsd)} new), `
+              + `which is over the $${money(cap)} limit.`
+            : `Billed now instead of at month-end because your unpaid platform fees passed the $${money(cap)} limit.`,
+          amount: "0.00",
+        },
       ],
       periodStart: sub.lastSettlementAt ?? sub.currentPeriodStart,
       periodEnd: now,
@@ -133,6 +176,7 @@ export async function enforceOutstandingFeeCap(
     await tx.update(tenantSubscriptions).set({ lastSettlementAt: now, updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
     await tx.insert(tenantBillingEvents).values({
       tenantId: sub.tenantId,
+      invoiceId: row.id,
       type: "outstanding_cap_exceeded",
       detail: { cap: money(cap), openInvoicedUsd: money(openInvoicedUsd), billedNowUsd: money(uninvoicedAccrualUsd), dueInDays: graceDays },
     });

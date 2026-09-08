@@ -10,6 +10,37 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-08 — Outstanding-fee-cap raised a new (nonsense) invoice every single day
+
+**Symptom:** Falakhe's most recent platform-fee invoice showed line items summing to $483.45 but a
+"Total due" of $25.98. It also had ~10 sibling invoices, one or two per day 09-01 → 09-08, each
+$0.60–$34, all `open`, all with the same mismatch.
+
+**Two bugs in `enforceOutstandingFeeCap` (`server/tenant-billing-enforcement.ts`):**
+1. **Line items copied from the wrong basis.** The invoice `amount` is `uninvoicedAccrualUsd`
+   (accrued fees minus what open invoices already cover — a small delta), but `lineItems` was
+   `[...rawAccrual.lineItems, capLine]` — `rawAccrual` being the *entire* unsettled ledger. So the
+   line items described $483 while only $25.98 was billed. Fixed: line items are now one plain
+   line that equals the amount, plus a $0 "why" line spelling out the exposure vs the cap.
+2. **No cooldown — it re-raised daily.** The guard was only `exposureUsd > cap && uninvoicedAccrual
+   >= $0.01`. Every sweep, a bit more fee had accrued, so every sweep raised a fresh tiny invoice.
+   Fixed: `recentUnpaidCapInvoiceExists(tenantId, graceDays)` — skip if a cap invoice raised in the
+   last grace-period window is still unpaid. Once a cap invoice is out, escalation is the
+   past-due → grace → suspend path's job, not more invoices. Also stamped `tenant_billing_events.
+   invoice_id` on the cap event so the link is queryable.
+
+**Cleanup:** the ~10 junk cap invoices for Falakhe were voided directly in the control plane
+(they were bug artifacts; the fees they represent sit in the still-open base invoice
+BILL-…20260831 for $367.60, whose own line items are consistent). LGR-217 correction (separate,
+above) was also done this session.
+
+**Lesson for next time:** an invoice's `lineItems` must always sum to its `amount` — when you
+build one from a computed breakdown but bill a different (net/delta/capped) number, rebuild the
+line items around the number you're actually charging. And any "bill early" control needs an
+"already billed, don't repeat" guard or the daily sweep turns it into a spam cannon.
+
+---
+
 ## 2026-09-08 — Group receipt 500s for a platform owner in a dedicated-DB tenant: audit-log FK poisons the whole transaction
 
 **Symptom:** Augustus (platform owner) receipted a group ("Siyabonga Nkosi"), selected all 16
