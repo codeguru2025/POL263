@@ -838,6 +838,10 @@ export interface IStorage {
   commitImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ successRows: number; errorRows: number }>;
 }
 
+// Monotonic suffix for SAVEPOINT names created by createAuditLog inside a caller transaction —
+// just needs to be unique per statement, not globally.
+let auditSavepointSeq = 0;
+
 export class DatabaseStorage implements IStorage {
   async getOrganization(id: string): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
@@ -1280,27 +1284,50 @@ export class DatabaseStorage implements IStorage {
     const orgId = log.organizationId;
     if (!orgId) throw new Error("createAuditLog: organizationId is required");
     const tdb = tx ?? await getDbForOrg(orgId);
-    try {
-      const [created] = await tdb.insert(auditLogs).values(log).returning();
+
+    const insert = async (values: InsertAuditLog) => {
+      const [created] = await tdb.insert(auditLogs).values(values).returning();
       return created;
-    } catch (error: any) {
-      // Drizzle wraps the pg error: the constraint name and SQLSTATE live on error.cause, not
-      // error itself. Check both, plus the raw text and the FK SQLSTATE (23503), so this actually
-      // fires — otherwise every platform-owner action inside a dedicated-DB tenant fails to log.
+    };
+    // Drizzle wraps the pg error: the constraint name and SQLSTATE live on error.cause, not
+    // error itself. Check both, plus the raw text and the FK SQLSTATE (23503) — otherwise the
+    // actorId-drop fallback never fires and every platform-owner action inside a dedicated-DB
+    // tenant (whose users table has no row for that platform owner) fails to audit-log.
+    const isActorFk = (error: any) => {
       const pg = error?.cause ?? error;
       const blob = `${error?.message ?? ""} ${pg?.message ?? ""} ${pg?.detail ?? ""}`;
-      const fkViolation =
+      return (
         pg?.code === "23503" ||
         pg?.constraint === "audit_logs_actor_id_users_id_fk" ||
-        blob.includes("audit_logs_actor_id_users_id_fk");
-      if (fkViolation && log.actorId) {
-        // Platform owners can switch into tenant DBs where their user row does not exist.
-        // Keep the audit event by dropping actorId, but preserve actorEmail and request metadata.
-        const [createdWithoutActor] = await tdb
-          .insert(auditLogs)
-          .values({ ...log, actorId: null })
-          .returning();
-        return createdWithoutActor;
+        blob.includes("audit_logs_actor_id_users_id_fk")
+      );
+    };
+
+    if (!tx) {
+      try {
+        return await insert(log);
+      } catch (error: any) {
+        if (isActorFk(error) && log.actorId) return await insert({ ...log, actorId: null });
+        throw error;
+      }
+    }
+
+    // Inside a caller-supplied transaction a failed INSERT poisons the whole transaction, so the
+    // actorId-drop retry can only work behind a SAVEPOINT. Without this, a platform owner
+    // receipting a dedicated-DB tenant's group hits the FK, the retry then fails with "current
+    // transaction is aborted", and the caller's entire batch (e.g. 16 receipts) rolls back.
+    const sp = `audit_sp_${++auditSavepointSeq}`;
+    await tx.execute(sql.raw(`SAVEPOINT ${sp}`));
+    try {
+      const created = await insert(log);
+      await tx.execute(sql.raw(`RELEASE SAVEPOINT ${sp}`));
+      return created;
+    } catch (error: any) {
+      await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${sp}`));
+      if (isActorFk(error) && log.actorId) {
+        const created = await insert({ ...log, actorId: null });
+        await tx.execute(sql.raw(`RELEASE SAVEPOINT ${sp}`));
+        return created;
       }
       throw error;
     }

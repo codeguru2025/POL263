@@ -6034,6 +6034,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // batches credit later, per-policy, at approval time (POST /api/payment-receipts/:id/approve)
       // since each pending receipt in a backdated batch is approved individually.
       try {
+        // createdBy FKs users.id in the tenant DB — a platform owner's registry id isn't there
+        // until mirrored, so resolve it (else the ledger credit silently fails and the group
+        // balance never moves — exactly what the prod logs showed for Falakhe).
+        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
         await storage.createGroupLedgerEntry({
           organizationId: user.organizationId,
           groupId,
@@ -6043,7 +6047,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           description: `Group receipt ${groupRef}`,
           referenceType: "payment_receipt",
           referenceId: results[0]?.id,
-          createdBy: user.id,
+          createdBy: ledgerCreatedBy,
         });
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (group receipt)", { groupId, groupRef, error: err?.message });
@@ -12361,6 +12365,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       try {
+        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
         await storage.createGroupLedgerEntry({
           organizationId: user.organizationId,
           groupId,
@@ -12370,7 +12375,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           description: `Legacy group receipt ${receiptNumber}`,
           referenceType: "legacy_group_receipt",
           referenceId: created.id as string,
-          createdBy: user.id,
+          createdBy: ledgerCreatedBy,
         });
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (legacy group receipt)", { groupId, error: err?.message });

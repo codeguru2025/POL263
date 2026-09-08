@@ -10,6 +10,44 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-08 — Group receipt 500s for a platform owner in a dedicated-DB tenant: audit-log FK poisons the whole transaction
+
+**Symptom:** Augustus (platform owner) receipted a group ("Siyabonga Nkosi"), selected all 16
+members, got `500 Internal Server Error`. Nothing was saved — all 16 receipts rolled back.
+
+**Root cause (two layers):**
+1. `POST /api/group-receipt` does all its work — 16 `payment_transactions` + 16 `payment_receipts`
+   + status updates + `auditLog(..., txDb)` — inside one `withOrgTransaction`. The final audit
+   insert has `actor_id = <registry user id>`, which doesn't exist in Falakhe's dedicated DB
+   `users` table (platform owners aren't mirrored there by id) → FK violation on
+   `audit_logs_actor_id_users_id_fk`.
+2. `storage.createAuditLog` *has* a fallback for exactly this (retry with `actor_id = null`), and
+   an earlier fix (2026-09-07) made its FK detection look at `error.cause`. **But the retry ran on
+   the same connection whose transaction the first failed INSERT had already aborted** — every
+   subsequent statement fails with "current transaction is aborted". The retry threw,
+   `auditLog`'s `if (tx) throw err` re-threw, `withOrgTransaction` rolled back everything → 500.
+   The prod-log tell: the failing INSERT's params showed `actor_id` **empty** (the retry), and the
+   `after` payload already contained 16 fully-formed receipt results.
+
+**Fix (`server/storage.ts` `createAuditLog`):** when called with a caller transaction, wrap each
+INSERT attempt in a `SAVEPOINT` (`ROLLBACK TO SAVEPOINT` on failure) so the actor-id-drop retry
+runs on a clean sub-transaction instead of a poisoned one. Non-tx path unchanged.
+
+**Also fixed (`server/routes.ts`):** the group-ledger credit in both `/api/group-receipt` and
+`/api/groups/legacy-receipts` passed `createdBy: user.id` (raw registry id) →
+`group_ledger_entries.created_by` FK violation → caught, logged "Group ledger credit failed", and
+**the group's balance silently never moved**. Now resolves via `resolveOrSyncTenantUserId` first.
+(The prod logs showed this firing for Falakhe's legacy receipts LGR-…-217/218.)
+
+**Lesson for next time:** any retry-after-failure inside a `withOrgTransaction` needs a SAVEPOINT —
+Postgres aborts the whole transaction on the first error, so "catch and try a slightly different
+INSERT" only works with `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`. And every `createdBy` / `actor_id` /
+`recorded_by` write in a dedicated-DB tenant that takes `user.id` directly is a latent FK bomb for
+platform-owner actions — grep for `createdBy: user.id` / `recordedBy: user.id` before shipping a
+new tenant-scoped write.
+
+---
+
 ## 2026-09-07 — SMS phone normalization prepended one global country code, misdelivering a cross-border tenant's clients
 
 **Symptom:** A South African client's phone saved in local format (`0821234567`) would be sent to
