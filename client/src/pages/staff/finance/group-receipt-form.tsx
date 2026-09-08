@@ -36,6 +36,10 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [submitterNote, setSubmitterNote] = useState("");
+  // Lump-sum mode: receipt a single amount to the group's balance without picking members. The
+  // money sits as a group credit (group ledger) to be reconciled to members later — same flow
+  // legacy groups with no policies already use, just chosen explicitly here.
+  const [lumpSum, setLumpSum] = useState(false);
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   // Stable per submission attempt — collapses a double-click or retried submit onto one batch
@@ -211,15 +215,29 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
     <div className="space-y-4">
       <div>
         <Label htmlFor="group-id">Group</Label>
-        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setItemToggles({}); setPaynowIntentId(null); setPolling(false); }}>
+        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setItemToggles({}); setPaynowIntentId(null); setPolling(false); setLumpSum(false); }}>
           <SelectTrigger id="group-id" className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
           <SelectContent>
             {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{(g as any).isLegacy ? " (Legacy)" : ""}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
-      {groupId && isLegacyLumpSum ? (
-        <LegacyGroupReceiptForm groupId={groupId} onSuccess={onSuccess} />
+      {groupId && !isLegacyLumpSum && (
+        <div className="flex items-center gap-2">
+          <Switch id="lump-sum-switch" checked={lumpSum} onCheckedChange={setLumpSum} />
+          <Label htmlFor="lump-sum-switch" className="cursor-pointer">
+            Receipt a lump sum to the group (skip member selection)
+          </Label>
+        </div>
+      )}
+      {groupId && (isLegacyLumpSum || lumpSum) ? (
+        <LegacyGroupReceiptForm
+          groupId={groupId}
+          onSuccess={onSuccess}
+          intro={lumpSum && !isLegacyLumpSum
+            ? "Record a single payment against the whole group. It's credited to the group's balance and shows in financials immediately — reconcile it to individual members later."
+            : undefined}
+        />
       ) : groupId && (
         <>
           <div className="flex items-center gap-2">
