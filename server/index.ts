@@ -16,6 +16,7 @@ import { drainActiveJobs } from "./job-queue";
 import csurf from "csurf";
 import cors from "cors";
 import { createRedisStore } from "./rate-limit-redis-store";
+import { isPublicApiBearerPath, hasValidPublicApiBearerToken } from "./public-api-bearer";
 
 const app = express();
 const httpServer = createServer(app);
@@ -102,8 +103,19 @@ if (enableCsrf) {
   // authenticated by a per-tenant bearer shared secret + verification token — never a browser
   // session — so it carries no CSRF token. Narrowly exempt just this one namespace.
   const isCustomerServicePath = (p: string) => p === "/api/customer-service" || p.startsWith("/api/customer-service/");
+
+  // Same shape of exemption for the public quote/lead/registration endpoints — they're also
+  // called both by POL263's own browser pages (vCard, /join) AND by external server-to-server
+  // integrations (a tenant's own marketing site) that have no browser/cookie jar to ever get a
+  // CSRF token from. Unlike the customer-service API, these routes have no auth of their own
+  // (refCode is a routing key, not a secret — see server/routes.ts resolveVcardOrgId), so a
+  // blanket CSRF exemption here would remove the only check on this path entirely. Instead: CSRF
+  // is still required for everyone by default; a caller presenting a valid PUBLIC_API_BEARER_TOKEN
+  // bearer token (a real, positively-checked credential, inert until an operator configures it
+  // for a specific trusted integration) skips it instead of removing it.
   app.use((req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path) || isCustomerServicePath(req.path)) return next();
+    if (isPublicApiBearerPath(req.path) && hasValidPublicApiBearerToken(req.headers.authorization, process.env.PUBLIC_API_BEARER_TOKEN)) return next();
     return csrfProtection(req, res, next);
   });
 
@@ -268,9 +280,23 @@ if (enableCsrf) {
     message: { message: "Too many requests, please slow down" },
   });
   app.use("/api/public/agent-card", publicLimiter);
+  app.use("/api/public/agent-vcard", publicLimiter);
   app.use("/api/public/quote", publicLimiter);
   app.use("/api/public/verify", publicLimiter);
   app.use("/api/public/tenant-context", publicLimiter);
+
+  // Registration endpoints go further than agent-vcard/quote above — each request writes a
+  // real Client + Policy row carrying PII (name, national ID, DOB, dependents, beneficiary),
+  // so they get a tighter budget than the read/quote-lead traffic on publicLimiter.
+  const publicRegistrationLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("public-registration"),
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { message: "Too many requests, please slow down" },
+  });
+  app.use("/api/public/register-policy", publicRegistrationLimiter);
+  app.use("/api/public/walkin-register", publicRegistrationLimiter);
 
   // Customer-service API (SMSALA WhatsApp bot, server-to-server, bearer-secret + token auth).
   //  • /verify keeps the strict 20/min bucket — one verification per conversation start, and it

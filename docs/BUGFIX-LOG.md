@@ -10,6 +10,40 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-20 — Public PII-writing endpoints missing dedicated rate limits
+
+**Symptom:** none reported yet — found while reviewing whether onboarding Diaspora Funeral
+Services' marketing site (calling POL263's public quote/lead/registration API) introduced new
+risk. It didn't introduce a new vulnerability class, but it did widen exposure to an existing gap.
+
+**Root cause:** `server/index.ts` mounts a dedicated `publicLimiter` (30 req/min) specifically
+because, per its own comment, "the blanket /api limiter (200/min) is too generous for endpoints
+anyone on the internet can hit anonymously." That limiter was applied to `/api/public/agent-card`,
+`/api/public/quote`, `/api/public/verify`, and `/api/public/tenant-context` — but never extended
+to three routes added later that are just as unauthenticated and strictly more sensitive:
+`/api/public/agent-vcard/*` (includes `quote-lead`, which writes a Lead + Quote row),
+`/api/public/register-policy`, and `/api/public/walkin-register` (both write a full Client +
+Policy row carrying real PII — name, national ID, DOB, dependents, beneficiary). All three were
+falling back to the 200 req/min blanket `/api` limiter.
+
+**Fix (`server/index.ts`):** added `/api/public/agent-vcard` to the existing `publicLimiter`
+(30/min), and created a stricter `publicRegistrationLimiter` (10/min) for `/api/public/
+register-policy` and `/api/public/walkin-register` since those two create real, PII-bearing
+database rows rather than just reading/quoting.
+
+**Verified:** `npx tsc --noEmit` clean. No existing test suite exercises rate-limit wiring
+directly (it's config, not logic), so this was verified by reading the route mount list, not by
+a new test.
+
+**Lesson for next time:** when adding a new `/api/public/*` route, check whether it needs to join
+`publicLimiter` (or something stricter) — the blanket `/api` limiter's comment says outright it's
+not meant to be the real protection for anonymous-write endpoints. This class of gap (a
+new public route silently inheriting the generous default instead of the deliberate stricter one)
+won't show up in tests; it only surfaces by reading `server/index.ts`'s route-limiter mount list
+against the actual `/api/public/*` route list in `server/routes.ts`.
+
+---
+
 ## 2026-09-08 — Outstanding-fee-cap raised a new (nonsense) invoice every single day
 
 **Symptom:** Falakhe's most recent platform-fee invoice showed line items summing to $483.45 but a
