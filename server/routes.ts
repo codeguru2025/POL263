@@ -5492,6 +5492,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(410).json({ message: "This payment link has expired." });
     }
     if (link.status !== "active") return res.status(410).json({ message: "This payment link is no longer usable." });
+    // A staff-created link already has a method chosen up front; a link auto-created at
+    // self-registration (see handlePublicPolicyRegistration) leaves it null until the payer
+    // picks one here. A body-supplied method only overrides when the link itself has none —
+    // a staff-picked method on an existing link is never silently changed by the payer's request.
+    let method = link.method;
+    if (!method) {
+      if (typeof req.body.method !== "string" || !PAYMENT_LINK_METHODS.has(req.body.method)) {
+        return res.status(400).json({ message: "A payment method is required." });
+      }
+      method = req.body.method as string;
+      await storage.updatePaymentLink(link.id, { method }, orgId);
+    }
     try {
       let intentId = link.paymentIntentId;
       // If a prior attempt on this link ended terminally (client cancelled the PIN prompt,
@@ -5528,7 +5540,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await initiatePaynowPayment({
         intentId,
         organizationId: orgId,
-        method: link.method,
+        method,
         payerPhone: link.payerPhone || undefined,
         actorType: "client",
       });
@@ -11805,8 +11817,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationCode: client.activationCode || undefined,
         policyId: policy.id,
       }).catch(() => {});
+      // Lets a referral-driven registration (e.g. a tenant's own marketing site) send the client
+      // straight to a public, no-login payment step — the exact same token-based flow already
+      // used for SMS payment links (GET/POST /api/pay/:token*) — instead of requiring account
+      // claim + login first. Skipped for a pure walk-in (agentId null): payment_links.
+      // createdByUserId is a real, NOT NULL user FK, and a walk-in has no referring agent to
+      // attribute it to; staff can still create one manually via POST /api/policies/:id/payment-links.
+      let paymentLink: { token: string; expiresAt: Date } | null = null;
+      if (agentId && parseFloat(policy.premiumAmount) > 0) {
+        const link = await storage.createPaymentLink({
+          organizationId: orgId,
+          policyId: policy.id,
+          clientId: client.id,
+          token: crypto.randomBytes(24).toString("base64url"),
+          amount: policy.premiumAmount,
+          currency: policy.currency,
+          payerPhone: client.phone || null,
+          status: "active",
+          createdByUserId: agentId,
+          expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+        } as any);
+        paymentLink = { token: link.token, expiresAt: link.expiresAt };
+      }
       res.status(201).json({
         policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
+        paymentLink,
         message: agentId
           ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
           : "Policy registered. Use your policy number and activation code to claim your account.",

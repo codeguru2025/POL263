@@ -1404,7 +1404,9 @@ export const paymentLinks = pgTable(
     token: text("token").notNull().unique(),
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
     currency: text("currency").default("USD").notNull(),
-    method: text("method").notNull(), // ecocash | onemoney | innbucks | omari | visa_mastercard
+    // Nullable: a link auto-created at self-registration (no staff picking a method up front)
+    // leaves this unset until the payer chooses one on /api/pay/:token/initiate.
+    method: text("method"), // ecocash | onemoney | innbucks | omari | visa_mastercard
     payerPhone: text("payer_phone"),
     status: text("status").default("active").notNull(), // active | paid | expired | cancelled
     paymentIntentId: uuid("payment_intent_id").references(() => paymentIntents.id),
