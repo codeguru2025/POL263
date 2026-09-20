@@ -1,5 +1,47 @@
-import { describe, it, expect } from "vitest";
-import { isPublicApiBearerPath, hasValidPublicApiBearerToken } from "../../server/public-api-bearer";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+
+process.env.TENANT_CONFIG_ENCRYPTION_KEY =
+  process.env.TENANT_CONFIG_ENCRYPTION_KEY || "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+const h = vi.hoisted(() => ({ rows: [] as any[] }));
+
+vi.mock("../../server/control-plane-db", () => {
+  const chain = (): any => {
+    const p: any = Promise.resolve(h.rows);
+    p.from = () => chain();
+    p.where = () => chain();
+    p.limit = () => Promise.resolve(h.rows);
+    return p;
+  };
+  return {
+    cpDb: {
+      select: () => chain(),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    },
+    cpPool: { end: vi.fn() },
+  };
+});
+
+vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
+
+import { isPublicApiBearerPath, authenticatePublicApiBearerToken } from "../../server/public-api-bearer";
+
+const ORG_A = "11111111-1111-1111-1111-111111111111";
+const ORG_B = "22222222-2222-2222-2222-222222222222";
+const SECRET_A = "secret-for-diaspora";
+const SECRET_B = "secret-for-a-different-tenant";
+
+beforeAll(() => {
+  process.env.TENANT_CONFIG_ENCRYPTION_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+});
+
+beforeEach(() => {
+  h.rows = [
+    { id: "int-1", tenantId: ORG_A, provider: "public_api", isActive: true, config: { secret: SECRET_A } },
+    { id: "int-2", tenantId: ORG_B, provider: "public_api", isActive: true, config: { secret: SECRET_B } },
+  ];
+});
 
 describe("isPublicApiBearerPath", () => {
   it("matches the exact public quote and register-policy paths", () => {
@@ -19,25 +61,31 @@ describe("isPublicApiBearerPath", () => {
   });
 });
 
-describe("hasValidPublicApiBearerToken", () => {
-  it("is false when no token is configured — inert by default", () => {
-    expect(hasValidPublicApiBearerToken("Bearer anything", undefined)).toBe(false);
+describe("authenticatePublicApiBearerToken", () => {
+  it("resolves the correct tenant for that tenant's own secret", async () => {
+    const result = await authenticatePublicApiBearerToken(`Bearer ${SECRET_A}`);
+    expect(result).toEqual({ orgId: ORG_A });
   });
 
-  it("is false when the header is missing or malformed", () => {
-    expect(hasValidPublicApiBearerToken(undefined, "secret123")).toBe(false);
-    expect(hasValidPublicApiBearerToken("Basic secret123", "secret123")).toBe(false);
+  it("a different tenant's secret resolves to that different tenant, not the first row", async () => {
+    const result = await authenticatePublicApiBearerToken(`Bearer ${SECRET_B}`);
+    expect(result).toEqual({ orgId: ORG_B });
   });
 
-  it("is false when the token doesn't match", () => {
-    expect(hasValidPublicApiBearerToken("Bearer wrong", "secret123")).toBe(false);
+  it("is null when no header is present", async () => {
+    expect(await authenticatePublicApiBearerToken(undefined)).toBeNull();
   });
 
-  it("is true when the token matches exactly", () => {
-    expect(hasValidPublicApiBearerToken("Bearer secret123", "secret123")).toBe(true);
+  it("is null when the header is malformed", async () => {
+    expect(await authenticatePublicApiBearerToken(`Basic ${SECRET_A}`)).toBeNull();
   });
 
-  it("does not throw on a differently-sized token (timing-safe length guard)", () => {
-    expect(hasValidPublicApiBearerToken("Bearer short", "a-much-longer-configured-secret")).toBe(false);
+  it("is null when the secret doesn't match any tenant", async () => {
+    expect(await authenticatePublicApiBearerToken("Bearer not-a-real-secret")).toBeNull();
+  });
+
+  it("is null when no tenant has a credential row at all", async () => {
+    h.rows = [];
+    expect(await authenticatePublicApiBearerToken(`Bearer ${SECRET_A}`)).toBeNull();
   });
 });

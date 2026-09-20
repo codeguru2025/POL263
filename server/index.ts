@@ -16,7 +16,7 @@ import { drainActiveJobs } from "./job-queue";
 import csurf from "csurf";
 import cors from "cors";
 import { createRedisStore } from "./rate-limit-redis-store";
-import { isPublicApiBearerPath, hasValidPublicApiBearerToken } from "./public-api-bearer";
+import { isPublicApiBearerPath, authenticatePublicApiBearerToken } from "./public-api-bearer";
 
 const app = express();
 const httpServer = createServer(app);
@@ -110,12 +110,13 @@ if (enableCsrf) {
   // CSRF token from. Unlike the customer-service API, these routes have no auth of their own
   // (refCode is a routing key, not a secret — see server/routes.ts resolveVcardOrgId), so a
   // blanket CSRF exemption here would remove the only check on this path entirely. Instead: CSRF
-  // is still required for everyone by default; a caller presenting a valid PUBLIC_API_BEARER_TOKEN
-  // bearer token (a real, positively-checked credential, inert until an operator configures it
-  // for a specific trusted integration) skips it instead of removing it.
-  app.use((req, res, next) => {
+  // is still required for everyone by default; a caller presenting a valid per-tenant public-API
+  // secret (server/public-api-bearer.ts — one row per tenant, same shape as the customer-service
+  // API's own auth) skips it instead of removing it. The secret itself identifies the tenant, so
+  // this needs no orgId resolved from the body first.
+  app.use(async (req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path) || isCustomerServicePath(req.path)) return next();
-    if (isPublicApiBearerPath(req.path) && hasValidPublicApiBearerToken(req.headers.authorization, process.env.PUBLIC_API_BEARER_TOKEN)) return next();
+    if (isPublicApiBearerPath(req.path) && (await authenticatePublicApiBearerToken(req.headers.authorization))) return next();
     return csrfProtection(req, res, next);
   });
 
