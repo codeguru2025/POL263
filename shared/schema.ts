@@ -30,6 +30,15 @@ export const organizations = pgTable("organizations", {
   phone: text("phone"),
   email: text("email"),
   website: text("website"),
+  /** Verified sending address on the tenant's own domain (e.g. "noreply@diasporafuneralservices.
+   *  com"), confirmed verified in the shared Resend account (same account, same API key as the
+   *  platform default — Resend lets one account send from any of its verified domains, so this
+   *  needs no new credential, just this address). When set, transactional emails to this org's
+   *  clients send from here instead of the platform default (EMAIL_FROM); when null, the
+   *  platform default is the fallback — see server/email-service.ts resolveFromAddress. Set
+   *  manually once an admin confirms the domain shows "verified" in Resend, never automatically
+   *  — sending from an unverified domain gets the whole message rejected by the relay. */
+  emailFromAddress: text("email_from_address"),
   policyNumberPrefix: text("policy_number_prefix"),
   policyNumberPadding: integer("policy_number_padding").default(5).notNull(),
   /** Prefix for legacy-group backdated receipt numbers (format: `{prefix}-{YYYYMMDD}-{seq}`).

@@ -53,7 +53,7 @@ import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-se
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
-import { sendEmail, escapeHtml } from "./email-service";
+import { sendEmail, escapeHtml, resolveFromAddress } from "./email-service";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
 import { tenantSubscriptions, billingPlans, tenantInvoices, tenantFeatureFlags } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
@@ -1266,6 +1266,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const joinUrl = resolveJoinUrl({ website: org?.website ?? null }, refCode, quoteId!);
         await sendEmail({
           to: email.trim(),
+          from: resolveFromAddress(org),
           fromName: orgName,
           subject: `Your Quote from ${orgName}`,
           text: `Dear ${built.quote.policyholderName},\n\nYour personalised quote is attached. Ready to proceed? ${joinUrl}\n\n— ${orgName}`,
@@ -8625,6 +8626,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const result = await sendEmail({
       to: recipientEmail,
+      from: resolveFromAddress(org),
       fromName: orgName,
       subject: `Your Insurance Quote from ${orgName}`,
       text: [

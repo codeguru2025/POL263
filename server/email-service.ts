@@ -63,6 +63,15 @@ export function isEmailConfigured(): boolean {
   return getTransporter() !== null;
 }
 
+/** Resolves the "from" address for an org's transactional email: its own verified domain
+ *  (organizations.emailFromAddress) when set, else the platform default (sendEmail's own
+ *  EMAIL_FROM fallback — return undefined here to let that apply). Centralizes the fallback so
+ *  every caller (notifications, quote/receipt/policy-document PDFs) picks the tenant's own
+ *  domain the same way, without each one re-deriving the same `org.emailFromAddress || undefined`. */
+export function resolveFromAddress(org: { emailFromAddress?: string | null } | null | undefined): string | undefined {
+  return org?.emailFromAddress || undefined;
+}
+
 /** Send an email. Returns ok:false (never throws) if SMTP isn't configured or the send fails. */
 export async function sendEmail(opts: SendEmailOptions): Promise<{ ok: boolean; message: string }> {
   const transporter = getTransporter();
