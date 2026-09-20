@@ -31,6 +31,7 @@ import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, 
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { recommendProducts, signQuoteToken, verifyQuoteToken } from "./quote-engine";
+import { verifyTurnstileToken } from "./turnstile";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1204,6 +1205,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (typeof phone !== "string" || !phone.trim()) {
       return res.status(400).json({ message: "Phone number is required" });
     }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
@@ -3933,7 +3936,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "One or more selected dependents do not belong to this client." });
       }
     }
-    const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
+    const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
       { clientId: policyInsert.clientId, role: "policy_holder" },
     ];
     for (const m of dependentsToAdd) {
@@ -3950,6 +3953,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberAddOns.length > 0
         ? memberAddOns
         : (addOnIds as string[]).map((id: string) => ({ memberRef: "holder", addOnId: id }));
+
+    // individual_age_rated: computePolicyPremium above ran without a policyholder DOB or any
+    // per-member cover amounts (neither was known yet at that point in the request), so its result
+    // is discarded here and replaced with the real breakdown now that memberRows (and each
+    // dependent's real DOB via authorizedDeps) are finalized — same "compute early, override once
+    // more context exists" pattern already used for isCustomPremiumProduct above.
+    let ageRatedMembers: Awaited<ReturnType<typeof computeIndividualAgeRatedPremium>>["members"] | null = null;
+    if (issuedProduct?.pricingModel === "individual_age_rated") {
+      const requestedMemberCoverByDependentId = new Map<string, number>();
+      for (const m of dependentsToAdd) {
+        if (m.dependentId && typeof (m as any).coverAmount === "number") requestedMemberCoverByDependentId.set(m.dependentId, (m as any).coverAmount);
+      }
+      const dependentsForRating = memberRows.slice(1).map((mr) => ({
+        dateOfBirth: authorizedDeps.find((d: any) => d.id === mr.dependentId)?.dateOfBirth ?? null,
+        coverAmount: mr.dependentId ? requestedMemberCoverByDependentId.get(mr.dependentId) : undefined,
+      }));
+      const policyholderCoverInput = typeof req.body.coverAmount === "number" ? req.body.coverAmount : undefined;
+      const defaultCover = issuedProduct.coverAmount != null ? parseFloat(String(issuedProduct.coverAmount)) : 0;
+      const effectivePolicyholderCover = policyholderCoverInput ?? defaultCover;
+      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount > effectivePolicyholderCover);
+      if (overCap) {
+        return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount ($${effectivePolicyholderCover}).` });
+      }
+      const breakdown = await computeIndividualAgeRatedPremium(
+        user.organizationId, productVersion.id, issuedProduct, policyInsert.currency || "USD", policyInsert.paymentSchedule || "monthly",
+        Number((productVersion as any).dependentMaxAge ?? 20),
+        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput },
+        dependentsForRating,
+      );
+      policyInsert.premiumAmount = breakdown.total.toFixed(2);
+      ageRatedMembers = breakdown.members;
+      memberRows.forEach((mr, i) => {
+        mr.coverAmount = ageRatedMembers?.[i]?.coverAmount;
+        mr.premiumContribution = ageRatedMembers?.[i]?.contribution;
+      });
+    }
 
     const { policy } = await storage.createPolicyWithInitialSetup(user.organizationId, {
       policy: policyInsert,
@@ -11786,6 +11825,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!lastName) missingFields.push("lastName");
     if (!productVersionId) missingFields.push("productVersionId");
     if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
     const agent = await storage.getUserByReferralCode(referralCode);
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
     const orgId = await resolveVcardOrgId(agent, req.body.org ?? req.query.org);
