@@ -11653,6 +11653,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // (they can diverge — an invalid dependent in depsList is silently skipped), so
       // "dependent:<original index>" memberAddOns can still be resolved after the fact.
       const originalIndexToCreatedIndex = new Map<number, number>();
+      // Surfaced in the 201 response's `warnings` array — a dependent/beneficiary silently
+      // dropped with no way for the caller to detect it from the response was a real bug, not
+      // just a documentation gap (see the dob/gender comment below for the exact failure mode
+      // this bit us with before). Still doesn't reject the whole request: an unrelated bad
+      // dependent shouldn't block the policy the caller actually cares about, but the caller now
+      // has a way to know something was dropped and why.
+      const warnings: string[] = [];
       for (let originalIndex = 0; originalIndex < depsList.length; originalIndex++) {
         const d = depsList[originalIndex];
         const dFirst = toUpperTrim(d.firstName, false);
@@ -11667,8 +11674,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // submitted through this form: the public registration UI (client/src/pages/join/
         // register.tsx) never even collects gender, so every dependent failed this check with
         // no error shown to the registrant. Only name + relationship are genuinely required.
-        if (!dFirst || !dLast || !dRel) continue;
-        if (dNationalId && !isValidNationalId(dNationalId, publicRegNationalIdFormat)) continue;
+        if (!dFirst || !dLast || !dRel) {
+          warnings.push(`Dependent ${originalIndex + 1} skipped: firstName, lastName, and relationship are required.`);
+          continue;
+        }
+        if (dNationalId && !isValidNationalId(dNationalId, publicRegNationalIdFormat)) {
+          warnings.push(`Dependent ${originalIndex + 1} (${dFirst} ${dLast}) skipped: national ID ${nationalIdFormatHint(publicRegNationalIdFormat)}.`);
+          continue;
+        }
         createdDeps.push(await storage.createDependent({
           organizationId: orgId,
           clientId: client.id,
@@ -11768,11 +11781,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           undefined, createdDeps.map((d) => d.dateOfBirth || null),
         );
       }
-      let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
+      const beneficiaryWasProvided = rawBeneficiary && typeof rawBeneficiary === "object" && Object.keys(rawBeneficiary).length > 0;
+      let ben = beneficiaryWasProvided ? rawBeneficiary : null;
       if (ben) {
         const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
         const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
         const bp = toUpperTrim(ben.phone, false);
+        if (!bf || !bl) warnings.push("Beneficiary skipped: firstName and lastName are required.");
+        else if (!br) warnings.push("Beneficiary skipped: relationship is required.");
+        else if (!ben.nationalId || !bn) warnings.push("Beneficiary skipped: nationalId is required.");
+        else if (!isValidNationalId(ben.nationalId, publicRegNationalIdFormat)) warnings.push(`Beneficiary skipped: national ID ${nationalIdFormatHint(publicRegNationalIdFormat)}.`);
+        else if (!bp) warnings.push("Beneficiary skipped: phone is required.");
         if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId, publicRegNationalIdFormat)) ben = null;
         else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
       }
@@ -11877,6 +11896,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(201).json({
         policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
         paymentLink,
+        warnings,
         message: agentId
           ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
           : "Policy registered. Use your policy number and activation code to claim your account.",
