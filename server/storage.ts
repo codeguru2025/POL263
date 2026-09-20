@@ -17,7 +17,7 @@ import {
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
   products, productVersions, benefitCatalogItems, benefitBundles, addOns,
   policyDocuments, waitingPeriodWaivers,
-  ageBandConfigs, policies, policyMembers, policyStatusHistory, policyAddOns,
+  ageBandConfigs, ageBandRateCards, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
   paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens,
@@ -94,6 +94,7 @@ import {
   type BenefitBundle, type InsertBenefitBundle,
   type AddOn, type InsertAddOn,
   type AgeBandConfig, type InsertAgeBandConfig,
+  type AgeBandRateCard, type InsertAgeBandRateCard,
   type Policy, type InsertPolicy,
   type PolicyMember, type InsertPolicyMember,
   type PolicyAddOn, type InsertPolicyAddOn,
@@ -416,6 +417,10 @@ export interface IStorage {
   getAgeBandConfigs(orgId: string): Promise<AgeBandConfig[]>;
   createAgeBandConfig(config: InsertAgeBandConfig): Promise<AgeBandConfig>;
   updateAgeBandConfig(id: string, data: Partial<InsertAgeBandConfig>, orgId: string): Promise<AgeBandConfig | undefined>;
+  getAgeBandRateCards(productVersionId: string, orgId: string): Promise<AgeBandRateCard[]>;
+  createAgeBandRateCard(card: InsertAgeBandRateCard): Promise<AgeBandRateCard>;
+  updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined>;
+  deleteAgeBandRateCard(id: string, orgId: string): Promise<void>;
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
@@ -445,7 +450,7 @@ export interface IStorage {
     data: {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
-      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: string | number | null; premiumContribution?: string | number | null }>;
       // Per-member add-ons. memberRef can be "holder" (→ policy_holder row) or a dependent UUID.
       memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
@@ -1753,6 +1758,24 @@ export class DatabaseStorage implements IStorage {
     const [created] = await tdb.insert(ageBandConfigs).values(config).returning();
     return created;
   }
+  async getAgeBandRateCards(productVersionId: string, orgId: string): Promise<AgeBandRateCard[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(ageBandRateCards).where(eq(ageBandRateCards.productVersionId, productVersionId));
+  }
+  async createAgeBandRateCard(card: InsertAgeBandRateCard): Promise<AgeBandRateCard> {
+    const tdb = await getDbForOrg(card.organizationId);
+    const [created] = await tdb.insert(ageBandRateCards).values(card).returning();
+    return created;
+  }
+  async updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(ageBandRateCards).set(data).where(eq(ageBandRateCards.id, id)).returning();
+    return updated;
+  }
+  async deleteAgeBandRateCard(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(ageBandRateCards).where(eq(ageBandRateCards.id, id));
+  }
 
   // ─── Policies ──────────────────────────────────────────────
   async getPoliciesByOrg(organizationId: string, limit = 50, offset = 0, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]> {
@@ -2574,7 +2597,7 @@ export class DatabaseStorage implements IStorage {
     data: {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
-      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: string | number | null; premiumContribution?: string | number | null }>;
       memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }> {
@@ -2618,6 +2641,8 @@ export class DatabaseStorage implements IStorage {
             dependentId: m.dependentId ?? null,
             role: m.role,
             memberNumber,
+            coverAmount: m.coverAmount != null ? String(m.coverAmount) : null,
+            premiumContribution: m.premiumContribution != null ? String(m.premiumContribution) : null,
           })
           .returning();
         membersOut.push(createdMember);

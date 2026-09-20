@@ -6,6 +6,7 @@ import { commissionLedgerEntries } from "@shared/schema";
 import { notifyUser } from "./user-notifications";
 import { resolveOrSyncTenantUserId } from "./tenant-db";
 import { currencyField } from "@shared/premium-currency";
+import type { AgeBand } from "@shared/schema";
 import type { OrgDataDb } from "./tenant-db";
 
 export { currencyField };
@@ -200,6 +201,95 @@ function hasAgeBandRates(pv: any): boolean {
   ].some((v) => v != null);
 }
 
+function ageBandKeyFor(age: number | null, childThresholdAge: number): AgeBand {
+  if (age !== null && age < childThresholdAge) return "child";
+  if (age !== null && age >= 85) return "85_plus";
+  if (age !== null && age >= 66) return "66_84";
+  return "21_65";
+}
+
+export interface AgeRatedMemberInput {
+  dateOfBirth: string | null | undefined;
+  /** Overrides the product's default coverAmount for this member. */
+  coverAmount?: number;
+  /** Extra sum assured from a cover_topup add-on attached to this member. */
+  coverTopup?: number;
+}
+
+export interface AgeRatedMemberResult {
+  role: "policy_holder" | "dependent";
+  age: number | null;
+  ageBand: AgeBand;
+  coverAmount: number;
+  contribution: number;
+}
+
+export interface AgeRatedPremiumResult {
+  total: number;
+  members: AgeRatedMemberResult[];
+}
+
+/**
+ * products.pricingModel === "individual_age_rated": every covered life, policyholder included, is
+ * priced individually from age_band_rate_cards against their own effective cover amount — no
+ * free/included member count — product_versions premiumMonthly/additionalMemberRate fields are unused.
+ * A dependent's cover is clamped here to never exceed the policyholder's own effective cover, as a
+ * defensive backstop; the authoritative reject-with-a-clear-error validation belongs at the
+ * registration/quote route (this function just never silently produces a wrong number).
+ */
+export async function computeIndividualAgeRatedPremium(
+  orgId: string,
+  productVersionId: string,
+  product: any,
+  currency: string,
+  paymentSchedule: string,
+  childThresholdAge: number,
+  policyholder: AgeRatedMemberInput,
+  dependents: AgeRatedMemberInput[],
+  preloadedRateCards?: any[],
+): Promise<AgeRatedPremiumResult> {
+  const rateCards = preloadedRateCards ?? await storage.getAgeBandRateCards(productVersionId, orgId);
+  const rateByBand = new Map<string, number>();
+  for (const rc of rateCards) {
+    if (rc.currency !== currency || rc.isActive === false) continue;
+    rateByBand.set(rc.ageBand, parseFloat(String(rc.ratePerThousand)));
+  }
+  const rateFor = (band: AgeBand): number => {
+    const rate = rateByBand.get(band);
+    if (rate == null) {
+      structuredLog("warn", "Age-band rate card unconfigured — pricing this member at $0", {
+        productVersionId, currency, ageBand: band,
+      });
+      return 0;
+    }
+    return rate;
+  };
+  const scheduleFactor = monthlyToScheduleFactor(paymentSchedule);
+  const defaultCover = product?.coverAmount != null ? parseFloat(String(product.coverAmount)) : 0;
+
+  const policyholderCover = Math.max(0, (policyholder.coverAmount ?? defaultCover) + (policyholder.coverTopup ?? 0));
+  const phAge = ageAt(policyholder.dateOfBirth);
+  const phBand = ageBandKeyFor(phAge, childThresholdAge);
+  const members: AgeRatedMemberResult[] = [{
+    role: "policy_holder", age: phAge, ageBand: phBand, coverAmount: policyholderCover,
+    contribution: (policyholderCover / 1000) * rateFor(phBand) * scheduleFactor,
+  }];
+
+  for (const dep of dependents) {
+    const requestedCover = Math.max(0, (dep.coverAmount ?? defaultCover) + (dep.coverTopup ?? 0));
+    const cover = Math.min(requestedCover, policyholderCover);
+    const age = ageAt(dep.dateOfBirth);
+    const band = ageBandKeyFor(age, childThresholdAge);
+    members.push({
+      role: "dependent", age, ageBand: band, coverAmount: cover,
+      contribution: (cover / 1000) * rateFor(band) * scheduleFactor,
+    });
+  }
+
+  const total = members.reduce((sum, m) => sum + m.contribution, 0);
+  return { total, members };
+}
+
 export interface ChargeableMember {
   age: number | null;
   isChild: boolean;
@@ -273,15 +363,47 @@ export async function computePolicyPremium(
   // already fetched product versions/products/add-ons for every row in one batched query each —
   // passing them in here skips the 3 DB round-trips this function would otherwise make PER POLICY,
   // without duplicating the pricing math itself for a "batch" variant of this function.
-  preloaded?: { productVersion?: any; product?: any; orgAddOns?: any[] },
+  preloaded?: { productVersion?: any; product?: any; orgAddOns?: any[]; rateCards?: any[] },
   // Underwriting loading (server/underwriting.ts) — percentage added on top of the otherwise-
   // computed premium. Undefined/0 for every product that doesn't require underwriting, which is
   // every product today, so this is a no-op for all existing callers.
   underwritingLoadingPercent?: number,
+  // Only consulted when the resolved product's pricingModel is "individual_age_rated" — every
+  // existing "bundled_family" product ignores this entirely and behaves exactly as before.
+  ageRatedInput?: {
+    policyholderDateOfBirth?: string | null;
+    policyholderCoverAmount?: number;
+    policyholderCoverTopup?: number;
+    dependentCoverAmounts?: (number | undefined)[];
+    dependentCoverTopups?: (number | undefined)[];
+  },
 ): Promise<string> {
   const pv = preloaded?.productVersion ?? await storage.getProductVersion(productVersionId, orgId);
   if (!pv) return "0";
   const product = preloaded?.product !== undefined ? preloaded.product : await storage.getProduct(pv.productId, orgId);
+
+  if (product?.pricingModel === "individual_age_rated") {
+    const dependentDobs = dependentDateOfBirths || [];
+    const dependents = dependentDobs.map((dob, i) => ({
+      dateOfBirth: dob,
+      coverAmount: ageRatedInput?.dependentCoverAmounts?.[i],
+      coverTopup: ageRatedInput?.dependentCoverTopups?.[i],
+    }));
+    const result = await computeIndividualAgeRatedPremium(
+      orgId, productVersionId, product, currency, paymentSchedule,
+      Number(pv.dependentMaxAge ?? 20),
+      {
+        dateOfBirth: ageRatedInput?.policyholderDateOfBirth,
+        coverAmount: ageRatedInput?.policyholderCoverAmount,
+        coverTopup: ageRatedInput?.policyholderCoverTopup,
+      },
+      dependents,
+      preloaded?.rateCards,
+    );
+    const loadedTotal = underwritingLoadingPercent ? result.total * (1 + underwritingLoadingPercent / 100) : result.total;
+    return Math.max(loadedTotal, 0).toFixed(2);
+  }
+
   let base = 0;
   if (paymentSchedule === "monthly") {
     base = currencyField(pv, currency, "premiumMonthly");

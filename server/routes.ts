@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -83,6 +83,7 @@ import {
   insertMortuaryServiceRateSchema, insertCaseServiceChargeSchema,
   insertCemeterySchema, insertEquipmentItemSchema, insertPitchingAssignmentSchema,
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
+  insertAgeBandRateCardSchema, AGE_BANDS,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
@@ -1349,7 +1350,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ranked product recommendation (server/quote-engine.ts) rather than a single plan's price —
   // this is the vCard's "suggest the most appropriate product" flow.
   app.post("/api/public/quote", async (req, res) => {
-    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth, org: bodyOrg } = req.body;
+    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth, coverAmount, dependentCoverAmounts, org: bodyOrg } = req.body;
     if (typeof refCode !== "string" || !refCode.trim()) return res.status(400).json({ message: "refCode is required" });
     const agent = await storage.getUserByReferralCode(refCode.trim());
     const orgId = agent ? await resolveVcardOrgId(agent, bodyOrg ?? req.query.org) : null;
@@ -1391,6 +1392,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       undefined,
       typeof memberCount === "number" ? memberCount : undefined,
       resolvedDobs,
+      undefined,
+      undefined,
+      {
+        policyholderDateOfBirth: typeof policyholderDateOfBirth === "string" ? policyholderDateOfBirth : undefined,
+        policyholderCoverAmount: typeof coverAmount === "number" ? coverAmount : undefined,
+        dependentCoverAmounts: Array.isArray(dependentCoverAmounts) ? dependentCoverAmounts : undefined,
+      },
     );
     return res.json({
       premium,
@@ -3221,6 +3229,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const updated = await storage.updateProductVersion(req.params.id as string, req.body, user.organizationId);
     await auditLog(req, "UPDATE_PRODUCT_VERSION", "ProductVersion", req.params.id as string, before, updated);
     return res.json(updated);
+  });
+
+  // ─── Age-band rate cards (individual_age_rated pricing) ──────
+  // The dynamic-pricing engine's rate source (server/route-helpers.ts, computeIndividualAgeRatedPremium):
+  // monthly premium per $1,000 of sum assured, by age band, per product version + currency. Only
+  // meaningful for a product whose pricingModel is "individual_age_rated" — harmless/unused rows
+  // for any "bundled_family" product.
+  app.get("/api/product-versions/:id/age-band-rates", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    const pv = await storage.getProductVersion(req.params.id as string, user.organizationId);
+    if (!pv) return res.status(404).json({ message: "Version not found" });
+    return res.json(await storage.getAgeBandRateCards(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/product-versions/:id/age-band-rates", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const pv = await storage.getProductVersion(req.params.id as string, user.organizationId);
+    if (!pv) return res.status(404).json({ message: "Version not found" });
+    if (!AGE_BANDS.includes(req.body.ageBand)) {
+      return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
+    }
+    const parsed = insertAgeBandRateCardSchema.parse({
+      ...req.body,
+      productVersionId: req.params.id as string,
+      organizationId: user.organizationId,
+    });
+    const card = await storage.createAgeBandRateCard(parsed);
+    await auditLog(req, "CREATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", card.id, null, card);
+    return res.status(201).json(card);
+  });
+
+  app.patch("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateAgeBandRateCard(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Rate card not found" });
+    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteAgeBandRateCard(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, null);
+    return res.status(204).end();
   });
 
   // ─── Benefits & Add-ons ─────────────────────────────────────
@@ -11461,7 +11513,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // for a shared-DB org — same pattern used everywhere else a cross-context user id becomes a
     // tenant-DB foreign key (see feedback_debugging_patterns memory: this exact bug class).
     if (agentId) agentId = await resolveOrSyncTenantUserId(orgId, agentId);
-    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt } = req.body;
+    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt, coverAmount: policyholderCoverInput, addOnIds: rawAddOnIds, memberAddOns: rawMemberAddOns } = req.body;
+    // "holder" resolves to the policyholder; a dependent-scoped entry's memberRef is "dependent:<i>"
+    // where <i> is that dependent's position in the `dependents` array on this same request — a
+    // dependent has no id yet when the request arrives, unlike the internal "Issue New Policy"
+    // route (POST /api/policies), which addresses existing dependents by their real id.
+    const requestedAddOnIds: string[] = Array.isArray(rawAddOnIds) ? rawAddOnIds : [];
+    const requestedMemberAddOns: { memberRef: string; addOnId: string }[] = Array.isArray(rawMemberAddOns) ? rawMemberAddOns : [];
     const nationalIdNorm = normalizeNationalId(nationalId)!;
     // Best-effort — a missing/malformed value just means consent wasn't recorded, not a
     // registration failure (older clients calling this endpoint, e.g. agent-app, won't send it).
@@ -11515,7 +11573,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const publicRegNationalIdFormat = await resolveOrgNationalIdFormat(orgId);
       const depsList = Array.isArray(rawDeps) ? rawDeps : [];
       const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
-      for (const d of depsList) {
+      // Aligned 1:1 with createdDeps (pushed in the same iteration a dependent is actually
+      // created) — individual_age_rated only; unused/ignored for bundled_family products.
+      const createdDepCoverAmounts: (number | undefined)[] = [];
+      // Maps a dependent's original position in `depsList` to its final index in createdDeps
+      // (they can diverge — an invalid dependent in depsList is silently skipped), so
+      // "dependent:<original index>" memberAddOns can still be resolved after the fact.
+      const originalIndexToCreatedIndex = new Map<number, number>();
+      for (let originalIndex = 0; originalIndex < depsList.length; originalIndex++) {
+        const d = depsList[originalIndex];
         const dFirst = toUpperTrim(d.firstName, false);
         const dLast = toUpperTrim(d.lastName, false);
         const dRel = toUpperTrim(d.relationship, false);
@@ -11540,11 +11606,95 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           nationalId: dNationalId || null,
           gender: dGender,
         }));
+        createdDepCoverAmounts.push(typeof d.coverAmount === "number" ? d.coverAmount : undefined);
+        originalIndexToCreatedIndex.set(originalIndex, createdDeps.length - 1);
       }
-      const premium = await computePolicyPremium(
-        orgId, productVersionId, currency || "USD", paymentSchedule || "monthly",
-        [], [], undefined, createdDeps.map((d) => d.dateOfBirth || null),
-      );
+
+      // Resolves every requested add-on to a real org add-on row, validating it's active. For
+      // individual_age_rated products, only pricingMode "cover_topup" is meaningful (there's no
+      // flat/percentage concept in per-life age-rated pricing) — anything else is rejected rather
+      // than silently ignored, so a misconfigured request fails loudly instead of quietly
+      // under-pricing the policy.
+      const orgAddOnsForRequest = requestedAddOnIds.length + requestedMemberAddOns.length > 0
+        ? await storage.getAddOns(orgId)
+        : [];
+      const addOnById = new Map(orgAddOnsForRequest.map((a: any) => [a.id, a]));
+      // "holder" or "dependent:<i>" -> resolved memberAddOns entry for createPolicyWithInitialSetup
+      // (memberRef there means "holder" or a real dependentId, both of which are available now).
+      const resolvedMemberAddOns: { memberRef: string; addOnId: string }[] = [];
+      const policyholderCoverTopups: number[] = [];
+      const dependentCoverTopups = new Map<number, number>(); // createdDeps index -> summed topup
+
+      const allRequested: { memberRef: string; addOnId: string }[] = [
+        ...requestedAddOnIds.map((addOnId) => ({ memberRef: "holder", addOnId })),
+        ...requestedMemberAddOns,
+      ];
+      for (const entry of allRequested) {
+        const addOn = addOnById.get(entry.addOnId);
+        if (!addOn || addOn.isActive === false) {
+          res.status(400).json({ message: `Add-on ${entry.addOnId} is invalid or inactive.` });
+          return;
+        }
+        if (product.pricingModel === "individual_age_rated" && addOn.pricingMode !== "cover_topup") {
+          res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` });
+          return;
+        }
+        const increment = parseFloat(String(addOn.coverIncrementAmount ?? 0));
+        if (entry.memberRef === "holder") {
+          policyholderCoverTopups.push(increment);
+          resolvedMemberAddOns.push({ memberRef: "holder", addOnId: entry.addOnId });
+        } else if (entry.memberRef.startsWith("dependent:")) {
+          const originalIndex = Number(entry.memberRef.slice("dependent:".length));
+          const createdIndex = originalIndexToCreatedIndex.get(originalIndex);
+          if (createdIndex === undefined) {
+            res.status(400).json({ message: `Add-on ${entry.addOnId} references a dependent that was not created.` });
+            return;
+          }
+          dependentCoverTopups.set(createdIndex, (dependentCoverTopups.get(createdIndex) ?? 0) + increment);
+          resolvedMemberAddOns.push({ memberRef: createdDeps[createdIndex].id, addOnId: entry.addOnId });
+        } else {
+          res.status(400).json({ message: `Unrecognized memberRef "${entry.memberRef}" — use "holder" or "dependent:<index>".` });
+          return;
+        }
+      }
+      const policyholderCoverTopup = policyholderCoverTopups.reduce((a, b) => a + b, 0);
+
+      let premium: string;
+      let ageRatedMembers: Awaited<ReturnType<typeof computeIndividualAgeRatedPremium>>["members"] | null = null;
+      if (product.pricingModel === "individual_age_rated") {
+        const defaultCover = product.coverAmount != null ? parseFloat(String(product.coverAmount)) : 0;
+        const effectivePolicyholderCover = (typeof policyholderCoverInput === "number" ? policyholderCoverInput : defaultCover) + policyholderCoverTopup;
+        for (let i = 0; i < createdDepCoverAmounts.length; i++) {
+          const dc = createdDepCoverAmounts[i];
+          const depTopup = dependentCoverTopups.get(i) ?? 0;
+          if (dc != null && dc + depTopup > effectivePolicyholderCover) {
+            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount ($${effectivePolicyholderCover}).` });
+            return;
+          }
+        }
+        const breakdown = await computeIndividualAgeRatedPremium(
+          orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
+          Number(pv.dependentMaxAge ?? 20),
+          {
+            dateOfBirth,
+            coverAmount: typeof policyholderCoverInput === "number" ? policyholderCoverInput : undefined,
+            coverTopup: policyholderCoverTopup || undefined,
+          },
+          createdDeps.map((d, i) => ({
+            dateOfBirth: d.dateOfBirth,
+            coverAmount: createdDepCoverAmounts[i],
+            coverTopup: dependentCoverTopups.get(i),
+          })),
+        );
+        premium = breakdown.total.toFixed(2);
+        ageRatedMembers = breakdown.members;
+      } else {
+        premium = await computePolicyPremium(
+          orgId, productVersionId, currency || "USD", paymentSchedule || "monthly",
+          requestedAddOnIds, resolvedMemberAddOns.length > 0 ? resolvedMemberAddOns : undefined,
+          undefined, createdDeps.map((d) => d.dateOfBirth || null),
+        );
+      }
       let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
       if (ben) {
         const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
@@ -11571,9 +11721,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
         return;
       }
-      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
-        { clientId: client.id, role: "policy_holder" },
-        ...createdDeps.map((dep) => ({ dependentId: dep.id, role: "dependent" as const })),
+      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
+        { clientId: client.id, role: "policy_holder", coverAmount: ageRatedMembers?.[0]?.coverAmount, premiumContribution: ageRatedMembers?.[0]?.contribution },
+        ...createdDeps.map((dep, i) => ({
+          dependentId: dep.id, role: "dependent" as const,
+          coverAmount: ageRatedMembers?.[i + 1]?.coverAmount, premiumContribution: ageRatedMembers?.[i + 1]?.contribution,
+        })),
       ];
       const { policy } = await storage.createPolicyWithInitialSetup(orgId, {
         policy: policyParsed,
@@ -11582,7 +11735,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reason: agentId ? "Registered via agent link" : "Walk-in self-registration",
           changedBy: null,
         },
-        members: memberRows, memberAddOns: [],
+        members: memberRows, memberAddOns: resolvedMemberAddOns,
       });
       await storage.createAuditLog({
         organizationId: orgId,

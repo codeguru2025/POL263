@@ -763,6 +763,18 @@ export const products = pgTable(
     // death/person_household default applied.
     benefitTrigger: text("benefit_trigger"),
     insuredEntityType: text("insured_entity_type"),
+    /**
+     * 'bundled_family' (default) — today's only behavior: a flat product_versions.premiumMonthly*
+     * base covers up to maxAdults/maxChildren/maxExtendedMembers members for free; anyone beyond
+     * that is surcharged (flat or age-banded) via product_versions.additionalMemberRate*. Existing
+     * products are untouched by this column's existence.
+     * 'individual_age_rated' — every covered life (policyholder included) is individually priced
+     * from age_band_rate_cards against their own cover_amount (this product's `coverAmount` above
+     * by default, per-member overridable up to the policyholder's own effective cover); there is
+     * no free/included member count and product_versions premiumMonthly/additionalMemberRate
+     * fields are ignored entirely. See computePolicyPremium (server/route-helpers.ts).
+     */
+    pricingModel: text("pricing_model").default("bundled_family").notNull(),
   },
   (t) => [
     index("products_org_idx").on(t.organizationId),
@@ -947,15 +959,53 @@ export const addOns = pgTable(
       .references(() => organizations.id),
     name: text("name").notNull(),
     description: text("description"),
+    // 'flat' | 'percentage' | 'cover_topup'. 'cover_topup' has no fixed price of its own — attaching
+    // it to a policy_member (individual_age_rated products only) adds coverIncrementAmount to that
+    // member's effective cover, and their premiumContribution is recomputed from the same
+    // age_band_rate_cards formula as their base cover (server/route-helpers.ts). priceAmount/
+    // priceMonthly/etc. are ignored for this mode.
     pricingMode: text("pricing_mode").default("flat").notNull(),
     priceAmount: numeric("price_amount"),
     priceMonthly: numeric("price_monthly"),
     priceWeekly: numeric("price_weekly"),
     priceBiweekly: numeric("price_biweekly"),
+    /** Only meaningful when pricingMode = 'cover_topup' — the extra sum assured this add-on grants
+     *  to whichever policy member it's attached to. */
+    coverIncrementAmount: numeric("cover_increment_amount"),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("addons_org_idx").on(t.organizationId)]
+);
+
+/** The dynamic/individual age-rated pricing engine's rate source: monthly premium per $1,000 of
+ *  sum assured, by age band, per product version + currency. Only consulted when the owning
+ *  product's pricingModel is 'individual_age_rated' (server/route-helpers.ts) — every product
+ *  using the default 'bundled_family' model never reads this table. One row per (product version,
+ *  age band, currency); a version with no rows configured prices every member at $0 for that
+ *  currency (same loud-not-silent convention as the existing additionalMemberRate* fallback). */
+export const AGE_BANDS = ["child", "21_65", "66_84", "85_plus"] as const;
+export type AgeBand = (typeof AGE_BANDS)[number];
+export const ageBandRateCards = pgTable(
+  "age_band_rate_cards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    productVersionId: uuid("product_version_id")
+      .notNull()
+      .references(() => productVersions.id),
+    ageBand: text("age_band").notNull(), // AgeBand
+    currency: text("currency").notNull(),
+    ratePerThousand: numeric("rate_per_thousand", { precision: 10, scale: 4 }).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("abrc_pv_idx").on(t.productVersionId),
+    uniqueIndex("abrc_pv_band_currency_idx").on(t.productVersionId, t.ageBand, t.currency),
+  ]
 );
 
 export const ageBandConfigs = pgTable(
@@ -1066,6 +1116,17 @@ export const policyMembers = pgTable(
     role: text("role").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    /**
+     * individual_age_rated products only (null/unused for bundled_family). This member's own
+     * effective sum assured — defaults to the product's coverAmount, may be raised via a
+     * cover_topup add-on, and for a dependent must never exceed the policyholder's own coverAmount
+     * on the same policy (enforced at the registration/quote route, not here).
+     */
+    coverAmount: numeric("cover_amount"),
+    /** Snapshot of this member's own slice of the policy premium at the price it was computed —
+     *  same snapshot convention as case_service_charges.computedAmount, so a later
+     *  age_band_rate_cards edit never silently rewrites a historical policy's billing. */
+    premiumContribution: numeric("premium_contribution"),
   },
   (t) => [
     index("pm_policy_idx").on(t.policyId),
@@ -3706,6 +3767,7 @@ export const insertBenefitCatalogItemSchema = createInsertSchema(benefitCatalogI
 export const insertBenefitBundleSchema = createInsertSchema(benefitBundles).omit({ id: true, createdAt: true });
 export const insertAddOnSchema = createInsertSchema(addOns).omit({ id: true, createdAt: true });
 export const insertAgeBandConfigSchema = createInsertSchema(ageBandConfigs).omit({ id: true, createdAt: true });
+export const insertAgeBandRateCardSchema = createInsertSchema(ageBandRateCards).omit({ id: true, createdAt: true });
 export const insertPolicySchema = createInsertSchema(policies).omit({ id: true, createdAt: true });
 export const insertPolicyMemberSchema = createInsertSchema(policyMembers).omit({ id: true, createdAt: true });
 export const insertPolicyAddOnSchema = createInsertSchema(policyAddOns).omit({ id: true, createdAt: true });
@@ -3842,6 +3904,8 @@ export type AddOn = typeof addOns.$inferSelect;
 export type InsertAddOn = z.infer<typeof insertAddOnSchema>;
 export type AgeBandConfig = typeof ageBandConfigs.$inferSelect;
 export type InsertAgeBandConfig = z.infer<typeof insertAgeBandConfigSchema>;
+export type AgeBandRateCard = typeof ageBandRateCards.$inferSelect;
+export type InsertAgeBandRateCard = z.infer<typeof insertAgeBandRateCardSchema>;
 export type Policy = typeof policies.$inferSelect;
 export type InsertPolicy = z.infer<typeof insertPolicySchema>;
 export type PolicyMember = typeof policyMembers.$inferSelect;
