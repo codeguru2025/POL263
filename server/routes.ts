@@ -1257,7 +1257,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Best-effort, fire-and-forget — a failed/slow email must never block the visitor's "quote
     // captured" response. Only fires when the quote was actually persisted (real DOBs given) and
     // an email address was provided; the vCard flow's own quick estimate (no email yet) never hits this.
-    if (quoteId && typeof email === "string" && email.trim()) {
+    if (quoteId && typeof email === "string" && email.trim() && await hasModule(orgId, "email_notifications")) {
       (async () => {
         const built = await buildQuotePdfBuffer(quoteId!, orgId);
         if (!built) return;

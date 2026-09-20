@@ -10,6 +10,7 @@ import { recordAgentCommission } from "./route-helpers";
 import { notifyUser } from "./user-notifications";
 import { pushToClient } from "./push";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
+import { hasModule } from "./module-gate";
 import type { OutboxMessage } from "@shared/schema";
 import {
   OUTBOX_TYPE_PAYMENT_STAFF_FOLLOWUP,
@@ -228,7 +229,7 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
     // below) if the email itself fails.
     try {
       const clientForEmail = await storage.getClient(intent.clientId, orgId);
-      if (clientForEmail?.email) {
+      if (clientForEmail?.email && await hasModule(orgId, "email_notifications")) {
         const org = await storage.getOrganization(orgId);
         const orgName = org?.name || "POL263";
         const { buildReceiptPdfBuffer } = await import("./receipt-pdf");
