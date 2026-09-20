@@ -32,7 +32,12 @@ function ageAt(dateOfBirth: string | null | undefined): number | null {
  *  (e.g. a tenant like Diaspora with its own public site), else POL263's own hosted join page. */
 export function resolveJoinUrl(org: { website?: string | null }, refCode: string | null, quoteId: string): string {
   if (org.website) {
-    const base = org.website.replace(/\/$/, "");
+    // organizations.website is free-text (set via the product/org settings form) — an admin may
+    // save it without a protocol (e.g. "diasporafuneralservices.com"), which would otherwise
+    // produce a relative link that resolves against whatever page the email/PDF is opened in,
+    // not the tenant's actual site.
+    const withProtocol = /^https?:\/\//i.test(org.website) ? org.website : `https://${org.website}`;
+    const base = withProtocol.replace(/\/$/, "");
     return `${base}/join?quoteId=${encodeURIComponent(quoteId)}`;
   }
   const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");

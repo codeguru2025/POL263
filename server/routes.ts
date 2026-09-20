@@ -3996,7 +3996,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const effectivePolicyholderCover = policyholderCoverInput ?? defaultCover;
       const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount > effectivePolicyholderCover);
       if (overCap) {
-        return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount ($${effectivePolicyholderCover}).` });
+        return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount (${policyInsert.currency || "USD"} ${effectivePolicyholderCover}).` });
       }
       const breakdown = await computeIndividualAgeRatedPremium(
         user.organizationId, productVersion.id, issuedProduct, policyInsert.currency || "USD", policyInsert.paymentSchedule || "monthly",
@@ -11741,7 +11741,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const dc = createdDepCoverAmounts[i];
           const depTopup = dependentCoverTopups.get(i) ?? 0;
           if (dc != null && dc + depTopup > effectivePolicyholderCover) {
-            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount ($${effectivePolicyholderCover}).` });
+            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount (${currency || "USD"} ${effectivePolicyholderCover}).` });
             return;
           }
         }
@@ -11845,21 +11845,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // claim + login first. Skipped for a pure walk-in (agentId null): payment_links.
       // createdByUserId is a real, NOT NULL user FK, and a walk-in has no referring agent to
       // attribute it to; staff can still create one manually via POST /api/policies/:id/payment-links.
-      let paymentLink: { token: string; expiresAt: Date } | null = null;
+      // The policy is already committed at this point — a failure creating the payment link must
+      // never turn an already-successful registration into an error response to the client (who
+      // would otherwise see a 500 for something that actually worked, and might retry into the
+      // "duplicate policy" 400 below on a second attempt). Best-effort: log and return null.
+      let paymentLink: { token: string; expiresAt: Date; url: string | null } | null = null;
       if (agentId && parseFloat(policy.premiumAmount) > 0) {
-        const link = await storage.createPaymentLink({
-          organizationId: orgId,
-          policyId: policy.id,
-          clientId: client.id,
-          token: crypto.randomBytes(24).toString("base64url"),
-          amount: policy.premiumAmount,
-          currency: policy.currency,
-          payerPhone: client.phone || null,
-          status: "active",
-          createdByUserId: agentId,
-          expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
-        } as any);
-        paymentLink = { token: link.token, expiresAt: link.expiresAt };
+        try {
+          const link = await storage.createPaymentLink({
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: client.id,
+            token: crypto.randomBytes(24).toString("base64url"),
+            amount: policy.premiumAmount,
+            currency: policy.currency,
+            payerPhone: client.phone || null,
+            status: "active",
+            createdByUserId: agentId,
+            expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+          } as any);
+          // Convenience for a tenant with no frontend of its own for this step — the token alone
+          // resolves the org (loadPublicPaymentLink), so this page works from any hostname
+          // regardless of which tenant it belongs to. A caller building its own payment UI
+          // (e.g. against a custom domain) can ignore this and use just the token.
+          const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+          paymentLink = { token: link.token, expiresAt: link.expiresAt, url: appBase ? `${appBase}/pay/policy/${link.token}` : null };
+        } catch (err: any) {
+          structuredLog("error", "Auto payment-link creation failed after policy registration", { error: err?.message, policyId: policy.id, orgId });
+        }
       }
       res.status(201).json({
         policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,

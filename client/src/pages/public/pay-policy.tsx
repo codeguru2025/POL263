@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useRoute } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, CheckCircle2, XCircle, Clock, Receipt } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
@@ -28,6 +30,9 @@ const METHOD_LABELS: Record<string, string> = {
 export default function PayPolicyLink() {
   const [, params] = useRoute("/pay/policy/:token");
   const token = params?.token as string;
+  // Only set when the link itself has no method yet — a link auto-created at self-registration
+  // (see server/routes.ts handlePublicPolicyRegistration) rather than picked by staff up front.
+  const [chosenMethod, setChosenMethod] = useState("");
 
   const { data: link, isLoading, refetch } = useQuery<PublicPaymentLink>({
     queryKey: [`/api/pay/${token}`],
@@ -37,10 +42,11 @@ export default function PayPolicyLink() {
     },
     enabled: !!token,
   });
+  const needsMethodChoice = !!link && link.status === "active" && !link.method;
 
   const pn = usePaynowPolling({
     initiate: async () => {
-      const res = await apiRequest("POST", `/api/pay/${token}/initiate`, {});
+      const res = await apiRequest("POST", `/api/pay/${token}/initiate`, needsMethodChoice ? { method: chosenMethod } : {});
       return res.json();
     },
     poll: async () => {
@@ -96,16 +102,32 @@ export default function PayPolicyLink() {
             <div className="space-y-5">
               <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">Amount due</span><span className="font-mono font-semibold">{link.currency} {link.amount}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Method</span><span className="font-medium">{METHOD_LABELS[link.method || ""] || link.method}</span></div>
+                {!needsMethodChoice && (
+                  <div className="flex justify-between"><span className="text-gray-500">Method</span><span className="font-medium">{METHOD_LABELS[link.method || ""] || link.method}</span></div>
+                )}
                 {link.payerPhone && (
                   <div className="flex justify-between"><span className="text-gray-500">Phone</span><span className="font-mono">{link.payerPhone}</span></div>
                 )}
               </div>
 
+              {needsMethodChoice && pn.phase === "idle" && (
+                <div className="space-y-2">
+                  <Label htmlFor="pp-method">How would you like to pay?</Label>
+                  <Select value={chosenMethod} onValueChange={setChosenMethod}>
+                    <SelectTrigger id="pp-method" data-testid="select-payment-method"><SelectValue placeholder="Choose a payment method" /></SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(METHOD_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>{label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               {pn.failed && <p className="text-sm text-destructive">{pn.failed}</p>}
 
               {pn.phase === "idle" && (
-                <Button className="w-full" size="lg" disabled={pn.initiating} onClick={() => pn.initiate()} data-testid="btn-pay-now">
+                <Button className="w-full" size="lg" disabled={pn.initiating || (needsMethodChoice && !chosenMethod)} onClick={() => pn.initiate()} data-testid="btn-pay-now">
                   {pn.initiating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Receipt className="h-4 w-4 mr-2" />}
                   Pay Now
                 </Button>

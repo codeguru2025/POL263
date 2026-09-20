@@ -10,6 +10,48 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-21 — Diaspora integration day: genericity + edge-case pass
+
+**Context:** everything built for the Diaspora Funeral Services integration (dynamic pricing,
+public payment links, PDF emails, CSRF bearer bypass) was written parameterized by orgId from the
+start — no literal Diaspora IDs/refcodes in any logic. But "not hardcoded" and "actually usable by
+any other tenant" turned out to be different questions. A deliberate pass found five real issues:
+
+1. **`PUBLIC_API_BEARER_TOKEN` was one global secret for every tenant.** Superseded earlier the
+   same day (see the "dedicated rate limits + CSRF bearer-token bypass" entry above) but wrong on
+   reflection: one shared token across every tenant's marketing-site integration means no
+   per-tenant revocation, no attribution of which integration made a call, and one leak exposing
+   every tenant's public write routes at once. Replaced with the same per-tenant credential model
+   the customer-service API already uses — `server/public-api-bearer.ts`,
+   `script/provision-public-api-credential.ts`. Diaspora's control-plane row was provisioned with
+   its already-deployed secret unchanged, so nothing broke for them; the old env var is now dead
+   config on the DO app.
+2. **POL263's own hosted `/pay/policy/:token` page couldn't actually complete a self-registration
+   payment for any tenant that didn't build a custom frontend.** `payment_links.method` is now
+   nullable for auto-created links (a self-registered client hasn't picked a method yet), but
+   `client/src/pages/public/pay-policy.tsx` had no UI to let them choose one — clicking "Pay Now"
+   would just 400 forever. Added a method picker, shown only when the link has no method baked in.
+   Diaspora's build works around this (their own frontend, per their own choice of integration
+   shape); any other tenant relying on POL263's default page would have hit a dead end.
+3. Two "cover amount cannot exceed..." validation messages hardcoded a `$` sign regardless of the
+   policy's actual currency — cosmetic but wrong for a ZAR/ZiG tenant.
+4. `resolveJoinUrl` (server/quote-pdf.ts) didn't normalize `organizations.website` — a value saved
+   without a protocol (e.g. "example.com" instead of "https://example.com") produced a relative
+   link that resolves against whatever page an email/PDF happens to be opened in, not the tenant's
+   actual site.
+5. Auto-creating a payment link right after `handlePublicPolicyRegistration` commits the policy
+   wasn't wrapped in error handling — a transient failure there would 500 a request whose policy
+   had already been successfully created, and a client retrying on that 500 would then hit the
+   duplicate-policy check instead of understanding what happened. Now best-effort/logged.
+
+**Lesson for next time:** parameterizing by orgId proves a feature isn't hardcoded to one tenant;
+it doesn't prove the feature *works* for a tenant that exercises it differently (no custom
+frontend, a non-USD currency, an unset website field). After building anything meant to be
+tenant-generic, walk through it once as if a *different* tenant were the one using it, specifically
+via whatever path doesn't match the tenant it was actually built against.
+
+---
+
 ## 2026-09-20 — Public PII-writing endpoints missing dedicated rate limits
 
 **Symptom:** none reported yet — found while reviewing whether onboarding Diaspora Funeral

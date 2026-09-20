@@ -11,6 +11,11 @@ describe("resolveJoinUrl", () => {
     expect(url).toBe("https://diasporafuneralservices.com/join?quoteId=quote-1");
   });
 
+  it("adds https:// when the saved website has no protocol", () => {
+    const url = resolveJoinUrl({ website: "diasporafuneralservices.com" }, "AGT123", "quote-1");
+    expect(url).toBe("https://diasporafuneralservices.com/join?quoteId=quote-1");
+  });
+
   it("falls back to POL263's own hosted join page with the ref code when the org has no site", () => {
     const url = resolveJoinUrl({ website: null }, "AGT123", "quote-1");
     expect(url).toContain("/join/AGT123?quoteId=quote-1");
