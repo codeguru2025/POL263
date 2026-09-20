@@ -968,6 +968,9 @@ export const addOns = pgTable(
       .references(() => organizations.id),
     name: text("name").notNull(),
     description: text("description"),
+    /** Free-text UI grouping (e.g. "Personalisation & Memorial") — display-only, not read by any
+     *  pricing logic. Null for every add-on that existed before this column. */
+    category: text("category"),
     // 'flat' | 'percentage' | 'cover_topup'. 'cover_topup' has no fixed price of its own — attaching
     // it to a policy_member (individual_age_rated products only) adds coverIncrementAmount to that
     // member's effective cover, and their premiumContribution is recomputed from the same
