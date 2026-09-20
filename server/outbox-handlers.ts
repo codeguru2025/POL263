@@ -218,6 +218,43 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
       receiptId: receiptForNotify.id,
     });
     await dispatchNotification(orgId, "payment_receipt", intent.clientId, ctx);
+
+    // Separate from the templated notification above (which may or may not include email
+    // depending on the org's configured channels) — this always emails the receipt + policy
+    // document PDFs together when the client has an email on file, since a self-registered
+    // client (see server/routes.ts handlePublicPolicyRegistration) may have no other way to
+    // receive their policy document at all before claiming their portal account. Best-effort:
+    // never fails the outbox message (which also drives commission/platform-fee bookkeeping
+    // below) if the email itself fails.
+    try {
+      const clientForEmail = await storage.getClient(intent.clientId, orgId);
+      if (clientForEmail?.email) {
+        const org = await storage.getOrganization(orgId);
+        const orgName = org?.name || "POL263";
+        const { buildReceiptPdfBuffer } = await import("./receipt-pdf");
+        const { buildPolicyApplicationPdfBuffer } = await import("./policy-client-forms");
+        const [receiptPdf, policyPdf] = await Promise.all([
+          buildReceiptPdfBuffer(receiptForNotify.id),
+          buildPolicyApplicationPdfBuffer(policy.id, orgId),
+        ]);
+        const attachments = [receiptPdf, policyPdf]
+          .filter((a): a is NonNullable<typeof a> => !!a)
+          .map((a) => ({ filename: a.filename, content: a.buffer, contentType: "application/pdf" }));
+        if (attachments.length > 0) {
+          const { sendEmail, escapeHtml } = await import("./email-service");
+          await sendEmail({
+            to: clientForEmail.email,
+            fromName: orgName,
+            subject: `Payment Received — ${policy.policyNumber}`,
+            text: `Dear ${clientForEmail.firstName},\n\nThank you for your payment. Your receipt and policy document are attached.\n\n— ${orgName}`,
+            html: `<p>Dear ${escapeHtml(clientForEmail.firstName)},</p><p>Thank you for your payment. Your receipt and policy document are attached.</p><p>— ${escapeHtml(orgName)}</p>`,
+            attachments,
+          });
+        }
+      }
+    } catch (err: any) {
+      structuredLog("error", "Payment receipt/policy-document email failed", { error: err?.message, policyId: policy.id, orgId });
+    }
   }
 
   if (policy?.agentId) {

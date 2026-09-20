@@ -32,6 +32,8 @@ import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { recommendProducts, signQuoteToken, verifyQuoteToken } from "./quote-engine";
 import { verifyTurnstileToken } from "./turnstile";
+import { buildQuotePdfBuffer, resolveJoinUrl } from "./quote-pdf";
+import { buildPolicyApplicationPdfBuffer } from "./policy-client-forms";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -1252,6 +1254,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       eventType: "quote_request",
       payloadJson: { leadId: lead.id, quoteId },
     });
+    // Best-effort, fire-and-forget — a failed/slow email must never block the visitor's "quote
+    // captured" response. Only fires when the quote was actually persisted (real DOBs given) and
+    // an email address was provided; the vCard flow's own quick estimate (no email yet) never hits this.
+    if (quoteId && typeof email === "string" && email.trim()) {
+      (async () => {
+        const built = await buildQuotePdfBuffer(quoteId!, orgId);
+        if (!built) return;
+        const org = await storage.getOrganization(orgId);
+        const orgName = org?.name || "POL263";
+        const joinUrl = resolveJoinUrl({ website: org?.website ?? null }, refCode, quoteId!);
+        await sendEmail({
+          to: email.trim(),
+          fromName: orgName,
+          subject: `Your Quote from ${orgName}`,
+          text: `Dear ${built.quote.policyholderName},\n\nYour personalised quote is attached. Ready to proceed? ${joinUrl}\n\n— ${orgName}`,
+          html: `<p>Dear ${escapeHtml(built.quote.policyholderName)},</p><p>Your personalised quote is attached.</p><p><a href="${joinUrl}">Click here to join</a></p><p>— ${escapeHtml(orgName)}</p>`,
+          attachments: [{ filename: built.filename, content: built.buffer, contentType: "application/pdf" }],
+        });
+      })().catch((err) => structuredLog("error", "Quote PDF email failed", { error: err?.message, quoteId }));
+    }
     return res.status(201).json({ leadId: lead.id, quoteId });
   });
 

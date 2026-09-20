@@ -329,6 +329,66 @@ export async function streamPolicyApplicationPDF(
   doc.end();
 }
 
+/**
+ * Same content/layout as streamPolicyApplicationPDF, captured to a Buffer instead of piped to an
+ * HTTP response — for emailing as an attachment (see server/routes.ts, sent automatically once a
+ * publicly self-registered policy's first payment is confirmed) rather than a staff download.
+ */
+export async function buildPolicyApplicationPdfBuffer(policyId: string, orgId: string): Promise<{ buffer: Buffer; filename: string } | null> {
+  const policy = await storage.getPolicy(policyId, orgId);
+  if (!policy) return null;
+  const org = await storage.getOrganization(orgId);
+  if (!org) return null;
+
+  const client = await storage.getClient(policy.clientId, orgId);
+  const pv = policy.productVersionId ? await storage.getProductVersion(policy.productVersionId, orgId) : null;
+  const agentUser = policy.agentId ? await storage.getUser(policy.agentId, orgId) : null;
+
+  const doc = new PDFDocument({ size: "A4", margin: 0, bufferPages: true });
+  const chunks: Buffer[] = [];
+  doc.on("data", (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  let y = await buildHeader(doc, { name: org.name, phone: org.phone ?? null, email: org.email ?? null, address: org.address ?? null, logoUrl: (org as any).logoUrl ?? null }, "POLICY DOCUMENT", `Policy: ${policy.policyNumber} · Issued: ${new Date().toLocaleDateString("en-ZA")}`);
+
+  y = sectionHeader(doc, "Policy Details", y);
+  y = twoColRow(doc, "Policy Number", fmt(policy.policyNumber), "Status", fmt(policy.status), y);
+  y = twoColRow(doc, "Product", pv ? fmt((pv as any).productName || (pv as any).name) : "—", "Version", pv ? fmt(String((pv as any).versionNumber || pv.version || "")) : "—", y);
+  y = twoColRow(doc, "Payment Schedule", fmt(policy.paymentSchedule), "Currency", fmt(policy.currency), y);
+  y = twoColRow(doc, "Premium Amount", fmt(policy.premiumAmount), "Effective Date", fmtDate(policy.effectiveDate), y);
+  y = infoRow(doc, "Agent", agentUser ? fmt(agentUser.displayName ?? agentUser.email) : "—", y);
+  y += 6;
+
+  y = sectionHeader(doc, "Policyholder", y);
+  if (client) {
+    y = twoColRow(doc, "Full Name", `${fmt(client.title)} ${fmt(client.firstName)} ${fmt(client.lastName)}`.trim(), "National ID", fmt(client.nationalId), y);
+    y = twoColRow(doc, "Phone", fmt(client.phone), "Email", fmt(client.email), y);
+  } else {
+    y = infoRow(doc, "Client ID", fmt(policy.clientId), y);
+  }
+  y += 6;
+
+  y = sectionHeader(doc, "Beneficiary", y);
+  y = twoColRow(doc, "First Name", fmt(policy.beneficiaryFirstName), "Last Name", fmt(policy.beneficiaryLastName), y);
+  y = twoColRow(doc, "Relationship", fmt(policy.beneficiaryRelationship), "National ID", fmt(policy.beneficiaryNationalId), y);
+  y = infoRow(doc, "Phone", fmt(policy.beneficiaryPhone), y);
+  y += 8;
+
+  y = sectionHeader(doc, "Important", y);
+  doc.font("Helvetica").fontSize(8.5).fillColor(C_TEXT)
+    .text("This document confirms your policy has been issued. Keep it for your records. Your policy number and activation code (sent separately) let you access your client portal to view your cover, make payments, and update your details.", MARGIN + 8, y, { width: COL - 16 });
+  y += 40;
+
+  const [sigBuf, qrBuf] = await Promise.all([
+    resolveImage((org as any).signatureUrl),
+    (async () => { const u = buildVerifyUrl("policy", policy.id, policy.organizationId); return u ? buildVerifyQrBuffer(u) : null; })(),
+  ]);
+  footer(doc, org.name, "Policy Document", policy.policyNumber, sigBuf, qrBuf);
+  doc.end();
+  const buffer = await done;
+  return { buffer, filename: `Policy-${policy.policyNumber}.pdf` };
+}
+
 export async function streamPolicyApplicationBlankPDF(orgId: string, res: Response, opts?: { attachment?: boolean }): Promise<void> {
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `${opts?.attachment ? "attachment" : "inline"}; filename="blank-policy-application.pdf"`);
