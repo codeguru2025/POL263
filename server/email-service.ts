@@ -30,14 +30,35 @@ export interface SendEmailOptions {
   text: string;
   html: string;
   fromName?: string;
-  /** Overrides the default EMAIL_FROM address — e.g. a tenant's own mail.{slug}.pol263.com
-   *  address (server/email-domain-provisioning.ts) so a reply comes from the same domain the
-   *  original message arrived at, instead of the shared platform address. */
+  /** Overrides the default EMAIL_FROM address — e.g. a tenant's own verified domain
+   *  (organizations.emailFromAddress, resolved via server/tenant-email-sending.ts) so a
+   *  notification/PDF email comes from the tenant's own domain instead of the shared platform
+   *  address. Must be paired with `apiKeyOverride` for a domain other than the platform's own —
+   *  see that comment below. */
   from?: string;
+  /** A Resend API key scoped to `from`'s domain, when it isn't the platform's own. The platform's
+   *  own SMTP_PASS is deliberately a "sending access" key restricted to just its one domain (see
+   *  .env.example) — the same Resend account can hold many verified domains, but a
+   *  domain-restricted key can only ever send from the one domain it was scoped to, so sending
+   *  from a tenant's own domain needs a second, separately-scoped key, not just a different
+   *  `from` address (confirmed empirically: the platform key gets "550 This API key is not
+   *  authorized to send emails from <domain>" otherwise). Builds a separate, cached-per-key
+   *  transporter rather than touching the platform's own cached one. */
+  apiKeyOverride?: string;
   attachments?: { filename: string; content: Buffer; contentType?: string }[];
 }
 
 let cachedTransporter: Transporter | null | undefined;
+const overrideTransporters = new Map<string, Transporter>();
+
+function buildTransporter(user: string, pass: string): Transporter {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || "587"),
+    secure: process.env.SMTP_SECURE === "true",
+    auth: { user, pass },
+  });
+}
 
 export function getTransporter(): Transporter | null {
   if (cachedTransporter !== undefined) return cachedTransporter;
@@ -50,31 +71,28 @@ export function getTransporter(): Transporter | null {
     return null;
   }
 
-  cachedTransporter = nodemailer.createTransport({
-    host,
-    port: parseInt(process.env.SMTP_PORT || "587"),
-    secure: process.env.SMTP_SECURE === "true",
-    auth: { user, pass },
-  });
+  cachedTransporter = buildTransporter(user, pass);
   return cachedTransporter;
+}
+
+/** A transporter using a per-tenant API key instead of the platform's own — same relay host, same
+ *  SMTP "resend" username convention, different credential. Cached per key so a tenant with a
+ *  steady stream of outbound email doesn't reconnect every send. */
+function getOverrideTransporter(apiKey: string): Transporter {
+  const existing = overrideTransporters.get(apiKey);
+  if (existing) return existing;
+  const transporter = buildTransporter(process.env.SMTP_USER || "resend", apiKey);
+  overrideTransporters.set(apiKey, transporter);
+  return transporter;
 }
 
 export function isEmailConfigured(): boolean {
   return getTransporter() !== null;
 }
 
-/** Resolves the "from" address for an org's transactional email: its own verified domain
- *  (organizations.emailFromAddress) when set, else the platform default (sendEmail's own
- *  EMAIL_FROM fallback — return undefined here to let that apply). Centralizes the fallback so
- *  every caller (notifications, quote/receipt/policy-document PDFs) picks the tenant's own
- *  domain the same way, without each one re-deriving the same `org.emailFromAddress || undefined`. */
-export function resolveFromAddress(org: { emailFromAddress?: string | null } | null | undefined): string | undefined {
-  return org?.emailFromAddress || undefined;
-}
-
 /** Send an email. Returns ok:false (never throws) if SMTP isn't configured or the send fails. */
 export async function sendEmail(opts: SendEmailOptions): Promise<{ ok: boolean; message: string }> {
-  const transporter = getTransporter();
+  const transporter = opts.apiKeyOverride ? getOverrideTransporter(opts.apiKeyOverride) : getTransporter();
   if (!transporter) {
     return { ok: false, message: "SMTP is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_PORT and EMAIL_FROM in your environment variables." };
   }

@@ -242,10 +242,11 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
           .filter((a): a is NonNullable<typeof a> => !!a)
           .map((a) => ({ filename: a.filename, content: a.buffer, contentType: "application/pdf" }));
         if (attachments.length > 0) {
-          const { sendEmail, escapeHtml, resolveFromAddress } = await import("./email-service");
+          const { sendEmail, escapeHtml } = await import("./email-service");
+          const { resolveTenantEmailOverrides } = await import("./tenant-email-sending");
           await sendEmail({
             to: clientForEmail.email,
-            from: resolveFromAddress(org),
+            ...(await resolveTenantEmailOverrides(orgId, org)),
             fromName: orgName,
             subject: `Payment Received — ${policy.policyNumber}`,
             text: `Dear ${clientForEmail.firstName},\n\nThank you for your payment. Your receipt and policy document are attached.\n\n— ${orgName}`,

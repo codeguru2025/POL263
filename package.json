@@ -25,6 +25,7 @@
     "provision:customer-service": "tsx script/provision-customer-service-credential.ts",
     "provision:public-api": "tsx script/provision-public-api-credential.ts",
     "resend:check-domain": "tsx script/check-resend-domain-status.ts",
+    "provision:resend-sending": "tsx script/provision-resend-sending-key.ts",
     "set-org-email-from": "tsx script/set-org-email-from-address.ts",
     "db:migrate:shared-registry": "tsx script/migrate-orgs-users-to-do.ts",
     "db:push:tenant": "cross-env NODE_TLS_REJECT_UNAUTHORIZED=0 drizzle-kit push --config=drizzle.tenant.config.ts",

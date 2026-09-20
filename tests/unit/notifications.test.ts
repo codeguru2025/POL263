@@ -23,7 +23,9 @@ vi.mock("../../server/storage", () => ({ storage: mockStorage }));
 vi.mock("../../server/email-service", () => ({
   sendEmail: (...args: any[]) => mockSendEmail(...args),
   escapeHtml: (v: unknown) => String(v ?? ""),
-  resolveFromAddress: (org: any) => org?.emailFromAddress || undefined,
+}));
+vi.mock("../../server/tenant-email-sending", () => ({
+  resolveTenantEmailOverrides: async (_orgId: string, org: any) => (org?.emailFromAddress ? { from: org.emailFromAddress } : {}),
 }));
 vi.mock("../../server/push", () => ({ pushToClient: (...args: any[]) => mockPushToClient(...args) }));
 vi.mock("../../server/module-gate", () => ({ hasModule: (...args: any[]) => mockHasModule(...args) }));

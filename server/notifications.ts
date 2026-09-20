@@ -1,7 +1,8 @@
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { pushToClient } from "./push";
-import { sendEmail, escapeHtml, resolveFromAddress } from "./email-service";
+import { sendEmail, escapeHtml } from "./email-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { sendSms } from "./sms-service";
 import { hasModule } from "./module-gate";
 
@@ -329,7 +330,7 @@ export async function dispatchNotification(
               const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
               const result = await sendEmail({
                 to: clientEmail,
-                from: resolveFromAddress(org),
+                ...(await resolveTenantEmailOverrides(orgId, org)),
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,
@@ -417,7 +418,7 @@ export async function dispatchNotification(
               // templated-path call site above for why the optimistic "sent" log needs correcting).
               const result = await sendEmail({
                 to: client.email,
-                from: resolveFromAddress(org),
+                ...(await resolveTenantEmailOverrides(orgId, org)),
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,

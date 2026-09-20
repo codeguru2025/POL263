@@ -53,7 +53,8 @@ import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-se
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
-import { sendEmail, escapeHtml, resolveFromAddress } from "./email-service";
+import { sendEmail, escapeHtml } from "./email-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
 import { tenantSubscriptions, billingPlans, tenantInvoices, tenantFeatureFlags } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
@@ -1264,9 +1265,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const org = await storage.getOrganization(orgId);
         const orgName = org?.name || "POL263";
         const joinUrl = resolveJoinUrl({ website: org?.website ?? null }, refCode, quoteId!);
+        const emailOverrides = await resolveTenantEmailOverrides(orgId, org);
         await sendEmail({
           to: email.trim(),
-          from: resolveFromAddress(org),
+          ...emailOverrides,
           fromName: orgName,
           subject: `Your Quote from ${orgName}`,
           text: `Dear ${built.quote.policyholderName},\n\nYour personalised quote is attached. Ready to proceed? ${joinUrl}\n\n— ${orgName}`,
@@ -8626,7 +8628,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const result = await sendEmail({
       to: recipientEmail,
-      from: resolveFromAddress(org),
+      ...(await resolveTenantEmailOverrides(user.organizationId, org)),
       fromName: orgName,
       subject: `Your Insurance Quote from ${orgName}`,
       text: [
