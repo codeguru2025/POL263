@@ -1320,16 +1320,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
     if (requestedIds.length > 0) {
       const orgAddOns = await storage.getAddOns(orgId);
-      const items = requestedIds
+      const matchedAddOns = requestedIds
         .map((id) => orgAddOns.find((a: any) => a.id === id))
-        .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false)
-        .map((addOn: any) => {
-          const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
-          return { description: addOn.name, quantity: "1.00", unitPrice: amount.toFixed(2), lineTotal: amount.toFixed(2) };
-        });
+        .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false);
+      // A quotation carries one currency for the whole document — every add-on requested here is
+      // assumed to share the org's own add-on currency (they're all seeded/configured together);
+      // this takes the first matched add-on's rather than hardcoding one.
+      const quotationCurrency = matchedAddOns[0]?.currency || "USD";
+      const items = matchedAddOns.map((addOn: any) => {
+        const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+        return { description: addOn.name, quantity: "1.00", unitPrice: amount.toFixed(2), lineTotal: amount.toFixed(2) };
+      });
       if (items.length > 0) {
         quote = await storage.createStandaloneQuotation(orgId, {
-          currency: "USD",
+          currency: quotationCurrency,
           status: "draft",
           notes: "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.",
           deceasedName: typeof deceasedName === "string" && deceasedName.trim() ? deceasedName.trim() : undefined,
@@ -1362,15 +1366,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
     const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
     const orgAddOns = requestedIds.length > 0 ? await storage.getAddOns(orgId) : [];
-    const items = requestedIds
+    const matchedAddOns = requestedIds
       .map((id) => orgAddOns.find((a: any) => a.id === id))
-      .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false)
-      .map((addOn: any) => {
-        const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
-        return { addOnId: addOn.id, name: addOn.name, unitPrice: amount.toFixed(2) };
-      });
+      .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false);
+    const items = matchedAddOns.map((addOn: any) => {
+      const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+      return { addOnId: addOn.id, name: addOn.name, unitPrice: amount.toFixed(2) };
+    });
     const total = items.reduce((sum, it) => sum + parseFloat(it.unitPrice), 0);
-    return res.json({ items, total: total.toFixed(2), currency: "USD" });
+    return res.json({ items, total: total.toFixed(2), currency: matchedAddOns[0]?.currency || "USD" });
   });
 
   // Fetches a previously-submitted cash-service quotation back — lets DFS show/link to it after
@@ -10735,7 +10739,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       name: addOn.name,
       quantity: quantity.toFixed(2),
       computedAmount: amount.toFixed(2),
-      currency: "USD",
+      currency: addOn.currency || "USD",
       status: amount > 0 ? "unpaid" : "paid",
       notes: [note, typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : null].filter(Boolean).join(" "),
       createdByUserId: effectiveUserId,

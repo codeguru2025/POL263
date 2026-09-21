@@ -984,6 +984,11 @@ export const addOns = pgTable(
     /** Only meaningful when pricingMode = 'cover_topup' — the extra sum assured this add-on grants
      *  to whichever policy member it's attached to. */
     coverIncrementAmount: numeric("cover_increment_amount"),
+    /** Currency coverIncrementAmount/priceAmount/etc. are denominated in. Defaults to "USD" for
+     *  every add-on that existed before this column — every tenant using add-ons was USD-only in
+     *  practice, but nothing enforced it; server/route-helpers.ts resolveAddOnCashCharge and its
+     *  callers (server/routes.ts) now read this instead of assuming USD. */
+    currency: text("currency").default("USD").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

@@ -119,7 +119,7 @@ type ProductVersion = {
 
 type BenefitCatalogItem = { id: string; name: string; description: string | null; internalCostDefault: string | null; isActive: boolean; };
 type BenefitBundle = { id: string; name: string; description: string | null; items: unknown; isActive: boolean; };
-type AddOn = { id: string; name: string; description: string | null; pricingMode: string; priceAmount: string | null; priceMonthly: string | null; priceWeekly: string | null; priceBiweekly: string | null; coverIncrementAmount: string | null; isActive: boolean; };
+type AddOn = { id: string; name: string; description: string | null; category: string | null; pricingMode: string; currency: string; priceAmount: string | null; priceMonthly: string | null; priceWeekly: string | null; priceBiweekly: string | null; coverIncrementAmount: string | null; isActive: boolean; };
 type AgeBandConfig = { id: string; name: string; minAge: number; maxAge: number; version: number; effectiveFrom: string | null; isActive: boolean; };
 type AgeBandRateCard = { id: string; productVersionId: string; ageBand: string; currency: string; ratePerThousand: string; isActive: boolean; };
 
@@ -2463,6 +2463,7 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
   const [priceBiweekly, setPriceBiweekly] = useState("");
   const [priceAmount, setPriceAmount] = useState("");
   const [coverIncrementAmount, setCoverIncrementAmount] = useState("");
+  const [currency, setCurrency] = useState("USD");
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -2474,6 +2475,7 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
             name,
             description: description || undefined,
             pricingMode,
+            currency,
             priceAmount: priceMonthly || priceAmount || undefined,
             priceMonthly: priceMonthly || undefined,
             priceWeekly: priceWeekly || undefined,
@@ -2482,6 +2484,7 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
           });
         }} className="space-y-4">
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Tombstone Cover" data-testid="input-addon-name" /></div>
+          <div className="space-y-2"><Label>Currency</Label><CurrencySelect value={currency} onValueChange={setCurrency} /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What does this add-on provide?" data-testid="input-addon-description" /></div>
           <div className="space-y-2">
             <Label htmlFor="pricing-mode">Pricing Mode</Label>
@@ -2581,6 +2584,7 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
   const [priceBiweekly, setPriceBiweekly] = useState(addon.priceBiweekly || "");
   const [priceAmount, setPriceAmount] = useState(addon.priceAmount || "");
   const [coverIncrementAmount, setCoverIncrementAmount] = useState(addon.coverIncrementAmount || "");
+  const [currency, setCurrency] = useState(addon.currency || "USD");
   const [isActive, setIsActive] = useState(addon.isActive);
 
   return (
@@ -2593,6 +2597,7 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
             name,
             description: description || null,
             pricingMode,
+            currency,
             priceAmount: priceMonthly || priceAmount || null,
             priceMonthly: priceMonthly || null,
             priceWeekly: priceWeekly || null,
@@ -2602,6 +2607,7 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
           });
         }} className="space-y-4">
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div>
+          <div className="space-y-2"><Label>Currency</Label><CurrencySelect value={currency} onValueChange={setCurrency} /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
           <div className="space-y-2">
             <Label htmlFor="pricing-mode-2">Pricing Mode</Label>
