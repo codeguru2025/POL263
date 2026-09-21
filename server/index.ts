@@ -285,6 +285,11 @@ if (enableCsrf) {
   app.use("/api/public/quote", publicLimiter);
   app.use("/api/public/verify", publicLimiter);
   app.use("/api/public/tenant-context", publicLimiter);
+  // Deliberately a sibling path, not /api/public/funeral-request/estimate — app.use's prefix
+  // matching would otherwise put this under the stricter publicRegistrationLimiter mounted below
+  // at "/api/public/funeral-request" too, capping a live per-keystroke preview at 10/min instead
+  // of the 30/min this read-only, nothing-persisted estimate actually warrants.
+  app.use("/api/public/funeral-request-estimate", publicLimiter);
 
   // Registration endpoints go further than agent-vcard/quote above — each request writes a
   // real Client + Policy row carrying PII (name, national ID, DOB, dependents, beneficiary),

@@ -25,8 +25,11 @@ import { structuredLog } from "./logger";
 
 export const PUBLIC_API_PROVIDER_KEY = "public_api";
 
-const PUBLIC_API_BEARER_PATH_PREFIXES = ["/api/public/agent-vcard/"];
-const PUBLIC_API_BEARER_EXACT_PATHS = ["/api/public/quote", "/api/public/register-policy", "/api/public/funeral-request"];
+// Trailing slash on the prefixes matters — it makes this a real path-segment boundary rather than
+// a raw string-prefix check, so a future sibling path (e.g. "/api/public/funeral-requestXYZ")
+// can never accidentally match.
+const PUBLIC_API_BEARER_PATH_PREFIXES = ["/api/public/agent-vcard/", "/api/public/funeral-request/"];
+const PUBLIC_API_BEARER_EXACT_PATHS = ["/api/public/quote", "/api/public/register-policy", "/api/public/funeral-request", "/api/public/funeral-request-estimate"];
 
 export function isPublicApiBearerPath(path: string): boolean {
   return PUBLIC_API_BEARER_EXACT_PATHS.includes(path) || PUBLIC_API_BEARER_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));

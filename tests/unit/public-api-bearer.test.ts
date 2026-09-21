@@ -55,6 +55,15 @@ describe("isPublicApiBearerPath", () => {
     expect(isPublicApiBearerPath("/api/public/agent-vcard/AGT123/track")).toBe(true);
   });
 
+  it("matches the sibling estimate path and the fetch-by-id sub-path", () => {
+    expect(isPublicApiBearerPath("/api/public/funeral-request-estimate")).toBe(true);
+    expect(isPublicApiBearerPath("/api/public/funeral-request/some-quotation-id")).toBe(true);
+  });
+
+  it("does not match an unrelated path that merely shares a string prefix", () => {
+    expect(isPublicApiBearerPath("/api/public/funeral-requestXYZ")).toBe(false);
+  });
+
   it("does not match unrelated public or private routes", () => {
     expect(isPublicApiBearerPath("/api/public/branding")).toBe(false);
     expect(isPublicApiBearerPath("/api/policies")).toBe(false);

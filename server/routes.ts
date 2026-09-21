@@ -1351,6 +1351,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // Live running-total preview as a visitor toggles service selections — no Lead, no Quotation,
+  // nothing persisted. Same "read-only, cheap to call repeatedly" role /api/public/quote plays for
+  // the insurance premium estimate. Call this on every selection change; call
+  // /api/public/funeral-request only once, when they actually submit.
+  app.post("/api/public/funeral-request-estimate", async (req, res) => {
+    const { refCode, requestedAddOnIds } = req.body;
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
+    const orgAddOns = requestedIds.length > 0 ? await storage.getAddOns(orgId) : [];
+    const items = requestedIds
+      .map((id) => orgAddOns.find((a: any) => a.id === id))
+      .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false)
+      .map((addOn: any) => {
+        const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+        return { addOnId: addOn.id, name: addOn.name, unitPrice: amount.toFixed(2) };
+      });
+    const total = items.reduce((sum, it) => sum + parseFloat(it.unitPrice), 0);
+    return res.json({ items, total: total.toFixed(2), currency: "USD" });
+  });
+
+  // Fetches a previously-submitted cash-service quotation back — lets DFS show/link to it after
+  // the visitor has moved on from the moment they submitted it, the same "come back to a saved
+  // quote" role GET /api/public/quote/:id plays for insurance quotes. Needs refCode alongside the
+  // id since, unlike insurance quotes, there's no central cross-tenant pointer table for these —
+  // simpler to just resolve org the same way every other public route here already does.
+  app.get("/api/public/funeral-request/:id", async (req, res) => {
+    const refCode = typeof req.query.ref === "string" ? req.query.ref : "";
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Not found" });
+    const quotation = await storage.getQuotationById(req.params.id as string, orgId);
+    if (!quotation) return res.status(404).json({ message: "Not found" });
+    return res.json(quotation);
+  });
+
   // Public, unauthenticated shareable quote — resolves org via the central quote_tokens pointer
   // first (same pattern as /api/public/pay/:token), then fetches the persisted snapshot from that
   // org's own database. Shows the comparison exactly as it was at quote time, not re-priced live.
