@@ -11,7 +11,7 @@ vi.mock("../../server/storage", () => ({
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
-import { computePolicyPremium, computeIndividualAgeRatedPremium } from "../../server/route-helpers";
+import { computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge } from "../../server/route-helpers";
 import { storage } from "../../server/storage";
 
 const RATED_VERSION: any = { id: "pv1", productId: "prod1", dependentMaxAge: 18 };
@@ -144,5 +144,37 @@ describe("computePolicyPremium — individual_age_rated branch", () => {
     );
     // policyholder 5.00 + child dependent (default cover 1000) 2.00 = 7.00
     expect(result).toBe("7.00");
+  });
+});
+
+describe("resolveAddOnCashCharge", () => {
+  const ADD_ON = { coverIncrementAmount: "500" };
+
+  it("charges the full cash value for a walk-in with no policy at all", () => {
+    const result = resolveAddOnCashCharge(ADD_ON, { hasPolicy: false, alreadyCoveredByPolicy: false });
+    expect(result.amount).toBe(500);
+    expect(result.note).toMatch(/full cash price/i);
+  });
+
+  it("applies a 10% discount for a policyholder whose plan didn't already include it", () => {
+    const result = resolveAddOnCashCharge(ADD_ON, { hasPolicy: true, alreadyCoveredByPolicy: false });
+    expect(result.amount).toBe(450);
+    expect(result.note).toMatch(/10% policyholder discount/i);
+  });
+
+  it("charges nothing when the policy already has this add-on attached", () => {
+    const result = resolveAddOnCashCharge(ADD_ON, { hasPolicy: true, alreadyCoveredByPolicy: true });
+    expect(result.amount).toBe(0);
+    expect(result.note).toMatch(/already covered/i);
+  });
+
+  it("scales by quantity", () => {
+    const result = resolveAddOnCashCharge(ADD_ON, { hasPolicy: false, alreadyCoveredByPolicy: false, quantity: 3 });
+    expect(result.amount).toBe(1500);
+  });
+
+  it("treats a missing cover amount as $0 rather than throwing", () => {
+    const result = resolveAddOnCashCharge({ coverIncrementAmount: null }, { hasPolicy: false, alreadyCoveredByPolicy: false });
+    expect(result.amount).toBe(0);
   });
 });

@@ -2497,9 +2497,9 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
           </div>
           {pricingMode === "cover_topup" ? (
             <div className="space-y-2">
-              <Label htmlFor="cover-increment">Extra Sum Assured ($)</Label>
+              <Label htmlFor="cover-increment">Cash Value ($)</Label>
               <Input id="cover-increment" type="number" step="0.01" min="0" value={coverIncrementAmount} onChange={(e) => setCoverIncrementAmount(e.target.value)} placeholder="e.g. 500" data-testid="input-addon-cover-increment" />
-              <p className="text-xs text-muted-foreground">Adds this amount to whichever policy member the add-on is attached to; their premium is then recomputed from the product version's rate cards, not a fixed price.</p>
+              <p className="text-xs text-muted-foreground">One value, three uses: at join/quote it adds this to sum assured (premium recomputed from the rate cards); at bereavement it's charged at 10% off if the policyholder's plan didn't already include it; for a walk-in with no policy it's charged in full.</p>
             </div>
           ) : pricingMode === "percentage" ? (
             <div className="space-y-2">
@@ -2617,8 +2617,9 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
           </div>
           {pricingMode === "cover_topup" ? (
             <div className="space-y-2">
-              <Label htmlFor="cover-increment-2">Extra Sum Assured ($)</Label>
+              <Label htmlFor="cover-increment-2">Cash Value ($)</Label>
               <Input id="cover-increment-2" type="number" step="0.01" min="0" value={coverIncrementAmount} onChange={(e) => setCoverIncrementAmount(e.target.value)} />
+              <p className="text-xs text-muted-foreground">One value, three uses: at join/quote it adds to sum assured; at bereavement it's 10% off if not already part of the policy; for a walk-in with no policy it's charged in full.</p>
             </div>
           ) : pricingMode === "percentage" ? (
             <div className="space-y-2">

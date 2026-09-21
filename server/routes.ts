@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -10586,6 +10586,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       currency: rate.currency,
       status: "unpaid",
       notes: typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : undefined,
+      createdByUserId: effectiveUserId,
+    });
+    const charge = await storage.createCaseServiceCharge(parsed);
+    await auditLog(req, "CREATE_CASE_SERVICE_CHARGE", "CaseServiceCharge", charge.id, null, charge);
+    return res.status(201).json(charge);
+  });
+
+  // Charges a benefit from the add-ons catalogue (add_ons.coverIncrementAmount) at bereavement or
+  // for a walk-in cash quote — the same per-item cash value that raises sum assured/premium when
+  // selected at join/quote time. Free if the case's policy already has it attached, 10% off if
+  // the case has a policy but this benefit wasn't part of it, full price for a case with no
+  // policy at all. See resolveAddOnCashCharge (server/route-helpers.ts).
+  app.post("/api/funeral-cases/:id/service-charges-from-addon", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const funeralCaseId = req.params.id as string;
+    const caseRow = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+    if (!caseRow) return res.status(404).json({ message: "Funeral case not found" });
+    const addOnId = typeof req.body.addOnId === "string" ? req.body.addOnId : "";
+    if (!addOnId) return res.status(400).json({ message: "addOnId is required" });
+    const orgAddOns = await storage.getAddOns(user.organizationId);
+    const addOn = orgAddOns.find((a: any) => a.id === addOnId);
+    if (!addOn || addOn.isActive === false) return res.status(400).json({ message: "Add-on not found or inactive" });
+    const quantity = req.body.quantity !== undefined ? parseFloat(String(req.body.quantity)) : 1;
+    if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: "quantity must be a positive number" });
+
+    const hasPolicy = !!caseRow.policyId;
+    let alreadyCoveredByPolicy = false;
+    if (hasPolicy) {
+      const policyAddOns = await storage.getPolicyAddOns(caseRow.policyId as string, user.organizationId);
+      alreadyCoveredByPolicy = policyAddOns.some((pa: any) => pa.addOnId === addOnId);
+    }
+    const { amount, note } = resolveAddOnCashCharge(addOn, { hasPolicy, alreadyCoveredByPolicy, quantity });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const parsed = insertCaseServiceChargeSchema.parse({
+      organizationId: user.organizationId,
+      funeralCaseId,
+      addOnId: addOn.id,
+      serviceKey: addOn.id,
+      name: addOn.name,
+      quantity: quantity.toFixed(2),
+      computedAmount: amount.toFixed(2),
+      currency: "USD",
+      status: amount > 0 ? "unpaid" : "paid",
+      notes: [note, typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : null].filter(Boolean).join(" "),
       createdByUserId: effectiveUserId,
     });
     const charge = await storage.createCaseServiceCharge(parsed);

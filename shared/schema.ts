@@ -2067,6 +2067,13 @@ export const caseServiceCharges = pgTable(
     funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
     mortuaryIntakeId: uuid("mortuary_intake_id").references(() => mortuaryIntakes.id),
     serviceRateId: uuid("service_rate_id").references(() => mortuaryServiceRates.id),
+    /** Set instead of serviceRateId when this charge was priced from the add-ons catalogue
+     *  (add_ons.coverIncrementAmount) rather than the mortuary rate card — see
+     *  resolveAddOnCashCharge (server/route-helpers.ts). The same per-item cash value drives three
+     *  things: raising sum assured/premium at join/quote time (as a cover_topup add-on), a 10%-off
+     *  charge here when a policyholder picks a benefit their policy didn't already include, and a
+     *  full-price charge here for a walk-in with no policy at all. */
+    addOnId: uuid("add_on_id").references(() => addOns.id),
     serviceKey: text("service_key").notNull(),
     name: text("name").notNull(),
     quantity: numeric("quantity", { precision: 10, scale: 2 }).default("1").notNull(),

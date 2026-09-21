@@ -290,6 +290,36 @@ export async function computeIndividualAgeRatedPremium(
   return { total, members };
 }
 
+const POLICYHOLDER_GAP_DISCOUNT = 0.10;
+
+/**
+ * The same per-item cash value (add_ons.coverIncrementAmount) drives three contexts: raising sum
+ * assured/premium at join/quote time (computeIndividualAgeRatedPremium, as a "cover_topup" the
+ * client selects), and — this function — a cash charge at bereavement or for a walk-in quote:
+ *   - free: the funeral case's policy already has this add-on attached (they already paid for it
+ *     via their premium — see storage.getPolicyAddOns) — no charge.
+ *   - 10% off: the case has a real policy, but this benefit wasn't part of it.
+ *   - full price: the case has no policy at all (a walk-in cash sale) — no discount applies since
+ *     there's no policy relationship to discount against.
+ * Never itself decides what "the case's policy" is — the caller resolves policyId and whether
+ * that policy already has this add-on, so this stays a pure pricing function.
+ */
+export function resolveAddOnCashCharge(
+  addOn: { coverIncrementAmount: string | number | null },
+  input: { hasPolicy: boolean; alreadyCoveredByPolicy: boolean; quantity?: number },
+): { amount: number; note: string } {
+  const baseValue = addOn.coverIncrementAmount != null ? parseFloat(String(addOn.coverIncrementAmount)) : 0;
+  const quantity = input.quantity ?? 1;
+  if (input.hasPolicy && input.alreadyCoveredByPolicy) {
+    return { amount: 0, note: "Already covered under the client's policy — no charge." };
+  }
+  if (input.hasPolicy) {
+    const amount = baseValue * (1 - POLICYHOLDER_GAP_DISCOUNT) * quantity;
+    return { amount, note: `${(POLICYHOLDER_GAP_DISCOUNT * 100).toFixed(0)}% policyholder discount applied (not part of their policy).` };
+  }
+  return { amount: baseValue * quantity, note: "Full cash price — no active policy." };
+}
+
 export interface ChargeableMember {
   age: number | null;
   isChild: boolean;
