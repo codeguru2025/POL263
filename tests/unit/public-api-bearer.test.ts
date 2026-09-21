@@ -44,9 +44,10 @@ beforeEach(() => {
 });
 
 describe("isPublicApiBearerPath", () => {
-  it("matches the exact public quote and register-policy paths", () => {
+  it("matches the exact public quote, register-policy, and funeral-request paths", () => {
     expect(isPublicApiBearerPath("/api/public/quote")).toBe(true);
     expect(isPublicApiBearerPath("/api/public/register-policy")).toBe(true);
+    expect(isPublicApiBearerPath("/api/public/funeral-request")).toBe(true);
   });
 
   it("matches any agent-vcard sub-path (quote-lead, track, etc.)", () => {

@@ -298,6 +298,7 @@ if (enableCsrf) {
   });
   app.use("/api/public/register-policy", publicRegistrationLimiter);
   app.use("/api/public/walkin-register", publicRegistrationLimiter);
+  app.use("/api/public/funeral-request", publicRegistrationLimiter);
 
   // Customer-service API (SMSALA WhatsApp bot, server-to-server, bearer-secret + token auth).
   //  • /verify keeps the strict 20/min bucket — one verification per conversation start, and it

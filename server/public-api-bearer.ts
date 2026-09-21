@@ -26,7 +26,7 @@ import { structuredLog } from "./logger";
 export const PUBLIC_API_PROVIDER_KEY = "public_api";
 
 const PUBLIC_API_BEARER_PATH_PREFIXES = ["/api/public/agent-vcard/"];
-const PUBLIC_API_BEARER_EXACT_PATHS = ["/api/public/quote", "/api/public/register-policy"];
+const PUBLIC_API_BEARER_EXACT_PATHS = ["/api/public/quote", "/api/public/register-policy", "/api/public/funeral-request"];
 
 export function isPublicApiBearerPath(path: string): boolean {
   return PUBLIC_API_BEARER_EXACT_PATHS.includes(path) || PUBLIC_API_BEARER_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));

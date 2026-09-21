@@ -1280,6 +1280,77 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json({ leadId: lead.id, quoteId });
   });
 
+  // "Arrange a Funeral Now" — a bereavement request from someone who may or may not hold a
+  // policy. Always captures a Lead for the sales/ops pipeline (same as quote-lead above); when
+  // requestedAddOnIds are given, also creates a standalone cash-service quotation (funeral_
+  // quotations, funeralCaseId null — the existing "quote before a case exists" pattern staff
+  // already use) priced at full cash value via resolveAddOnCashCharge with hasPolicy: false —
+  // this request has no session, so there's no policy context to check against; a real
+  // policyholder's discount only applies once staff open an actual funeral case and check their
+  // policy's add-ons (POST /api/funeral-cases/:id/service-charges-from-addon). Returns
+  // { reference } as the DFS-side integration already expects, plus the full quotation if one
+  // was created.
+  app.post("/api/public/funeral-request", async (req, res) => {
+    const { refCode, firstName, lastName, phone, email, deceasedName, deceasedAge, deceasedSex, message, requestedAddOnIds } = req.body;
+    if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
+      return res.status(400).json({ message: "First and last name are required" });
+    }
+    if (typeof phone !== "string" || !phone.trim()) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+
+    const lead = await storage.createLead({
+      organizationId: orgId,
+      agentId: agent.id,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      phone: phone.trim(),
+      email: typeof email === "string" && email.trim() ? email.trim() : null,
+      source: "arrange_a_funeral",
+      stage: "captured",
+      productInterest: typeof message === "string" && message.trim() ? message.trim() : (typeof deceasedName === "string" ? `Re: ${deceasedName}` : null),
+    });
+
+    let quote: Awaited<ReturnType<typeof storage.createStandaloneQuotation>> | null = null;
+    const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
+    if (requestedIds.length > 0) {
+      const orgAddOns = await storage.getAddOns(orgId);
+      const items = requestedIds
+        .map((id) => orgAddOns.find((a: any) => a.id === id))
+        .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false)
+        .map((addOn: any) => {
+          const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+          return { description: addOn.name, quantity: "1.00", unitPrice: amount.toFixed(2), lineTotal: amount.toFixed(2) };
+        });
+      if (items.length > 0) {
+        quote = await storage.createStandaloneQuotation(orgId, {
+          currency: "USD",
+          status: "draft",
+          notes: "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.",
+          deceasedName: typeof deceasedName === "string" && deceasedName.trim() ? deceasedName.trim() : undefined,
+          deceasedAge: typeof deceasedAge === "number" ? deceasedAge : undefined,
+          deceasedSex: typeof deceasedSex === "string" ? deceasedSex : undefined,
+          informantFullNames: `${firstName.trim()} ${lastName.trim()}`,
+          informantPhone: phone.trim(),
+          quotationDate: await todayForOrg(orgId),
+          vatRate: 0,
+        }, items);
+      }
+    }
+
+    await auditLog(req, "CREATE_ARRANGE_FUNERAL_REQUEST", "Lead", lead.id, null, { lead, quotationId: quote?.id });
+    return res.status(201).json({
+      reference: quote?.quotationNumber ?? lead.id,
+      leadId: lead.id,
+      quotation: quote,
+    });
+  });
+
   // Public, unauthenticated shareable quote — resolves org via the central quote_tokens pointer
   // first (same pattern as /api/public/pay/:token), then fetches the persisted snapshot from that
   // org's own database. Shows the comparison exactly as it was at quote time, not re-priced live.
