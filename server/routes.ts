@@ -11714,12 +11714,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       versions: (versionsByProduct[p.id] || []).filter((v) => v.isActive !== false),
     }));
     const branches = await storage.getBranchesByOrg(orgId);
+    const orgAddOns = await storage.getAddOns(orgId);
     return res.json({
       agentName: agent.displayName || agent.email,
       referralCode: ref,
       products: withVersions,
       branches: branches.filter((b) => b.isActive),
       nationalIdFormat: await resolveOrgNationalIdFormat(orgId),
+      // The real add-ons catalogue (id, name, description, category, cash value) — what
+      // getServiceCatalogue() in pol263.ts was waiting on ("pending an add_ons schema
+      // extension"). Send an add-on's id back as requestedAddOnIds on /api/public/quote,
+      // /api/public/register-policy, /api/public/funeral-request(-estimate).
+      addOns: orgAddOns.filter((a: any) => a.isActive).map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        category: a.category,
+        pricingMode: a.pricingMode,
+        cashValue: a.coverIncrementAmount,
+      })),
     });
   });
 
