@@ -30,6 +30,15 @@ export const organizations = pgTable("organizations", {
   phone: text("phone"),
   email: text("email"),
   website: text("website"),
+  /** Verified sending address on the tenant's own domain (e.g. "noreply@diasporafuneralservices.
+   *  com"), confirmed verified in the shared Resend account (same account, same API key as the
+   *  platform default — Resend lets one account send from any of its verified domains, so this
+   *  needs no new credential, just this address). When set, transactional emails to this org's
+   *  clients send from here instead of the platform default (EMAIL_FROM); when null, the
+   *  platform default is the fallback — see server/email-service.ts resolveFromAddress. Set
+   *  manually once an admin confirms the domain shows "verified" in Resend, never automatically
+   *  — sending from an unverified domain gets the whole message rejected by the relay. */
+  emailFromAddress: text("email_from_address"),
   policyNumberPrefix: text("policy_number_prefix"),
   policyNumberPadding: integer("policy_number_padding").default(5).notNull(),
   /** Prefix for legacy-group backdated receipt numbers (format: `{prefix}-{YYYYMMDD}-{seq}`).
@@ -150,6 +159,14 @@ export const countryFlagSettings = pgTable("country_flag_settings", {
   flagLabel: text("flag_label").default("South Africa").notNull(),
   /** Label for the default/home case, e.g. "Zimbabwe". */
   homeLabel: text("home_label").default("Zimbabwe").notNull(),
+  /** Dial code (digits only, no "+") for the default/home case, e.g. "263" (Zimbabwe). Prepended
+   *  to a recipient phone stored in local "0…" format when sending SMS/WhatsApp. Defaults to
+   *  "263" — the value hardcoded everywhere before this was configurable. */
+  homeCountryCode: text("home_country_code").default("263").notNull(),
+  /** Dial code (digits only, no "+") for the flagged/cross-border case, e.g. "27" (South Africa).
+   *  Used instead of homeCountryCode when the policy being notified about carries the cross-border
+   *  flag, so a multi-country tenant reaches each client on the right network. */
+  flagCountryCode: text("flag_country_code").default("27").notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export const insertCountryFlagSettingsSchema = createInsertSchema(countryFlagSettings).omit({ updatedAt: true });
@@ -379,6 +396,29 @@ export const userPermissionOverrides = pgTable(
   (t) => [
     index("upo_user_idx").on(t.userId),
     index("upo_user_org_idx").on(t.userId, t.organizationId),
+  ]
+);
+
+/**
+ * Reusable named permission bundles ("access profiles"). Applying one to a user writes an
+ * "allow" user_permission_override for each permission it lists (existing role-derived access is
+ * untouched); it is a convenience over ticking permissions one by one, not a third RBAC layer.
+ */
+export const accessProfiles = pgTable(
+  "access_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    /** Permission names, e.g. ["read:finance","write:receipt"]. */
+    permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("access_profiles_org_idx").on(t.organizationId),
+    uniqueIndex("access_profiles_org_name_idx").on(t.organizationId, t.name),
   ]
 );
 
@@ -732,6 +772,18 @@ export const products = pgTable(
     // death/person_household default applied.
     benefitTrigger: text("benefit_trigger"),
     insuredEntityType: text("insured_entity_type"),
+    /**
+     * 'bundled_family' (default) — today's only behavior: a flat product_versions.premiumMonthly*
+     * base covers up to maxAdults/maxChildren/maxExtendedMembers members for free; anyone beyond
+     * that is surcharged (flat or age-banded) via product_versions.additionalMemberRate*. Existing
+     * products are untouched by this column's existence.
+     * 'individual_age_rated' — every covered life (policyholder included) is individually priced
+     * from age_band_rate_cards against their own cover_amount (this product's `coverAmount` above
+     * by default, per-member overridable up to the policyholder's own effective cover); there is
+     * no free/included member count and product_versions premiumMonthly/additionalMemberRate
+     * fields are ignored entirely. See computePolicyPremium (server/route-helpers.ts).
+     */
+    pricingModel: text("pricing_model").default("bundled_family").notNull(),
   },
   (t) => [
     index("products_org_idx").on(t.organizationId),
@@ -916,15 +968,61 @@ export const addOns = pgTable(
       .references(() => organizations.id),
     name: text("name").notNull(),
     description: text("description"),
+    /** Free-text UI grouping (e.g. "Personalisation & Memorial") — display-only, not read by any
+     *  pricing logic. Null for every add-on that existed before this column. */
+    category: text("category"),
+    // 'flat' | 'percentage' | 'cover_topup'. 'cover_topup' has no fixed price of its own — attaching
+    // it to a policy_member (individual_age_rated products only) adds coverIncrementAmount to that
+    // member's effective cover, and their premiumContribution is recomputed from the same
+    // age_band_rate_cards formula as their base cover (server/route-helpers.ts). priceAmount/
+    // priceMonthly/etc. are ignored for this mode.
     pricingMode: text("pricing_mode").default("flat").notNull(),
     priceAmount: numeric("price_amount"),
     priceMonthly: numeric("price_monthly"),
     priceWeekly: numeric("price_weekly"),
     priceBiweekly: numeric("price_biweekly"),
+    /** Only meaningful when pricingMode = 'cover_topup' — the extra sum assured this add-on grants
+     *  to whichever policy member it's attached to. */
+    coverIncrementAmount: numeric("cover_increment_amount"),
+    /** Currency coverIncrementAmount/priceAmount/etc. are denominated in. Defaults to "USD" for
+     *  every add-on that existed before this column — every tenant using add-ons was USD-only in
+     *  practice, but nothing enforced it; server/route-helpers.ts resolveAddOnCashCharge and its
+     *  callers (server/routes.ts) now read this instead of assuming USD. */
+    currency: text("currency").default("USD").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("addons_org_idx").on(t.organizationId)]
+);
+
+/** The dynamic/individual age-rated pricing engine's rate source: monthly premium per $1,000 of
+ *  sum assured, by age band, per product version + currency. Only consulted when the owning
+ *  product's pricingModel is 'individual_age_rated' (server/route-helpers.ts) — every product
+ *  using the default 'bundled_family' model never reads this table. One row per (product version,
+ *  age band, currency); a version with no rows configured prices every member at $0 for that
+ *  currency (same loud-not-silent convention as the existing additionalMemberRate* fallback). */
+export const AGE_BANDS = ["child", "21_65", "66_84", "85_plus"] as const;
+export type AgeBand = (typeof AGE_BANDS)[number];
+export const ageBandRateCards = pgTable(
+  "age_band_rate_cards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    productVersionId: uuid("product_version_id")
+      .notNull()
+      .references(() => productVersions.id),
+    ageBand: text("age_band").notNull(), // AgeBand
+    currency: text("currency").notNull(),
+    ratePerThousand: numeric("rate_per_thousand", { precision: 10, scale: 4 }).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("abrc_pv_idx").on(t.productVersionId),
+    uniqueIndex("abrc_pv_band_currency_idx").on(t.productVersionId, t.ageBand, t.currency),
+  ]
 );
 
 export const ageBandConfigs = pgTable(
@@ -1035,6 +1133,17 @@ export const policyMembers = pgTable(
     role: text("role").notNull(),
     isActive: boolean("is_active").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    /**
+     * individual_age_rated products only (null/unused for bundled_family). This member's own
+     * effective sum assured — defaults to the product's coverAmount, may be raised via a
+     * cover_topup add-on, and for a dependent must never exceed the policyholder's own coverAmount
+     * on the same policy (enforced at the registration/quote route, not here).
+     */
+    coverAmount: numeric("cover_amount"),
+    /** Snapshot of this member's own slice of the policy premium at the price it was computed —
+     *  same snapshot convention as case_service_charges.computedAmount, so a later
+     *  age_band_rate_cards edit never silently rewrites a historical policy's billing. */
+    premiumContribution: numeric("premium_contribution"),
   },
   (t) => [
     index("pm_policy_idx").on(t.policyId),
@@ -1312,7 +1421,9 @@ export const paymentLinks = pgTable(
     token: text("token").notNull().unique(),
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
     currency: text("currency").default("USD").notNull(),
-    method: text("method").notNull(), // ecocash | onemoney | innbucks | omari | visa_mastercard
+    // Nullable: a link auto-created at self-registration (no staff picking a method up front)
+    // leaves this unset until the payer chooses one on /api/pay/:token/initiate.
+    method: text("method"), // ecocash | onemoney | innbucks | omari | visa_mastercard
     payerPhone: text("payer_phone"),
     status: text("status").default("active").notNull(), // active | paid | expired | cancelled
     paymentIntentId: uuid("payment_intent_id").references(() => paymentIntents.id),
@@ -1961,6 +2072,13 @@ export const caseServiceCharges = pgTable(
     funeralCaseId: uuid("funeral_case_id").notNull().references(() => funeralCases.id),
     mortuaryIntakeId: uuid("mortuary_intake_id").references(() => mortuaryIntakes.id),
     serviceRateId: uuid("service_rate_id").references(() => mortuaryServiceRates.id),
+    /** Set instead of serviceRateId when this charge was priced from the add-ons catalogue
+     *  (add_ons.coverIncrementAmount) rather than the mortuary rate card — see
+     *  resolveAddOnCashCharge (server/route-helpers.ts). The same per-item cash value drives three
+     *  things: raising sum assured/premium at join/quote time (as a cover_topup add-on), a 10%-off
+     *  charge here when a policyholder picks a benefit their policy didn't already include, and a
+     *  full-price charge here for a walk-in with no policy at all. */
+    addOnId: uuid("add_on_id").references(() => addOns.id),
     serviceKey: text("service_key").notNull(),
     name: text("name").notNull(),
     quantity: numeric("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
@@ -3675,6 +3793,7 @@ export const insertBenefitCatalogItemSchema = createInsertSchema(benefitCatalogI
 export const insertBenefitBundleSchema = createInsertSchema(benefitBundles).omit({ id: true, createdAt: true });
 export const insertAddOnSchema = createInsertSchema(addOns).omit({ id: true, createdAt: true });
 export const insertAgeBandConfigSchema = createInsertSchema(ageBandConfigs).omit({ id: true, createdAt: true });
+export const insertAgeBandRateCardSchema = createInsertSchema(ageBandRateCards).omit({ id: true, createdAt: true });
 export const insertPolicySchema = createInsertSchema(policies).omit({ id: true, createdAt: true });
 export const insertPolicyMemberSchema = createInsertSchema(policyMembers).omit({ id: true, createdAt: true });
 export const insertPolicyAddOnSchema = createInsertSchema(policyAddOns).omit({ id: true, createdAt: true });
@@ -3811,6 +3930,8 @@ export type AddOn = typeof addOns.$inferSelect;
 export type InsertAddOn = z.infer<typeof insertAddOnSchema>;
 export type AgeBandConfig = typeof ageBandConfigs.$inferSelect;
 export type InsertAgeBandConfig = z.infer<typeof insertAgeBandConfigSchema>;
+export type AgeBandRateCard = typeof ageBandRateCards.$inferSelect;
+export type InsertAgeBandRateCard = z.infer<typeof insertAgeBandRateCardSchema>;
 export type Policy = typeof policies.$inferSelect;
 export type InsertPolicy = z.infer<typeof insertPolicySchema>;
 export type PolicyMember = typeof policyMembers.$inferSelect;
@@ -3909,15 +4030,20 @@ export type InsertVehicleTripLog = z.infer<typeof insertVehicleTripLogSchema>;
 
 // ─── POLICY STATUS ENUM ────────────────────────────────────
 
-export const POLICY_STATUSES = ["inactive", "active", "grace", "lapsed", "cancelled"] as const;
+// "archived" is a real, reversible terminal status: lapsed/cancelled policies are moved here so
+// they stop attracting the full per-policy platform fee (archived bills at the cheapest rate).
+// Cancelling a policy AUTO-archives it (see /api/policies/:id/transition); archived policies can
+// still be revived (archived → active) if the member reinstates.
+export const POLICY_STATUSES = ["inactive", "active", "grace", "lapsed", "cancelled", "archived"] as const;
 export type PolicyStatus = typeof POLICY_STATUSES[number];
 
 export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
-  inactive: ["active", "cancelled"],
+  inactive: ["active", "cancelled", "archived"],
   active: ["grace", "cancelled"],
   grace: ["active", "lapsed", "cancelled"],
-  lapsed: ["active", "cancelled"],
-  cancelled: [],
+  lapsed: ["active", "cancelled", "archived"],
+  cancelled: ["archived", "active"],
+  archived: ["active", "inactive"],
 };
 
 export const CLAIM_STATUSES = ["submitted", "verified", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;

@@ -11,10 +11,11 @@
  * This one-directional split avoids the sweep and the payment-clearance path
  * racing over subscription.status.
  */
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, billingPlans, tenantSubscriptions, tenantInvoices, tenantBillingEvents } from "@shared/control-plane-schema";
 import { generateInvoiceForSubscription, getEffectiveGraceDays, getBillingSettings } from "./tenant-billing-service";
+import { enforceOutstandingFeeCap, retryUnsettledRevenueShareInvoices } from "./tenant-billing-enforcement";
 import { sendInvoiceReminderEmail, sendGracePeriodEmail, sendSuspendedEmail } from "./tenant-billing-email";
 import { invalidateTenantActiveCache } from "./auth";
 import { invalidateTenantModuleCache } from "./module-gate";
@@ -72,6 +73,21 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
 
   for (const sub of subscriptions) {
     try {
+      // Step 0: revenue-share outstanding-fee cap — a "bill early" control. Raises an invoice for
+      // the uninvoiced accrual when unpaid fees pass the tenant's cap, so fees don't run up
+      // invisibly. It does NOT suspend — the normal past-due → grace → suspend path (steps 2–3)
+      // handles that on the invoice's due date like any other.
+      if (sub.status !== "suspended") {
+        const [capPlan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, sub.planId)).limit(1);
+        if (capPlan) {
+          const capInvoice = await enforceOutstandingFeeCap(sub, capPlan, settings);
+          if (capInvoice) {
+            result.invoicesGenerated++;
+            await sendInvoiceReminderEmail(capInvoice);
+          }
+        }
+      }
+
       // Step 1: reminder + invoice generation. currentPeriodEnd IS trialEndsAt while
       // trialing, so this is the exact same code path for trial expiry and renewals.
       if (sub.currentPeriodEnd.getTime() <= reminderCutoff.getTime()) {
@@ -102,17 +118,39 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
         sub.status = "past_due"; // keep the in-loop copy consistent for the auto-suspend check below
       }
 
+      // Step 2b: repeat reminder while past-due but not yet suspended. Sends at most once every 7
+      // days so a tenant in a long grace window keeps getting nudged instead of hearing nothing
+      // between the first overdue notice and the suspension.
+      if (sub.status === "past_due") {
+        const [lastReminder] = await cpDb.select({ createdAt: tenantBillingEvents.createdAt }).from(tenantBillingEvents)
+          .where(and(eq(tenantBillingEvents.tenantId, sub.tenantId), eq(tenantBillingEvents.type, "grace_reminder")))
+          .orderBy(desc(tenantBillingEvents.createdAt)).limit(1);
+        const dueForReminder = !lastReminder || (now.getTime() - new Date(lastReminder.createdAt).getTime()) >= 7 * 24 * 60 * 60 * 1000;
+        if (dueForReminder) {
+          const [openInvoice] = await cpDb.select().from(tenantInvoices).where(and(eq(tenantInvoices.subscriptionId, sub.id), eq(tenantInvoices.status, "open"))).limit(1);
+          if (openInvoice) {
+            const graceDeadline = new Date(sub.currentPeriodEnd.getTime() + getEffectiveGraceDays(sub, settings) * 24 * 60 * 60 * 1000);
+            if (graceDeadline.getTime() > now.getTime()) {
+              await sendGracePeriodEmail(openInvoice, graceDeadline);
+              await cpDb.insert(tenantBillingEvents).values({ tenantId: sub.tenantId, type: "grace_reminder", detail: { invoiceId: openInvoice.id, graceDeadline } });
+            }
+          }
+        }
+      }
+
       // Step 3: auto-suspend. Sweep only ever moves TOWARD suspension — see file header.
       if (sub.status === "past_due") {
         const graceDays = getEffectiveGraceDays(sub, settings);
         const graceDeadline = new Date(sub.currentPeriodEnd.getTime() + graceDays * 24 * 60 * 60 * 1000);
         if (graceDeadline.getTime() <= now.getTime()) {
           await cpDb.update(tenantSubscriptions).set({ status: "suspended", updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
+          const viewOnlyUntil = new Date(now.getTime() + ((settings as any).deletionGraceDays ?? 30) * 24 * 60 * 60 * 1000);
           await cpDb.update(cpTenants).set({
             isActive: false,
             licenseStatus: "suspended",
             suspendedAt: now,
             suspendReason: "Auto-suspended: payment not received within grace period",
+            viewOnlyGraceUntil: viewOnlyUntil,
           }).where(eq(cpTenants.id, sub.tenantId));
           invalidateTenantActiveCache(sub.tenantId);
           invalidateTenantModuleCache(sub.tenantId);
@@ -128,6 +166,28 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
       result.errors.push(msg);
       structuredLog("error", "Tenant billing sweep: subscription processing failed", { subscriptionId: sub.id, tenantId: sub.tenantId, error: (err as Error).message });
     }
+  }
+
+  // ── Backstop: retry any paid revenue-share/subscription invoice whose post-payment
+  // settlement (reconcileRevenueShareSettlement) never completed — see that function's docstring.
+  try {
+    const retried = await retryUnsettledRevenueShareInvoices();
+    (result as any).revenueShareSettlementsRetried = retried;
+  } catch (err) {
+    result.errors.push(`revenue-share settlement retry: ${(err as Error).message}`);
+    structuredLog("error", "Revenue-share settlement retry sweep failed", { error: (err as Error).message });
+  }
+
+  // ── Deletion lifecycle: suspended tenants inside/after their view-only window ──
+  try {
+    const { processTenantDeletionLifecycle } = await import("./tenant-deletion-sweep");
+    const del = await processTenantDeletionLifecycle();
+    (result as any).deletionWarningsSent = del.warningsSent;
+    (result as any).tenantsPendingDeletion = del.pendingDeletion;
+    (result as any).tenantsPurged = del.purged;
+  } catch (err) {
+    result.errors.push(`deletion lifecycle: ${(err as Error).message}`);
+    structuredLog("error", "Tenant deletion lifecycle failed", { error: (err as Error).message });
   }
 
   structuredLog("info", "Tenant billing sweep complete", { trigger, durationMs: Date.now() - startedAt.getTime(), ...result });

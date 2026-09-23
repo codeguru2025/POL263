@@ -47,6 +47,8 @@ async function main() {
 
   const secret = generateSharedSecret();
   await upsertCustomerServiceCredential(orgId, secret);
+  const { computeTenantRef } = await import("../server/customer-service-tenant-resolver");
+  const tenantRef = computeTenantRef(orgId);
 
   console.log("");
   console.log(`Customer-Service credential provisioned for tenant: ${orgId}`);
@@ -55,9 +57,14 @@ async function main() {
   console.log("");
   console.log(`    ${secret}`);
   console.log("");
+  console.log(`tenant_ref (NOT secret — the bot maps this -> the secret above in the shared-number model):`);
+  console.log(`    ${tenantRef}`);
+  console.log("");
   console.log("SMSALA must send it as:   Authorization: Bearer <that secret>");
-  console.log("Endpoint:                 POST https://<tenant-host>/api/customer-service/verify");
-  console.log('Body (JSON):              { "policy_number": "...", "identity_number": "...", "phone_number": "..." }');
+  console.log("Verify:                   POST https://<tenant-host>/api/customer-service/verify");
+  console.log('   body:                  { "policy_number": "...", "identity_number": "...", "phone_number": "..." }');
+  console.log("Guarded calls:            Authorization: Bearer <secret> + X-Verification-Token: <token from /verify>");
+  console.log("Resolve (shared number):  POST /api/customer-service/resolve  { whatsapp_number, channel_id?, policy_number? }");
   console.log("");
 }
 

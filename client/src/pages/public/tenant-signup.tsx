@@ -16,6 +16,19 @@ import {
 interface PublicPlan {
   id: string; key: string; name: string; description: string | null;
   priceMonthlyUsd: string; modules: string[]; sortOrder: number;
+  billingModel?: "flat" | "per_policy" | "revenue_share";
+  baseFeeUsd?: string | null; includedPolicyUnits?: number; revenueSharePercent?: string | null;
+  monthlyMinimumUsd?: string | null; setupFeeUsd?: string | null;
+}
+
+function planPriceLabel(p: PublicPlan): string {
+  if (p.billingModel === "revenue_share") {
+    return `${parseFloat(p.revenueSharePercent || "2.5").toFixed(2)}% of revenue`;
+  }
+  if (p.billingModel === "per_policy") {
+    return `$${parseFloat(p.baseFeeUsd || p.priceMonthlyUsd).toFixed(2)}/mo + per policy`;
+  }
+  return `$${parseFloat(p.priceMonthlyUsd).toFixed(2)}/mo`;
 }
 
 const toggle = (list: string[], value: string) => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
@@ -312,12 +325,20 @@ export default function TenantSignup() {
                       {plans.map((p) => (
                         <div key={p.id}
                           className={`rounded-xl border p-4 cursor-pointer ${planId === p.id ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
-                          onClick={() => setPlanId(p.id)}>
+                          onClick={() => { setPlanId(p.id); if (p.billingModel && p.billingModel !== "flat") setBillingCycle("monthly"); }}>
                           <div className="flex items-center justify-between">
                             <p className="font-semibold">{p.name}</p>
-                            <p className="font-mono text-sm">${parseFloat(p.priceMonthlyUsd).toFixed(2)}/mo</p>
+                            <p className="font-mono text-sm">{planPriceLabel(p)}</p>
                           </div>
                           {p.description && <p className="text-sm text-gray-500 mt-1">{p.description}</p>}
+                          {p.billingModel && p.billingModel !== "flat" && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              {p.billingModel === "per_policy"
+                                ? `First ${(p.includedPolicyUnits ?? 1000).toLocaleString()} policies included; $${parseFloat(p.monthlyMinimumUsd || "250").toFixed(0)}/mo minimum.`
+                                : `Billed monthly on what you collect; $${parseFloat(p.monthlyMinimumUsd || "250").toFixed(0)}/mo minimum.`}
+                              {p.setupFeeUsd ? ` One-time setup fee $${parseFloat(p.setupFeeUsd).toFixed(2)}.` : ""}
+                            </p>
+                          )}
                           {p.modules.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-2">
                               {p.modules.map((m) => <Badge key={m} variant="outline" className="text-xs">{moduleLabel(m)}</Badge>)}
@@ -329,23 +350,30 @@ export default function TenantSignup() {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Billing cycle</Label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        className={`rounded-lg border px-4 py-3 text-left ${billingCycle === "monthly" ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
-                        onClick={() => setBillingCycle("monthly")}>
-                        <p className="font-semibold text-sm">Monthly</p>
-                        <p className="text-xs text-gray-500">{selectedPlan ? `$${monthlyPrice.toFixed(2)}/mo` : "Select a plan"}</p>
-                      </button>
-                      <button
-                        className={`rounded-lg border px-4 py-3 text-left ${billingCycle === "annual" ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
-                        onClick={() => setBillingCycle("annual")}>
-                        <p className="font-semibold text-sm">Annual <span className="text-emerald-600">(20% off)</span></p>
-                        <p className="text-xs text-gray-500">{selectedPlan ? `$${annualPrice.toFixed(2)}/yr` : "Select a plan"}</p>
-                      </button>
+                  {(!selectedPlan || !selectedPlan.billingModel || selectedPlan.billingModel === "flat") ? (
+                    <div className="space-y-2">
+                      <Label>Billing cycle</Label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          className={`rounded-lg border px-4 py-3 text-left ${billingCycle === "monthly" ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
+                          onClick={() => setBillingCycle("monthly")}>
+                          <p className="font-semibold text-sm">Monthly</p>
+                          <p className="text-xs text-gray-500">{selectedPlan ? `$${monthlyPrice.toFixed(2)}/mo` : "Select a plan"}</p>
+                        </button>
+                        <button
+                          className={`rounded-lg border px-4 py-3 text-left ${billingCycle === "annual" ? "border-teal-600 ring-1 ring-teal-600" : "border-gray-200"}`}
+                          onClick={() => setBillingCycle("annual")}>
+                          <p className="font-semibold text-sm">Annual <span className="text-emerald-600">(20% off)</span></p>
+                          <p className="text-xs text-gray-500">{selectedPlan ? `$${annualPrice.toFixed(2)}/yr` : "Select a plan"}</p>
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 rounded-lg border border-gray-200 px-4 py-3">
+                      This plan is billed monthly on your usage — {planPriceLabel(selectedPlan)}, with a
+                      ${parseFloat(selectedPlan.monthlyMinimumUsd || "250").toFixed(0)}/mo minimum.
+                    </p>
+                  )}
 
                   <Button className="w-full" disabled={!step2Valid} onClick={() => setStep(3)}>Continue</Button>
                 </>

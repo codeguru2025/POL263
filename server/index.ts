@@ -16,6 +16,7 @@ import { drainActiveJobs } from "./job-queue";
 import csurf from "csurf";
 import cors from "cors";
 import { createRedisStore } from "./rate-limit-redis-store";
+import { isPublicApiBearerPath, authenticatePublicApiBearerToken } from "./public-api-bearer";
 
 const app = express();
 const httpServer = createServer(app);
@@ -31,13 +32,17 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        // https://challenges.cloudflare.com: Cloudflare Turnstile widget script + its iframe
+        // challenge (server/turnstile.ts) — harmless to allow even before a site key is
+        // configured, since the widget simply isn't rendered until VITE_TURNSTILE_SITE_KEY is set.
         scriptSrc: process.env.NODE_ENV === "production"
-          ? ["'self'"]
-          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          ? ["'self'", "https://challenges.cloudflare.com"]
+          : ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://challenges.cloudflare.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
         imgSrc: ["'self'", "data:", "https:", "blob:"],
         connectSrc: ["'self'", "ws:", "wss:", "https:"],
+        frameSrc: ["'self'", "https://challenges.cloudflare.com"],
       },
     },
     crossOriginEmbedderPolicy: false,
@@ -98,8 +103,20 @@ if (enableCsrf) {
   // authenticated by a per-tenant bearer shared secret + verification token — never a browser
   // session — so it carries no CSRF token. Narrowly exempt just this one namespace.
   const isCustomerServicePath = (p: string) => p === "/api/customer-service" || p.startsWith("/api/customer-service/");
-  app.use((req, res, next) => {
+
+  // Same shape of exemption for the public quote/lead/registration endpoints — they're also
+  // called both by POL263's own browser pages (vCard, /join) AND by external server-to-server
+  // integrations (a tenant's own marketing site) that have no browser/cookie jar to ever get a
+  // CSRF token from. Unlike the customer-service API, these routes have no auth of their own
+  // (refCode is a routing key, not a secret — see server/routes.ts resolveVcardOrgId), so a
+  // blanket CSRF exemption here would remove the only check on this path entirely. Instead: CSRF
+  // is still required for everyone by default; a caller presenting a valid per-tenant public-API
+  // secret (server/public-api-bearer.ts — one row per tenant, same shape as the customer-service
+  // API's own auth) skips it instead of removing it. The secret itself identifies the tenant, so
+  // this needs no orgId resolved from the body first.
+  app.use(async (req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path) || isCustomerServicePath(req.path)) return next();
+    if (isPublicApiBearerPath(req.path) && (await authenticatePublicApiBearerToken(req.headers.authorization))) return next();
     return csrfProtection(req, res, next);
   });
 
@@ -264,9 +281,29 @@ if (enableCsrf) {
     message: { message: "Too many requests, please slow down" },
   });
   app.use("/api/public/agent-card", publicLimiter);
+  app.use("/api/public/agent-vcard", publicLimiter);
   app.use("/api/public/quote", publicLimiter);
   app.use("/api/public/verify", publicLimiter);
   app.use("/api/public/tenant-context", publicLimiter);
+  // Deliberately a sibling path, not /api/public/funeral-request/estimate — app.use's prefix
+  // matching would otherwise put this under the stricter publicRegistrationLimiter mounted below
+  // at "/api/public/funeral-request" too, capping a live per-keystroke preview at 10/min instead
+  // of the 30/min this read-only, nothing-persisted estimate actually warrants.
+  app.use("/api/public/funeral-request-estimate", publicLimiter);
+
+  // Registration endpoints go further than agent-vcard/quote above — each request writes a
+  // real Client + Policy row carrying PII (name, national ID, DOB, dependents, beneficiary),
+  // so they get a tighter budget than the read/quote-lead traffic on publicLimiter.
+  const publicRegistrationLimiter = rateLimit({
+    ...limiterOpts,
+    store: getRedisStore?.("public-registration"),
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { message: "Too many requests, please slow down" },
+  });
+  app.use("/api/public/register-policy", publicRegistrationLimiter);
+  app.use("/api/public/walkin-register", publicRegistrationLimiter);
+  app.use("/api/public/funeral-request", publicRegistrationLimiter);
 
   // Customer-service API (SMSALA WhatsApp bot, server-to-server, bearer-secret + token auth).
   //  • /verify keeps the strict 20/min bucket — one verification per conversation start, and it
@@ -278,6 +315,18 @@ if (enableCsrf) {
     rateLimit({
       ...limiterOpts,
       store: getRedisStore?.("customer-service-verify"),
+      windowMs: 60 * 1000,
+      max: process.env.NODE_ENV === "production" ? 20 : 200,
+      message: { error: "rate_limited" },
+    })
+  );
+  // /resolve is a pre-verification cross-tenant lookup (WhatsApp number → identity index) —
+  // an enumeration surface, so keep it on the same strict budget as /verify.
+  app.use(
+    "/api/customer-service/resolve",
+    rateLimit({
+      ...limiterOpts,
+      store: getRedisStore?.("customer-service-resolve"),
       windowMs: 60 * 1000,
       max: process.env.NODE_ENV === "production" ? 20 : 200,
       message: { error: "rate_limited" },
@@ -349,6 +398,11 @@ if (enableCsrf) {
 
   setupAuth(app);
   setupClientAuth(app);
+
+  // Phase 6: read-only lock for suspended tenants inside their deletion-grace window. Runs after
+  // passport has populated req.user, before any route handler.
+  const { enforceTenantViewOnly } = await import("./tenant-view-only");
+  app.use("/api", enforceTenantViewOnly);
 
   await registerRoutes(httpServer, app);
 

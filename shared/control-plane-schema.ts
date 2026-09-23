@@ -54,6 +54,13 @@ export const tenants = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     suspendedAt: timestamp("suspended_at"),
     suspendReason: text("suspend_reason"),
+    /** Phase 6: set when the billing sweep suspends a tenant. Until this time the tenant's staff
+     *  can still log in and READ their data (mutations blocked); after it, the account is eligible
+     *  for permanent deletion. Null = not in the deletion lifecycle (legacy suspension, or active). */
+    viewOnlyGraceUntil: timestamp("view_only_grace_until"),
+    /** One address for all POL263 billing correspondence (invoices, receipts, dunning). Null =
+     *  fall back to every administrator-role user, as before. */
+    billingEmail: text("billing_email"),
   },
   (t) => [uniqueIndex("tenants_slug_idx").on(t.slug)]
 );
@@ -266,10 +273,51 @@ export const billingPlans = pgTable(
     modules: jsonb("modules").notNull().default([]),
     isActive: boolean("is_active").default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
+    // ── Billing model (0005) ──────────────────────────────────────────────────
+    /** flat | per_policy | revenue_share — how the monthly charge is computed. Existing plans
+     *  are all 'flat' and behave exactly as before (priceMonthlyUsd, unchanged). */
+    billingModel: text("billing_model").default("flat").notNull(),
+    /** per_policy / revenue_share base fee. null → falls back to priceMonthlyUsd. */
+    baseFeeUsd: numeric("base_fee_usd", { precision: 12, scale: 2 }),
+    /** per_policy: policies covered by the base fee before per-policy rates apply. */
+    includedPolicyUnits: integer("included_policy_units").default(1000).notNull(),
+    /** per_policy: { "<policy status>": "<usd per policy per month>" }, e.g.
+     *  { active: "0.10", inactive: "0.05", grace: "0.05", lapsed: "0.05", cancelled: "0.05", archived: "0.01" } */
+    perStatusRates: jsonb("per_status_rates").$type<Record<string, string>>(),
+    /** revenue_share: percent of collected/receipted revenue, e.g. "2.50". */
+    revenueSharePercent: numeric("revenue_share_percent", { precision: 5, scale: 2 }),
+    /** Monthly floor — the tenant pays max(computed amount, this). Basic default $250. */
+    monthlyMinimumUsd: numeric("monthly_minimum_usd", { precision: 12, scale: 2 }).default("250.00").notNull(),
+    /** One-time setup fee invoiced at trial→paid conversion. null → falls back to priceMonthlyUsd. */
+    setupFeeUsd: numeric("setup_fee_usd", { precision: 12, scale: 2 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (t) => [uniqueIndex("billing_plans_key_idx").on(t.key)]
+);
+
+/**
+ * Purchasable feature catalog (0005). Keyed by the same strings as server/module-gate.ts's
+ * ALL_KNOWN_MODULES. Each feature carries a price impact that plan design adds on top of the
+ * plan's base fee / per-policy rate / revenue-share percent, so choosing WhatsApp + SMS +
+ * payments raises what a tenant pays without needing a bespoke plan per combination.
+ * Seeded with every known module at zero delta — the platform owner fills the numbers in.
+ */
+export const billingFeatures = pgTable(
+  "billing_features",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    baseFeeDeltaUsd: numeric("base_fee_delta_usd", { precision: 12, scale: 2 }).default("0").notNull(),
+    perPolicyRateDeltaUsd: numeric("per_policy_rate_delta_usd", { precision: 8, scale: 4 }).default("0").notNull(),
+    revenueSharePercentDelta: numeric("revenue_share_percent_delta", { precision: 5, scale: 2 }).default("0").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex("billing_features_key_idx").on(t.key)],
 );
 
 // ─── BILLING: SUBSCRIPTIONS ───────────────────────────────────────────────────
@@ -303,9 +351,27 @@ export const tenantSubscriptions = pgTable(
     currentPeriodEnd: timestamp("current_period_end").notNull(),
     /** null = inherit billingSettings.graceDays (global default) */
     graceDaysOverride: integer("grace_days_override"),
-    /** null = inherit billingSettings.platformFeeRatePercent (global default) */
+    /** revenue_share: percent-of-revenue override for THIS tenant. null = inherit the plan's
+     *  revenueSharePercent, else billingSettings.platformFeeRatePercent, else 2.5%. Also read by
+     *  server/platform-fee.ts's per-receipt accrual. */
     platformFeeRateOverride: numeric("platform_fee_rate_override", { precision: 5, scale: 2 }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+    // ── Per-tenant billing-model overrides (0005) — null = inherit the plan ────
+    /** flat | per_policy | revenue_share — override the plan's model for this tenant. */
+    billingModelOverride: text("billing_model_override"),
+    perStatusRatesOverride: jsonb("per_status_rates_override").$type<Record<string, string>>(),
+    includedPolicyUnitsOverride: integer("included_policy_units_override"),
+    monthlyMinimumOverrideUsd: numeric("monthly_minimum_override_usd", { precision: 12, scale: 2 }),
+    baseFeeOverrideUsd: numeric("base_fee_override_usd", { precision: 12, scale: 2 }),
+    /** revenue_share: max unpaid platform fees before this tenant is dunned/blocked (credit limit).
+     *  null = inherit billingSettings.defaultOutstandingFeeCapUsd (may also be null = no cap). */
+    outstandingFeeCapUsd: numeric("outstanding_fee_cap_usd", { precision: 12, scale: 2 }),
+    setupFeeOverrideUsd: numeric("setup_fee_override_usd", { precision: 12, scale: 2 }),
+    /** not_applicable | pending | invoiced | paid | waived */
+    setupFeeStatus: text("setup_fee_status").default("not_applicable").notNull(),
+    /** per_policy / revenue_share: start of the counting window for the next invoice
+     *  (advanced to the invoice's periodEnd each time one is generated). */
+    lastSettlementAt: timestamp("last_settlement_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -326,22 +392,34 @@ export const tenantInvoices = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    subscriptionId: uuid("subscription_id")
-      .notNull()
-      .references(() => tenantSubscriptions.id),
-    /** Price snapshot at issue time — later plan-price edits never change an issued invoice */
-    planId: uuid("plan_id")
-      .notNull()
-      .references(() => billingPlans.id),
+    /** null for non-subscription invoices (e.g. kind='setup') */
+    subscriptionId: uuid("subscription_id").references(() => tenantSubscriptions.id),
+    /** Price snapshot at issue time — later plan-price edits never change an issued invoice.
+     *  null for non-subscription invoices. */
+    planId: uuid("plan_id").references(() => billingPlans.id),
+    /** subscription | setup | per_policy | revenue_share | adjustment (0005). Existing rows are
+     *  all 'subscription' (the flat-plan renewal invoice). */
+    kind: text("kind").default("subscription").notNull(),
     amount: numeric("amount").notNull(),
     currency: text("currency").default("USD").notNull(),
+    /** Human-readable breakdown for the PDF, e.g.
+     *  [{label:"412 active policies × $0.10", amount:"41.20"}] or per-currency revenue-share lines. */
+    lineItems: jsonb("line_items").$type<Array<{ label: string; amount: string; currency?: string; nativeAmount?: string }>>(),
     /** open | paid | void */
     status: text("status").default("open").notNull(),
-    periodStart: timestamp("period_start").notNull(),
-    periodEnd: timestamp("period_end").notNull(),
+    /** null for non-period invoices (kind='setup'). */
+    periodStart: timestamp("period_start"),
+    periodEnd: timestamp("period_end"),
+    /** per_policy / revenue_share: the exact instant usage was tallied for this invoice.
+     *  reconcileRevenueShareSettlement settles platform_receivables created at/before this. */
+    usageCutAt: timestamp("usage_cut_at"),
     dueDate: timestamp("due_date").notNull(),
     issuedAt: timestamp("issued_at").defaultNow().notNull(),
     paidAt: timestamp("paid_at"),
+    /** Set by reconcileRevenueShareSettlement once it actually completes for this invoice (kind
+     *  revenue_share/subscription only) — lets the daily sweep find and retry any paid invoice
+     *  whose post-payment settlement never finished, instead of silently losing it. */
+    settledAt: timestamp("settled_at"),
     /** Opaque public identifier for the unauthenticated pay page, crypto.randomBytes(24).hex */
     paymentToken: text("payment_token").notNull(),
     merchantReference: text("merchant_reference"),
@@ -427,6 +505,17 @@ export const billingSettings = pgTable("billing_settings", {
   moduleEnforcementEnabled: boolean("module_enforcement_enabled").default(false).notNull(),
   /** Default platform revenue-share rate applied to cleared receipts, e.g. "2.50" = 2.5%. Per-tenant override: tenantSubscriptions.platformFeeRateOverride */
   platformFeeRatePercent: numeric("platform_fee_rate_percent", { precision: 5, scale: 2 }).default("2.50").notNull(),
+  // ── Billing-model global defaults (0005) ──────────────────────────────────
+  /** Monthly floor for per_policy / revenue_share tenants when a plan/subscription doesn't set its own. */
+  defaultMonthlyMinimumUsd: numeric("default_monthly_minimum_usd", { precision: 12, scale: 2 }).default("250.00").notNull(),
+  /** Global credit limit for revenue_share unpaid fees. null = no cap unless a tenant sets its own. */
+  defaultOutstandingFeeCapUsd: numeric("default_outstanding_fee_cap_usd", { precision: 12, scale: 2 }),
+  /** Days a suspended tenant can still VIEW its data before permanent deletion (Phase 6). */
+  deletionGraceDays: integer("deletion_grace_days").default(30).notNull(),
+  /** Phase 6 opt-in: when true the deletion sweep purges a tenant automatically once its
+   *  view-only window closes. Default false — the sweep parks it at pending_deletion and
+   *  notifies the platform owner to run the (irreversible) purge by hand. */
+  hardDeleteEnabled: boolean("hard_delete_enabled").default(false).notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -494,6 +583,106 @@ export const platformAuditLogs = pgTable("platform_audit_logs", {
 });
 export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
 
+// ─── CUSTOMER SERVICE (WhatsApp / SMSALA) ROUTING REGISTRY ────────────────────
+//
+// Multi-tenant WhatsApp customer service. Tenant resolution happens BEFORE any tenant
+// database is known, so these tables live in the control plane (same reasoning as
+// tenant_domains / tenant_email_domains). They are ROUTING INDEXES — the source of truth for
+// customers/policies stays in the per-tenant `clients` / `policies` tables; these only hold
+// UUIDs as plain columns (no FK into tenant DBs). Resolution is NOT authentication — the
+// existing /api/customer-service/verify + requireVerifiedCustomer flow is unchanged and still
+// enforces secret→tenant, token→client, tenant-match, client-ownership.
+
+/**
+ * MODE B — dedicated tenant WhatsApp number registry. When SMSALA provides a
+ * channel_id / phone_number_id, it maps directly to a tenant, bypassing cross-tenant discovery.
+ * Direct analogue of tenant_domains.
+ */
+export const customerServiceChannels = pgTable(
+  "customer_service_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    /** 'whatsapp' (only value today) */
+    channelType: text("channel_type").notNull(),
+    /** The BSP/SMSALA channel identifier — e.g. a WhatsApp phone_number_id. */
+    channelId: text("channel_id").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_channels_channel_idx").on(t.channelType, t.channelId),
+    index("customer_service_channels_tenant_idx").on(t.tenantId),
+  ],
+);
+
+/**
+ * MODE A — verify-driven identity index. Populated after each successful
+ * /api/customer-service/verify (we then know org + client + policy + the WhatsApp number).
+ * `whatsapp_number` is the normalized last-9-digits form (matching storage.getClientByPhone's
+ * existing convention). Lets a shared WhatsApp number resolve to a tenant/customer without an
+ * O(all clients) cross-tenant scan. NOT a copy of `clients` — a routing index only.
+ */
+export const customerServiceIdentities = pgTable(
+  "customer_service_identities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    policyId: uuid("policy_id"),
+    whatsappNumber: text("whatsapp_number").notNull(),
+    /** 'active' | 'stale' */
+    status: text("status").default("active").notNull(),
+    lastVerifiedAt: timestamp("last_verified_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_identities_unique_idx").on(t.organizationId, t.clientId, t.whatsappNumber),
+    index("customer_service_identities_number_idx").on(t.whatsappNumber),
+  ],
+);
+
+/**
+ * Phase 4 — persistent WhatsApp conversation context + FSM state + agent routing.
+ * organization_id / client_id / policy_id are set ONLY by trusted server code (from the
+ * resolver and from /verify success) — never from the SMSALA/user request body. The raw
+ * verification token is NEVER stored here (it stays in the bot's own conversation state).
+ */
+export const customerServiceConversations = pgTable(
+  "customer_service_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelType: text("channel_type").notNull(),
+    channelId: text("channel_id"),
+    whatsappNumber: text("whatsapp_number").notNull(),
+    organizationId: uuid("organization_id"),
+    clientId: uuid("client_id"),
+    policyId: uuid("policy_id"),
+    /** 'unresolved' | 'tenant_resolved' | 'awaiting_policy' | 'verified' | 'expired' */
+    verificationStatus: text("verification_status").default("unresolved").notNull(),
+    verificationExpiresAt: timestamp("verification_expires_at"),
+    /** FSM: WELCOME | VERIFY | MAIN_MENU | MY_POLICY | MAKE_PAYMENT | MY_DOCUMENTS |
+     *  FUNERAL_ASSISTANCE | TALK_TO_AGENT | EXPIRED | ERROR */
+    currentState: text("current_state").default("WELCOME").notNull(),
+    currentMenu: text("current_menu"),
+    assignedAgentId: uuid("assigned_agent_id"),
+    lastMessageAt: timestamp("last_message_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_service_conversations_channel_number_idx").on(t.channelId, t.whatsappNumber),
+    index("customer_service_conversations_number_idx").on(t.whatsappNumber),
+    index("customer_service_conversations_org_idx").on(t.organizationId),
+  ],
+);
+
+export type CustomerServiceChannel = typeof customerServiceChannels.$inferSelect;
+export type CustomerServiceIdentity = typeof customerServiceIdentities.$inferSelect;
+export type CustomerServiceConversation = typeof customerServiceConversations.$inferSelect;
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export type Tenant = typeof tenants.$inferSelect;
@@ -503,6 +692,7 @@ export type TenantEmailDomain = typeof tenantEmailDomains.$inferSelect;
 export type TenantBranding = typeof tenantBranding.$inferSelect;
 export type BackupSyncRun = typeof backupSyncRuns.$inferSelect;
 export type BillingPlan = typeof billingPlans.$inferSelect;
+export type BillingFeature = typeof billingFeatures.$inferSelect;
 export type TenantSubscription = typeof tenantSubscriptions.$inferSelect;
 export type TenantInvoice = typeof tenantInvoices.$inferSelect;
 export type BillingSettings = typeof billingSettings.$inferSelect;

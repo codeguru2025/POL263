@@ -5,6 +5,7 @@ import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
+import { isRevenueShareBillingForOrg } from "./platform-fee";
 import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
@@ -16,7 +17,7 @@ import {
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
   products, productVersions, benefitCatalogItems, benefitBundles, addOns,
   policyDocuments, waitingPeriodWaivers,
-  ageBandConfigs, policies, policyMembers, policyStatusHistory, policyAddOns,
+  ageBandConfigs, ageBandRateCards, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
   paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens,
@@ -93,6 +94,7 @@ import {
   type BenefitBundle, type InsertBenefitBundle,
   type AddOn, type InsertAddOn,
   type AgeBandConfig, type InsertAgeBandConfig,
+  type AgeBandRateCard, type InsertAgeBandRateCard,
   type Policy, type InsertPolicy,
   type PolicyMember, type InsertPolicyMember,
   type PolicyAddOn, type InsertPolicyAddOn,
@@ -415,6 +417,10 @@ export interface IStorage {
   getAgeBandConfigs(orgId: string): Promise<AgeBandConfig[]>;
   createAgeBandConfig(config: InsertAgeBandConfig): Promise<AgeBandConfig>;
   updateAgeBandConfig(id: string, data: Partial<InsertAgeBandConfig>, orgId: string): Promise<AgeBandConfig | undefined>;
+  getAgeBandRateCards(productVersionId: string, orgId: string): Promise<AgeBandRateCard[]>;
+  createAgeBandRateCard(card: InsertAgeBandRateCard): Promise<AgeBandRateCard>;
+  updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined>;
+  deleteAgeBandRateCard(id: string, orgId: string): Promise<void>;
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
@@ -444,7 +450,7 @@ export interface IStorage {
     data: {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
-      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: string | number | null; premiumContribution?: string | number | null }>;
       // Per-member add-ons. memberRef can be "holder" (→ policy_holder row) or a dependent UUID.
       memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
@@ -797,8 +803,8 @@ export interface IStorage {
   getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined>;
   getNextMonthEndRunNumber(orgId: string): Promise<string>;
   getPlatformReceivables(orgId: string, limit?: number, offset?: number, filters?: ReportFilters): Promise<PlatformReceivable[]>;
-  createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
-  createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable>;
+  createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null>;
+  createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null>;
   getPlatformRevenueSummary(orgId: string): Promise<{ totalDue: Record<string, string>; totalSettled: Record<string, string>; outstanding: Record<string, string> }>;
   getSettlements(orgId: string): Promise<Settlement[]>;
   createSettlement(settlement: InsertSettlement): Promise<Settlement>;
@@ -836,6 +842,10 @@ export interface IStorage {
   rollbackImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ ok: boolean; reason?: string }>;
   commitImportBatch(orgId: string, batchId: string, actor: { userId: string }): Promise<{ successRows: number; errorRows: number }>;
 }
+
+// Monotonic suffix for SAVEPOINT names created by createAuditLog inside a caller transaction —
+// just needs to be unique per statement, not globally.
+let auditSavepointSeq = 0;
 
 export class DatabaseStorage implements IStorage {
   async getOrganization(id: string): Promise<Organization | undefined> {
@@ -933,6 +943,8 @@ export class DatabaseStorage implements IStorage {
       isEnabled: false,
       flagLabel: "South Africa",
       homeLabel: "Zimbabwe",
+      homeCountryCode: "263",
+      flagCountryCode: "27",
       updatedAt: new Date(),
     };
   }
@@ -1277,21 +1289,50 @@ export class DatabaseStorage implements IStorage {
     const orgId = log.organizationId;
     if (!orgId) throw new Error("createAuditLog: organizationId is required");
     const tdb = tx ?? await getDbForOrg(orgId);
+
+    const insert = async (values: InsertAuditLog) => {
+      const [created] = await tdb.insert(auditLogs).values(values).returning();
+      return created;
+    };
+    // Drizzle wraps the pg error: the constraint name and SQLSTATE live on error.cause, not
+    // error itself. Check both, plus the raw text and the FK SQLSTATE (23503) — otherwise the
+    // actorId-drop fallback never fires and every platform-owner action inside a dedicated-DB
+    // tenant (whose users table has no row for that platform owner) fails to audit-log.
+    const isActorFk = (error: any) => {
+      const pg = error?.cause ?? error;
+      const blob = `${error?.message ?? ""} ${pg?.message ?? ""} ${pg?.detail ?? ""}`;
+      return (
+        pg?.code === "23503" ||
+        pg?.constraint === "audit_logs_actor_id_users_id_fk" ||
+        blob.includes("audit_logs_actor_id_users_id_fk")
+      );
+    };
+
+    if (!tx) {
+      try {
+        return await insert(log);
+      } catch (error: any) {
+        if (isActorFk(error) && log.actorId) return await insert({ ...log, actorId: null });
+        throw error;
+      }
+    }
+
+    // Inside a caller-supplied transaction a failed INSERT poisons the whole transaction, so the
+    // actorId-drop retry can only work behind a SAVEPOINT. Without this, a platform owner
+    // receipting a dedicated-DB tenant's group hits the FK, the retry then fails with "current
+    // transaction is aborted", and the caller's entire batch (e.g. 16 receipts) rolls back.
+    const sp = `audit_sp_${++auditSavepointSeq}`;
+    await tx.execute(sql.raw(`SAVEPOINT ${sp}`));
     try {
-      const [created] = await tdb.insert(auditLogs).values(log).returning();
+      const created = await insert(log);
+      await tx.execute(sql.raw(`RELEASE SAVEPOINT ${sp}`));
       return created;
     } catch (error: any) {
-      const fkViolation =
-        error?.message?.includes("audit_logs_actor_id_users_id_fk") ||
-        error?.constraint === "audit_logs_actor_id_users_id_fk";
-      if (fkViolation && log.actorId) {
-        // Platform owners can switch into tenant DBs where their user row does not exist.
-        // Keep the audit event by dropping actorId, but preserve actorEmail and request metadata.
-        const [createdWithoutActor] = await tdb
-          .insert(auditLogs)
-          .values({ ...log, actorId: null })
-          .returning();
-        return createdWithoutActor;
+      await tx.execute(sql.raw(`ROLLBACK TO SAVEPOINT ${sp}`));
+      if (isActorFk(error) && log.actorId) {
+        const created = await insert({ ...log, actorId: null });
+        await tx.execute(sql.raw(`RELEASE SAVEPOINT ${sp}`));
+        return created;
       }
       throw error;
     }
@@ -1716,6 +1757,24 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(config.organizationId);
     const [created] = await tdb.insert(ageBandConfigs).values(config).returning();
     return created;
+  }
+  async getAgeBandRateCards(productVersionId: string, orgId: string): Promise<AgeBandRateCard[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(ageBandRateCards).where(eq(ageBandRateCards.productVersionId, productVersionId));
+  }
+  async createAgeBandRateCard(card: InsertAgeBandRateCard): Promise<AgeBandRateCard> {
+    const tdb = await getDbForOrg(card.organizationId);
+    const [created] = await tdb.insert(ageBandRateCards).values(card).returning();
+    return created;
+  }
+  async updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(ageBandRateCards).set(data).where(eq(ageBandRateCards.id, id)).returning();
+    return updated;
+  }
+  async deleteAgeBandRateCard(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(ageBandRateCards).where(eq(ageBandRateCards.id, id));
   }
 
   // ─── Policies ──────────────────────────────────────────────
@@ -2538,7 +2597,7 @@ export class DatabaseStorage implements IStorage {
     data: {
       policy: InsertPolicy;
       statusHistory: { fromStatus: string | null; toStatus: string; reason?: string; changedBy?: string | null };
-      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string }>;
+      members: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: string | number | null; premiumContribution?: string | number | null }>;
       memberAddOns?: Array<{ memberRef: string; addOnId: string }>;
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }> {
@@ -2582,6 +2641,8 @@ export class DatabaseStorage implements IStorage {
             dependentId: m.dependentId ?? null,
             role: m.role,
             memberNumber,
+            coverAmount: m.coverAmount != null ? String(m.coverAmount) : null,
+            premiumContribution: m.premiumContribution != null ? String(m.premiumContribution) : null,
           })
           .returning();
         membersOut.push(createdMember);
@@ -5239,29 +5300,33 @@ export class DatabaseStorage implements IStorage {
    *  historical contributions, or none of them, never a half-imported society. */
   async bulkImportGroupMembers(orgId: string, groupId: string, rows: BulkImportGroupMemberRow[]): Promise<{ membersCreated: number; contributionsCreated: number }> {
     return withOrgTransaction(orgId, async (tx) => {
-      let contributionsCreated = 0;
-      for (const row of rows) {
-        const [member] = await tx.insert(groupMembers).values({
-          organizationId: orgId,
-          groupId,
-          fullName: row.fullName,
-          memberNumber: row.memberNumber || undefined,
-          joinedDate: row.joinedDate || undefined,
-        }).returning();
-        for (const c of row.contributions || []) {
-          await tx.insert(groupContributions).values({
-            organizationId: orgId,
-            groupId,
-            groupMemberId: member.id,
-            amount: c.amount,
-            currency: c.currency,
-            contributionDate: c.contributionDate,
-            notes: c.notes || undefined,
-          });
-          contributionsCreated++;
-        }
+      if (rows.length === 0) return { membersCreated: 0, contributionsCreated: 0 };
+      // Two multi-row INSERTs instead of one round trip per member plus one per contribution —
+      // this backs "import a whole society's roster + years of contribution history," plausibly
+      // thousands of rows held open on one tenant DB connection for the whole request. A single
+      // multi-VALUES INSERT with no ON CONFLICT reliably returns rows in VALUES order, so
+      // insertedMembers[i] corresponds to rows[i].
+      const insertedMembers = await tx.insert(groupMembers).values(rows.map((row) => ({
+        organizationId: orgId,
+        groupId,
+        fullName: row.fullName,
+        memberNumber: row.memberNumber || undefined,
+        joinedDate: row.joinedDate || undefined,
+      }))).returning();
+
+      const contributionRows = rows.flatMap((row, i) => (row.contributions || []).map((c) => ({
+        organizationId: orgId,
+        groupId,
+        groupMemberId: insertedMembers[i].id,
+        amount: c.amount,
+        currency: c.currency,
+        contributionDate: c.contributionDate,
+        notes: c.notes || undefined,
+      })));
+      if (contributionRows.length > 0) {
+        await tx.insert(groupContributions).values(contributionRows);
       }
-      return { membersCreated: rows.length, contributionsCreated };
+      return { membersCreated: rows.length, contributionsCreated: contributionRows.length };
     });
   }
 
@@ -6530,7 +6595,7 @@ export class DatabaseStorage implements IStorage {
     return tdb.select().from(platformReceivables).where(and(...conditions))
       .orderBy(desc(platformReceivables.createdAt)).limit(limit).offset(offset);
   }
-  async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
+  async createPlatformReceivable(entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null> {
     return withOrgTransaction(entry.organizationId, (tx) => this.createPlatformReceivableInTx(tx, entry));
   }
   // Split out so callers that already have an open transaction for the payment this fee is on
@@ -6539,7 +6604,12 @@ export class DatabaseStorage implements IStorage {
   // crash window a detached, unawaited `computePlatformFee(...).then(() => createPlatformReceivable(...))`
   // has: if the process dies between the payment transaction committing and that promise
   // resolving, the fee is durably lost with no record it was ever owed — see docs/BUGFIX-LOG.md.
-  async createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable> {
+  async createPlatformReceivableInTx(tx: OrgDataDb, entry: InsertPlatformReceivable & { createdAt?: Date }): Promise<PlatformReceivable | null> {
+    // Only tenants actually billed on revenue-share accrue platform_receivables — otherwise a
+    // flat/per-policy tenant would pile up unsettled 2.5% rows that are never invoiced. This is
+    // the single chokepoint for every accrual site across the codebase. Cached lookup.
+    if (!(await isRevenueShareBillingForOrg(entry.organizationId))) return null;
+
     const [created] = await tx.insert(platformReceivables).values(entry).returning();
 
     // Immediately draw down any same-currency fee credit this org built up from a past

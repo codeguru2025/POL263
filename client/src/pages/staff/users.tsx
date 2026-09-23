@@ -16,6 +16,17 @@ import { useAuth } from "@/hooks/use-auth";
 import { UserPlus, Shield, Copy, Pencil, Check, Trash2, Users, KeyRound, AlertTriangle } from "lucide-react";
 import { PageHeader, PageShell, CardSection, EnhancedDataTable, type EdtColumn, KpiStatCard } from "@/components/ds";
 
+function groupPermissions(perms: { name: string; description: string | null; category: string | null }[]): [string, typeof perms][] {
+  const groups = new Map<string, typeof perms>();
+  for (const p of [...perms].sort((a, b) => a.name.localeCompare(b.name))) {
+    const cat = p.category || (p.name.includes(":") ? p.name.split(":")[1] : "Other");
+    const key = cat.charAt(0).toUpperCase() + cat.slice(1);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(p);
+  }
+  return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
 export default function StaffUsers() {
   const { toast } = useToast();
   const { permissions } = useAuth();
@@ -44,6 +55,22 @@ export default function StaffUsers() {
   const { data: users = [], isLoading } = useQuery<any[]>({ queryKey: ["/api/users"] });
   const { data: roles = [] } = useQuery<any[]>({ queryKey: ["/api/roles"] });
   const { data: branches = [] } = useQuery<any[]>({ queryKey: ["/api/branches"] });
+  const { data: allPermissions = [] } = useQuery<{ name: string; description: string | null; category: string | null }[]>({
+    queryKey: ["/api/permissions"], enabled: canManageOverrides,
+  });
+  const { data: accessProfiles = [] } = useQuery<{ id: string; name: string; description: string | null; permissions: string[] }[]>({
+    queryKey: ["/api/access-profiles"], enabled: canManageOverrides,
+  });
+
+  const applyProfileMutation = useMutation({
+    mutationFn: async ({ userId, profileId, exclusive }: { userId: string; profileId: string; exclusive: boolean }) =>
+      (await apiRequest("POST", `/api/users/${userId}/apply-access-profile/${profileId}${exclusive ? "?mode=exclusive" : ""}`, {})).json(),
+    onSuccess: (r: any, variables) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${variables.userId}/permission-overrides`] });
+      toast({ title: `Access profile applied — ${r.applied} permission(s) set` });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -516,36 +543,68 @@ export default function StaffUsers() {
                   </div>
                 </div>
                 {canManageOverrides && (
-                  <div className="space-y-2">
-                    <Label>Product Builder &amp; Terms &amp; Conditions access</Label>
-                    {(() => {
-                      const override = overrideData?.overrides?.find((o) => o.permissionName === "write:product");
-                      const value = override ? (override.isGranted ? "allow" : "deny") : "default";
-                      const effectiveHasIt = overrideData?.effectivePermissions?.includes("write:product");
-                      return (
-                        <>
-                          <Select
-                            value={value}
-                            onValueChange={(v) => {
-                              if (v === "default") clearOverrideMutation.mutate({ userId: editingUser.id, permissionName: "write:product" });
-                              else setOverrideMutation.mutate({ userId: editingUser.id, permissionName: "write:product", isGranted: v === "allow" });
-                            }}
-                            disabled={setOverrideMutation.isPending || clearOverrideMutation.isPending}
-                          >
-                            <SelectTrigger data-testid="select-edit-user-product-override"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="default">Default (follows their role)</SelectItem>
-                              <SelectItem value="allow">Always allow, regardless of role</SelectItem>
-                              <SelectItem value="deny">Always deny, regardless of role</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-xs text-muted-foreground">
-                            Controls both the Product Builder and Terms &amp; Conditions editor (same underlying permission). Currently: {effectiveHasIt ? "can" : "cannot"} access{override ? " (explicit override)" : " (from role)"}.
-                          </p>
-                        </>
-                      );
-                    })()}
-                  </div>
+                  <details className="rounded-lg border p-3 [&_summary]:cursor-pointer">
+                    <summary className="text-sm font-medium">Advanced: custom permissions for this user</summary>
+                    <div className="pt-3 space-y-4">
+                      {accessProfiles.length > 0 && (
+                        <div className="space-y-2 rounded-md bg-muted/40 p-3">
+                          <Label className="text-xs">Apply an access profile</Label>
+                          <div className="flex flex-wrap gap-2">
+                            {accessProfiles.map((p) => (
+                              <Button
+                                key={p.id} size="sm" variant="outline"
+                                disabled={applyProfileMutation.isPending}
+                                onClick={() => applyProfileMutation.mutate({ userId: editingUser.id, profileId: p.id, exclusive: false })}
+                                title={p.description || `${p.permissions.length} permission(s)`}
+                              >
+                                + {p.name}
+                              </Button>
+                            ))}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">Grants every permission in the profile on top of the user's roles. Adjust individual permissions below afterwards.</p>
+                        </div>
+                      )}
+
+                      <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                        {groupPermissions(allPermissions).map(([category, perms]) => (
+                          <div key={category} className="space-y-1.5">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{category}</p>
+                            {perms.map((perm) => {
+                              const override = overrideData?.overrides?.find((o) => o.permissionName === perm.name);
+                              const value = override ? (override.isGranted ? "allow" : "deny") : "default";
+                              const effectiveHasIt = overrideData?.effectivePermissions?.includes(perm.name);
+                              return (
+                                <div key={perm.name} className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <span className="text-sm">{perm.description || perm.name}</span>
+                                    <span className="ml-1.5 text-[11px] text-muted-foreground font-mono">{perm.name}</span>
+                                  </div>
+                                  <Select
+                                    value={value}
+                                    onValueChange={(v) => {
+                                      if (v === "default") clearOverrideMutation.mutate({ userId: editingUser.id, permissionName: perm.name });
+                                      else setOverrideMutation.mutate({ userId: editingUser.id, permissionName: perm.name, isGranted: v === "allow" });
+                                    }}
+                                    disabled={setOverrideMutation.isPending || clearOverrideMutation.isPending}
+                                  >
+                                    <SelectTrigger className={`w-32 h-8 shrink-0 ${override ? "border-primary" : ""}`}><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="default">Role default{effectiveHasIt ? " (✓)" : ""}</SelectItem>
+                                      <SelectItem value="allow">Always allow</SelectItem>
+                                      <SelectItem value="deny">Always deny</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Overrides win over roles. "Role default" removes the override. Manage reusable profiles on the <a className="underline" href="/staff/access-profiles">Access Profiles</a> page.
+                      </p>
+                    </div>
+                  </details>
                 )}
                 <div className="border-t pt-4 mt-2">
                   <h4 className="text-sm font-semibold mb-3">Personal Details</h4>

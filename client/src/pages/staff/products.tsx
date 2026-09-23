@@ -57,6 +57,8 @@ type Product = {
   casketImageUrl: string | null;
   coverAmount: string | null;
   coverCurrency: string | null;
+  /** 'bundled_family' (default) | 'individual_age_rated' — see server/route-helpers.ts computePolicyPremium. */
+  pricingModel: string;
   isActive: boolean;
   createdAt: string;
 };
@@ -117,8 +119,12 @@ type ProductVersion = {
 
 type BenefitCatalogItem = { id: string; name: string; description: string | null; internalCostDefault: string | null; isActive: boolean; };
 type BenefitBundle = { id: string; name: string; description: string | null; items: unknown; isActive: boolean; };
-type AddOn = { id: string; name: string; description: string | null; pricingMode: string; priceAmount: string | null; priceMonthly: string | null; priceWeekly: string | null; priceBiweekly: string | null; isActive: boolean; };
+type AddOn = { id: string; name: string; description: string | null; category: string | null; pricingMode: string; currency: string; priceAmount: string | null; priceMonthly: string | null; priceWeekly: string | null; priceBiweekly: string | null; coverIncrementAmount: string | null; isActive: boolean; };
 type AgeBandConfig = { id: string; name: string; minAge: number; maxAge: number; version: number; effectiveFrom: string | null; isActive: boolean; };
+type AgeBandRateCard = { id: string; productVersionId: string; ageBand: string; currency: string; ratePerThousand: string; isActive: boolean; };
+
+const AGE_BANDS = ["child", "21_65", "66_84", "85_plus"] as const;
+const AGE_BAND_LABELS: Record<string, string> = { child: "Child", "21_65": "21–65", "66_84": "66–84", "85_plus": "85+" };
 
 const CASKET_TYPES = [
   "Standard Flat Lid",
@@ -595,8 +601,12 @@ export default function ProductBuilder() {
                       {
                         id: "monthly",
                         header: "Monthly",
-                        accessor: (addon) => addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || ""}%` : (addon.priceMonthly || addon.priceAmount || ""),
-                        cell: (addon) => <span className="font-semibold">{addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%` : (addon.priceMonthly || addon.priceAmount ? formatAmount(addon.priceMonthly || addon.priceAmount!, "USD") : "—")}</span>,
+                        accessor: (addon) => addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || ""}%` : addon.pricingMode === "cover_topup" ? (addon.coverIncrementAmount || "") : (addon.priceMonthly || addon.priceAmount || ""),
+                        cell: (addon) => <span className="font-semibold">{
+                          addon.pricingMode === "percentage" ? `${addon.priceAmount || addon.priceMonthly || "—"}%`
+                          : addon.pricingMode === "cover_topup" ? (addon.coverIncrementAmount ? `+${formatAmount(addon.coverIncrementAmount, "USD")} cover` : "—")
+                          : (addon.priceMonthly || addon.priceAmount ? formatAmount(addon.priceMonthly || addon.priceAmount!, "USD") : "—")
+                        }</span>,
                       },
                       {
                         id: "weekly",
@@ -824,6 +834,7 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
     queryKey: [`/api/products/${product.id}/versions`],
     enabled: isExpanded,
   });
+  const [rateCardsVersion, setRateCardsVersion] = useState<ProductVersion | null>(null);
 
   return (
     <>
@@ -945,6 +956,11 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
                             <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit version" onClick={() => onEditVersion(v)} data-testid={`button-edit-version-${v.id}`}>
                               <Edit className="h-3.5 w-3.5" aria-hidden="true" />
                             </Button>
+                            {product.pricingModel === "individual_age_rated" && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-sky-600 hover:text-sky-700" aria-label="Manage age-band rate cards" title="Rate Cards (dynamic pricing)" onClick={() => setRateCardsVersion(v)} data-testid={`button-rate-cards-${v.id}`}>
+                                <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+                              </Button>
+                            )}
                             <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600 hover:text-amber-700" aria-label="Recalculate all policy premiums for this version" title="Recalculate premiums for all policies on this version" onClick={() => onRecalcPremiums(v.id)}>
                               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                             </Button>
@@ -959,6 +975,9 @@ function ProductRow({ product, isExpanded, onToggle, onEdit, onCreateVersion, on
             </div>
           </TableCell>
         </TableRow>
+      )}
+      {rateCardsVersion && (
+        <RateCardsDialog version={rateCardsVersion} product={product} open={!!rateCardsVersion} onClose={() => setRateCardsVersion(null)} />
       )}
     </>
   );
@@ -978,6 +997,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
   const [casketImageUrl, setCasketImageUrl] = useState("");
   const [coverAmount, setCoverAmount] = useState("");
   const [coverCurrency, setCoverCurrency] = useState("USD");
+  const [pricingModel, setPricingModel] = useState("bundled_family");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1016,6 +1036,7 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
       casketImageUrl: casketImageUrl || undefined,
       coverAmount: coverAmount || undefined,
       coverCurrency,
+      pricingModel,
     });
   };
 
@@ -1067,9 +1088,25 @@ function CreateProductDialog({ open, onClose, onSubmit, isPending }: {
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cover & Casket</h3>
 
+          <div className="space-y-2">
+            <Label>Pricing Model</Label>
+            <Select value={pricingModel} onValueChange={setPricingModel}>
+              <SelectTrigger data-testid="select-pricing-model"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bundled_family">Bundled family (flat premium covers included members)</SelectItem>
+                <SelectItem value="individual_age_rated">Individual age-rated (dynamic pricing by age &amp; sum assured)</SelectItem>
+              </SelectContent>
+            </Select>
+            {pricingModel === "individual_age_rated" && (
+              <p className="text-xs text-muted-foreground">
+                Every covered life (policyholder and each dependent) is priced individually from that product version's Rate Cards, against the Cover Amount below. Configure rate cards from the version's "Rate Cards" button after creating this product.
+              </p>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="cover-amount">Cover Amount</Label>
+              <Label htmlFor="cover-amount">Cover Amount{pricingModel === "individual_age_rated" ? " (sum assured) *" : ""}</Label>
               <Input id="cover-amount" type="number" step="0.01" min="0" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} placeholder="e.g. 15000" data-testid="input-cover-amount" />
             </div>
             <div className="space-y-2">
@@ -1138,6 +1175,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
   const [casketImageUrl, setCasketImageUrl] = useState(product.casketImageUrl || "");
   const [coverAmount, setCoverAmount] = useState(product.coverAmount || "");
   const [coverCurrency, setCoverCurrency] = useState(product.coverCurrency || "USD");
+  const [pricingModel, setPricingModel] = useState(product.pricingModel || "bundled_family");
   const [isActive, setIsActive] = useState(product.isActive);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1180,6 +1218,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
       casketImageUrl: casketImageUrl || null,
       coverAmount: coverAmount || null,
       coverCurrency,
+      pricingModel,
       isActive,
     });
   };
@@ -1212,8 +1251,18 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
 
           <Separator />
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Cover & Casket</h3>
+          <div className="space-y-2">
+            <Label>Pricing Model</Label>
+            <Select value={pricingModel} onValueChange={setPricingModel}>
+              <SelectTrigger data-testid="select-edit-pricing-model"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bundled_family">Bundled family (flat premium covers included members)</SelectItem>
+                <SelectItem value="individual_age_rated">Individual age-rated (dynamic pricing by age &amp; sum assured)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Cover Amount</Label><Input type="number" step="0.01" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} /></div>
+            <div className="space-y-2"><Label>Cover Amount{pricingModel === "individual_age_rated" ? " (sum assured)" : ""}</Label><Input type="number" step="0.01" value={coverAmount} onChange={(e) => setCoverAmount(e.target.value)} /></div>
             <div className="space-y-2">
               <Label>Cover Currency</Label>
               <CurrencySelect value={coverCurrency} onValueChange={setCoverCurrency} />
@@ -2231,6 +2280,130 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
   );
 }
 
+/**
+ * Manages the individual_age_rated dynamic-pricing rate source for one product version: monthly
+ * premium per $1,000 of sum assured, by age band, for a chosen currency (server/route-helpers.ts
+ * computeIndividualAgeRatedPremium reads exactly these rows). Edited one currency at a time —
+ * switching currency loads that currency's existing rates (blank if none configured yet) — with
+ * a table below showing every currency already configured, for at-a-glance coverage across bands.
+ */
+function RateCardsDialog({ version, product, open, onClose }: {
+  version: ProductVersion; product: Product; open: boolean; onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const queryKey = [`/api/product-versions/${version.id}/age-band-rates`];
+  const { data: cards = [], isLoading } = useQuery<AgeBandRateCard[]>({ queryKey, enabled: open });
+  const [currency, setCurrency] = useState(product.coverCurrency || "USD");
+  const [rates, setRates] = useState<Record<string, string>>({});
+
+  // Reloads the editable inputs whenever the loaded cards or the selected currency changes, so
+  // switching currency always shows that currency's real saved values, not stale ones.
+  const cardsForCurrency = cards.filter((c) => c.currency === currency);
+  const loadedKey = `${currency}:${cardsForCurrency.map((c) => c.id).join(",")}`;
+  const [lastLoadedKey, setLastLoadedKey] = useState("");
+  if (loadedKey !== lastLoadedKey) {
+    setLastLoadedKey(loadedKey);
+    const next: Record<string, string> = {};
+    for (const band of AGE_BANDS) {
+      const existing = cardsForCurrency.find((c) => c.ageBand === band);
+      next[band] = existing ? existing.ratePerThousand : "";
+    }
+    setRates(next);
+  }
+
+  const saveMut = useMutation({
+    mutationFn: async () => {
+      for (const band of AGE_BANDS) {
+        const value = rates[band]?.trim();
+        if (!value) continue;
+        const existing = cardsForCurrency.find((c) => c.ageBand === band);
+        if (existing) {
+          await apiRequest("PATCH", `/api/age-band-rates/${existing.id}`, { ratePerThousand: value });
+        } else {
+          await apiRequest("POST", `/api/product-versions/${version.id}/age-band-rates`, { ageBand: band, currency, ratePerThousand: value });
+        }
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      toast({ title: `${currency} rate card saved` });
+    },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/age-band-rates/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast({ title: "Rate deleted" }); },
+    onError: (err: Error) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Rate Cards — v{version.version}</DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground -mt-2">
+          Monthly premium per $1,000 of sum assured, by age band. Every covered life on a policy using this version is priced individually against their own cover amount and age band — see {product.name}'s Cover Amount ({product.coverCurrency} {product.coverAmount ?? "not set"}).
+        </p>
+
+        <div className="space-y-2">
+          <Label>Currency</Label>
+          <CurrencySelect value={currency} onValueChange={setCurrency} />
+        </div>
+
+        <div className="space-y-3">
+          {AGE_BANDS.map((band) => (
+            <div key={band} className="grid grid-cols-[100px_1fr] items-center gap-3">
+              <Label className="text-sm">{AGE_BAND_LABELS[band]}</Label>
+              <Input
+                type="number" step="0.0001" min="0" placeholder="e.g. 5.00"
+                value={rates[band] ?? ""}
+                onChange={(e) => setRates((r) => ({ ...r, [band]: e.target.value }))}
+                data-testid={`input-rate-${band}`}
+              />
+            </div>
+          ))}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>Close</Button>
+          <Button type="button" onClick={() => saveMut.mutate()} disabled={saveMut.isPending} data-testid="button-save-rate-cards">
+            {saveMut.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save {currency} Rates
+          </Button>
+        </DialogFooter>
+
+        {!isLoading && cards.length > 0 && (
+          <>
+            <Separator />
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">All configured rates</h3>
+            <Table>
+              <TableHeader>
+                <TableRow><TableHead>Band</TableHead><TableHead>Currency</TableHead><TableHead>Rate/1000</TableHead><TableHead></TableHead></TableRow>
+              </TableHeader>
+              <TableBody>
+                {cards.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell>{AGE_BAND_LABELS[c.ageBand] ?? c.ageBand}</TableCell>
+                    <TableCell>{c.currency}</TableCell>
+                    <TableCell>{c.ratePerThousand}</TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" aria-label="Delete rate" onClick={() => deleteMut.mutate(c.id)}>
+                        <Trash2 className="h-3 w-3" aria-hidden="true" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CreateBenefitDialog({ open, onClose, onSubmit, isPending }: {
   open: boolean; onClose: () => void; onSubmit: (data: Record<string, unknown>) => void; isPending: boolean;
 }) {
@@ -2289,6 +2462,8 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
   const [priceWeekly, setPriceWeekly] = useState("");
   const [priceBiweekly, setPriceBiweekly] = useState("");
   const [priceAmount, setPriceAmount] = useState("");
+  const [coverIncrementAmount, setCoverIncrementAmount] = useState("");
+  const [currency, setCurrency] = useState("USD");
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -2300,13 +2475,16 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
             name,
             description: description || undefined,
             pricingMode,
+            currency,
             priceAmount: priceMonthly || priceAmount || undefined,
             priceMonthly: priceMonthly || undefined,
             priceWeekly: priceWeekly || undefined,
             priceBiweekly: priceBiweekly || undefined,
+            coverIncrementAmount: pricingMode === "cover_topup" ? (coverIncrementAmount || undefined) : undefined,
           });
         }} className="space-y-4">
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Tombstone Cover" data-testid="input-addon-name" /></div>
+          <div className="space-y-2"><Label>Currency</Label><CurrencySelect value={currency} onValueChange={setCurrency} /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What does this add-on provide?" data-testid="input-addon-description" /></div>
           <div className="space-y-2">
             <Label htmlFor="pricing-mode">Pricing Mode</Label>
@@ -2316,10 +2494,17 @@ function CreateAddOnDialog({ open, onClose, onSubmit, isPending }: {
                 <SelectItem value="flat">Flat Rate</SelectItem>
                 <SelectItem value="percentage">Percentage of base premium</SelectItem>
                 <SelectItem value="per_member">Per Member</SelectItem>
+                <SelectItem value="cover_topup">Cover Top-Up (individual_age_rated products only)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {pricingMode === "percentage" ? (
+          {pricingMode === "cover_topup" ? (
+            <div className="space-y-2">
+              <Label htmlFor="cover-increment">Cash Value ($)</Label>
+              <Input id="cover-increment" type="number" step="0.01" min="0" value={coverIncrementAmount} onChange={(e) => setCoverIncrementAmount(e.target.value)} placeholder="e.g. 500" data-testid="input-addon-cover-increment" />
+              <p className="text-xs text-muted-foreground">One value, three uses: at join/quote it adds this to sum assured (premium recomputed from the rate cards); at bereavement it's charged at 10% off if the policyholder's plan didn't already include it; for a walk-in with no policy it's charged in full.</p>
+            </div>
+          ) : pricingMode === "percentage" ? (
             <div className="space-y-2">
               <Label htmlFor="price-amount">Percentage (%)</Label>
               <Input id="price-amount" type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} placeholder="e.g. 10" data-testid="input-addon-price" />
@@ -2398,6 +2583,8 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
   const [priceWeekly, setPriceWeekly] = useState(addon.priceWeekly || "");
   const [priceBiweekly, setPriceBiweekly] = useState(addon.priceBiweekly || "");
   const [priceAmount, setPriceAmount] = useState(addon.priceAmount || "");
+  const [coverIncrementAmount, setCoverIncrementAmount] = useState(addon.coverIncrementAmount || "");
+  const [currency, setCurrency] = useState(addon.currency || "USD");
   const [isActive, setIsActive] = useState(addon.isActive);
 
   return (
@@ -2410,14 +2597,17 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
             name,
             description: description || null,
             pricingMode,
+            currency,
             priceAmount: priceMonthly || priceAmount || null,
             priceMonthly: priceMonthly || null,
             priceWeekly: priceWeekly || null,
             priceBiweekly: priceBiweekly || null,
+            coverIncrementAmount: pricingMode === "cover_topup" ? (coverIncrementAmount || null) : null,
             isActive,
           });
         }} className="space-y-4">
           <div className="space-y-2"><Label>Add-On Name *</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div>
+          <div className="space-y-2"><Label>Currency</Label><CurrencySelect value={currency} onValueChange={setCurrency} /></div>
           <div className="space-y-2"><Label>Description</Label><Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} /></div>
           <div className="space-y-2">
             <Label htmlFor="pricing-mode-2">Pricing Mode</Label>
@@ -2427,10 +2617,17 @@ function EditAddOnDialog({ addon, open, onClose, onSubmit, isPending }: {
                 <SelectItem value="flat">Flat Rate</SelectItem>
                 <SelectItem value="percentage">Percentage of base premium</SelectItem>
                 <SelectItem value="per_member">Per Member</SelectItem>
+                <SelectItem value="cover_topup">Cover Top-Up (individual_age_rated products only)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {pricingMode === "percentage" ? (
+          {pricingMode === "cover_topup" ? (
+            <div className="space-y-2">
+              <Label htmlFor="cover-increment-2">Cash Value ($)</Label>
+              <Input id="cover-increment-2" type="number" step="0.01" min="0" value={coverIncrementAmount} onChange={(e) => setCoverIncrementAmount(e.target.value)} />
+              <p className="text-xs text-muted-foreground">One value, three uses: at join/quote it adds to sum assured; at bereavement it's 10% off if not already part of the policy; for a walk-in with no policy it's charged in full.</p>
+            </div>
+          ) : pricingMode === "percentage" ? (
             <div className="space-y-2">
               <Label htmlFor="price-amount-2">Percentage (%)</Label>
               <Input id="price-amount-2" type="number" step="0.01" value={priceAmount} onChange={(e) => setPriceAmount(e.target.value)} />

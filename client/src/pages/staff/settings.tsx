@@ -136,13 +136,15 @@ export default function StaffSettings() {
     queryKey: ["/api/country-flag-settings"],
     enabled: !isControlPlaneMode && canManageSettings,
   });
-  const [countryFlagForm, setCountryFlagForm] = useState({ isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe" });
+  const [countryFlagForm, setCountryFlagForm] = useState({ isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe", homeCountryCode: "263", flagCountryCode: "27" });
   useEffect(() => {
     if (countryFlagSettings) {
       setCountryFlagForm({
         isEnabled: countryFlagSettings.isEnabled,
         flagLabel: countryFlagSettings.flagLabel,
         homeLabel: countryFlagSettings.homeLabel,
+        homeCountryCode: countryFlagSettings.homeCountryCode ?? "263",
+        flagCountryCode: countryFlagSettings.flagCountryCode ?? "27",
       });
     }
   }, [countryFlagSettings]);
@@ -249,6 +251,17 @@ export default function StaffSettings() {
       toast({ title: "SMS settings saved" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+  const [smsTestTo, setSmsTestTo] = useState("");
+  const sendTestSmsMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/sms-config/test", { to: smsTestTo })).json(),
+    onSuccess: (r: any) =>
+      toast(
+        r?.ok
+          ? { title: "Test message sent", description: r?.message || "Handed to the SMS provider." }
+          : { title: "Test message failed", description: r?.message || "The SMS provider rejected it.", variant: "destructive" },
+      ),
+    onError: (e: any) => toast({ title: "Test message failed", description: e.message, variant: "destructive" }),
   });
 
   // ── Self-service module toggles — see server/module-gate.ts. `inPlan: false` modules render
@@ -907,6 +920,26 @@ export default function StaffSettings() {
                     {saveSmsConfigMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Save
                   </Button>
+                  <div className="space-y-2 border-t pt-4">
+                    <Label htmlFor="sms-test-to">Send a test message</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="sms-test-to"
+                        value={smsTestTo}
+                        onChange={(e) => setSmsTestTo(e.target.value)}
+                        placeholder="e.g. 0771234567"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => sendTestSmsMutation.mutate()}
+                        disabled={sendTestSmsMutation.isPending || smsTestTo.replace(/\D/g, "").length < 8}
+                      >
+                        {sendTestSmsMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                        Send test
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Sends one message using the settings above, so you can confirm delivery before switching SMS notices on.</p>
+                  </div>
                 </div>
               </CardSection>
               <CardSection
@@ -975,6 +1008,32 @@ export default function StaffSettings() {
                       placeholder="e.g. Zimbabwe"
                     />
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="country-home-dial">Home dialing code</Label>
+                      <Input
+                        id="country-home-dial"
+                        inputMode="numeric"
+                        value={countryFlagForm.homeCountryCode}
+                        onChange={(e) => setCountryFlagForm({ ...countryFlagForm, homeCountryCode: e.target.value.replace(/\D/g, "") })}
+                        placeholder="263"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="country-flag-dial">Flagged country dialing code</Label>
+                      <Input
+                        id="country-flag-dial"
+                        inputMode="numeric"
+                        value={countryFlagForm.flagCountryCode}
+                        onChange={(e) => setCountryFlagForm({ ...countryFlagForm, flagCountryCode: e.target.value.replace(/\D/g, "") })}
+                        placeholder="27"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Used when sending a text message to a client whose number is saved in local format (starting with 0).
+                    A client on a flagged-country policy gets the flagged code; everyone else gets the home code.
+                  </p>
                   <Button
                     onClick={() => saveCountryFlagMutation.mutate()}
                     disabled={saveCountryFlagMutation.isPending || !countryFlagForm.flagLabel.trim() || !countryFlagForm.homeLabel.trim()}

@@ -132,6 +132,8 @@ export async function recommendProducts(orgId: string, input: HouseholdInput): P
       dependentDobs.length + 1,
       dependentDobs,
       { productVersion: pv, product, orgAddOns },
+      undefined,
+      product.pricingModel === "individual_age_rated" ? { policyholderDateOfBirth: input.policyholderDateOfBirth } : undefined,
     );
     const outsideEligibleAge = policyholderAge !== null
       && (policyholderAge < Number(pv.eligibilityMinAge ?? 18) || policyholderAge > Number(pv.eligibilityMaxAge ?? 70));

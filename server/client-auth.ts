@@ -24,6 +24,7 @@ import { sendEmail } from "./email-service";
 import { hasModule } from "./module-gate";
 import { validatePasswordPolicy } from "@shared/validation";
 import { invalidateOtherSessions } from "./route-helpers";
+import { verifyTurnstileToken } from "./turnstile";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -61,7 +62,7 @@ async function verifySecret(input: string, storedHash: string) {
   if (isLegacySha256Hash(storedHash)) {
     const crypto = await import("crypto");
     const legacyHash = crypto.createHash("sha256").update(input).digest("hex");
-    return legacyHash === storedHash;
+    return crypto.timingSafeEqual(Buffer.from(legacyHash, "hex"), Buffer.from(storedHash, "hex"));
   }
   return argon2.verify(storedHash, input);
 }
@@ -151,6 +152,8 @@ export function setupClientAuth(app: Express) {
     if (!activationCode || !policyNumber) {
       return constantTimeResponse(res, 400, { message: "Activation code and policy number are required" });
     }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
 
     try {
       const orgs = await getCachedOrgIds();
@@ -262,6 +265,8 @@ export function setupClientAuth(app: Express) {
     if (!policyNumber || !password) {
       return constantTimeResponse(res, 400, { message: "Policy number and password are required" });
     }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
 
     try {
       const orgs = await getCachedOrgIds();
@@ -630,6 +635,8 @@ export function setupClientAuth(app: Express) {
     if (resetPasswordError) {
       return constantTimeResponse(res, 400, { message: resetPasswordError });
     }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
 
     try {
       const orgs = await getCachedOrgIds();

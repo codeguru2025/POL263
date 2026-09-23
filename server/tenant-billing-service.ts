@@ -9,12 +9,13 @@
  * (getPaynowConfig()), never a tenant's own integration (getOrgPaynowConfig) —
  * tenant billing money flows tenant -> platform, the reverse of premium payments.
  */
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
 import { cpDb } from "./control-plane-db";
 import {
   tenants as cpTenants,
   billingPlans,
+  billingFeatures,
   tenantSubscriptions,
   tenantInvoices,
   billingSettings,
@@ -25,11 +26,18 @@ import {
 } from "@shared/control-plane-schema";
 import { getPaynowConfig } from "./paynow-config";
 import { computeNextPeriod, computeInvoiceAmount, effectiveBillingIntervalMonths } from "./tenant-billing-math";
+import {
+  resolveEffectivePricing,
+  computePerPolicyInvoice,
+  computeRevenueShareInvoiceFromFees,
+  type GlobalBillingDefaults,
+} from "./billing-model-math";
+import { getPolicyStatusCounts, getUnsettledPlatformFeesByCurrency, getFxToUsdMap } from "./tenant-billing-usage";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
 import { invalidateTenantActiveCache } from "./auth";
-import { invalidateTenantModuleCache } from "./module-gate";
+import { invalidateTenantModuleCache, getTenantModuleSet } from "./module-gate";
 import { structuredLog } from "./logger";
-import { sendRestoredEmail } from "./tenant-billing-email";
+import { sendRestoredEmail, sendInvoiceReminderEmail, sendInvoicePaidReceiptEmail } from "./tenant-billing-email";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
@@ -50,12 +58,22 @@ export async function getBillingSettings() {
   const [row] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
   if (row) return row;
   // Singleton not yet seeded — return schema defaults without writing (Phase 7 UI seeds it on first save).
-  return { id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false, updatedAt: new Date() };
+  return {
+    id: "global", trialDays: 14, graceDays: 7, reminderLeadDays: 3, moduleEnforcementEnabled: false,
+    platformFeeRatePercent: "2.50", defaultMonthlyMinimumUsd: "250.00", defaultOutstandingFeeCapUsd: null,
+    deletionGraceDays: 30, hardDeleteEnabled: false, updatedAt: new Date(),
+  };
 }
 
 export { getEffectiveGraceDays, addBillingCycle } from "./tenant-billing-math";
 
 // ─── INVOICE GENERATION ─────────────────────────────────────────────────────────
+
+/** 2-dp money string from any numeric-ish input. */
+function money(v: unknown): string {
+  const n = parseFloat(String(v ?? "0"));
+  return (Math.round((Number.isFinite(n) ? n : 0) * 100 + Number.EPSILON) / 100).toFixed(2);
+}
 
 function generateMerchantReference(orgId: string): string {
   const now = new Date();
@@ -64,11 +82,44 @@ function generateMerchantReference(orgId: string): string {
   return `BILL-${orgId.slice(0, 8)}-${date}-${rand}`;
 }
 
+/** Global billing defaults (billing_settings singleton) that plan/subscription values fall back to. */
+async function getGlobalBillingDefaults(): Promise<GlobalBillingDefaults> {
+  const [row] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
+  return {
+    platformFeeRatePercent: row?.platformFeeRatePercent ?? null,
+    defaultMonthlyMinimumUsd: row?.defaultMonthlyMinimumUsd ?? null,
+    defaultOutstandingFeeCapUsd: row?.defaultOutstandingFeeCapUsd ?? null,
+  };
+}
+
+/**
+ * The tenant's purchasable billing features = the active billing_features catalog rows whose key
+ * the tenant actually has enabled (getTenantModuleSet). Their price deltas stack onto the plan's
+ * base fee / per-policy rate / revenue-share percent — so "revenue share depends on the features
+ * chosen", without a bespoke plan per combination. Explicit per-tenant feature overrides land in
+ * Phase 1c; today the enabled-module set is the binding.
+ */
+async function resolveTenantBillingFeatures(orgId: string) {
+  const moduleSet = await getTenantModuleSet(orgId);
+  if (!moduleSet.size) return [];
+  const rows = await cpDb.select().from(billingFeatures).where(eq(billingFeatures.isActive, true));
+  return rows.filter((f) => moduleSet.has(f.key));
+}
+
 /**
  * Idempotent per subscription+period: if an open invoice already exists for this
  * subscription's currentPeriodEnd, returns it (created:false) instead of creating
  * a duplicate. Callers (the sweep) use `created` to decide whether to send a
  * reminder email — only on first generation, not on every idempotent re-check.
+ *
+ * The invoice amount depends on the tenant's billing model (billing-model-math.ts):
+ *   flat          — plan.priceMonthlyUsd (unchanged)
+ *   per_policy    — base fee + per-status $/policy on the overage, floored at the monthly minimum;
+ *                   policy counts read live from the tenant DB
+ *   revenue_share — X% of receipted collections per currency since the last settlement, converted
+ *                   to USD, floored at the minimum
+ * For the two usage models `lastSettlementAt` is advanced to the cut time in the same transaction,
+ * so the next period bills only fresh activity.
  */
 export async function generateInvoiceForSubscription(subscription: TenantSubscription, plan: BillingPlan): Promise<{ invoice: TenantInvoice; created: boolean }> {
   const [existing] = await cpDb
@@ -82,28 +133,86 @@ export async function generateInvoiceForSubscription(subscription: TenantSubscri
     .limit(1);
   if (existing) return { invoice: existing, created: false };
 
-  const [invoice] = await cpDb
-    .insert(tenantInvoices)
-    .values({
-      tenantId: subscription.tenantId,
-      subscriptionId: subscription.id,
-      planId: plan.id,
-      amount: computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle),
-      currency: "USD",
-      status: "open",
-      periodStart: subscription.currentPeriodStart,
-      periodEnd: subscription.currentPeriodEnd,
-      dueDate: subscription.currentPeriodEnd,
-      paymentToken: crypto.randomBytes(24).toString("hex"),
-      merchantReference: generateMerchantReference(subscription.tenantId),
-    })
-    .returning();
+  const [features, globals] = await Promise.all([
+    resolveTenantBillingFeatures(subscription.tenantId),
+    getGlobalBillingDefaults(),
+  ]);
+  const pricing = resolveEffectivePricing(plan, features, subscription, globals);
 
-  await cpDb.insert(tenantBillingEvents).values({
-    tenantId: subscription.tenantId,
-    invoiceId: invoice.id,
-    type: "invoice_generated",
-    detail: { amount: invoice.amount, periodStart: invoice.periodStart, periodEnd: invoice.periodEnd },
+  const now = new Date();
+  let amount: string;
+  let lineItems: Array<{ label: string; amount: string; currency?: string; nativeAmount?: string }> | undefined;
+  const eventDetail: Record<string, unknown> = { billingModel: pricing.billingModel };
+
+  if (pricing.billingModel === "per_policy") {
+    const counts = await getPolicyStatusCounts(subscription.tenantId);
+    const computed = computePerPolicyInvoice(pricing, counts);
+    amount = computed.amountUsd;
+    lineItems = computed.lineItems;
+    eventDetail.policyCounts = counts;
+    eventDetail.minimumApplied = computed.minimumApplied;
+  } else if (pricing.billingModel === "revenue_share") {
+    // Bill the tenant's already-accrued, still-unsettled platform_receivables (the per-receipt
+    // 2.5% ledger) — one source of truth, so the invoice and the tenant's own platform-fee
+    // balance stay in lockstep. reconcileRevenueShareSettlement settles exactly these on payment.
+    const [{ byCurrency, count }, fx] = await Promise.all([
+      getUnsettledPlatformFeesByCurrency(subscription.tenantId),
+      getFxToUsdMap(subscription.tenantId),
+    ]);
+    const computed = computeRevenueShareInvoiceFromFees(pricing, byCurrency, fx);
+    amount = computed.amountUsd;
+    lineItems = computed.lineItems;
+    eventDetail.unsettledFeeCount = count;
+    eventDetail.feesByCurrency = byCurrency;
+    eventDetail.currencyBreakdown = computed.currencyBreakdown;
+    eventDetail.minimumApplied = computed.minimumApplied;
+    if (computed.skippedCurrencies && computed.skippedCurrencies.length > 0) {
+      eventDetail.skippedCurrenciesNoFxRate = computed.skippedCurrencies;
+      structuredLog("warn", "Revenue-share invoice excluded currencies with no configured FX rate — fees left unsettled for next cycle", {
+        tenantId: subscription.tenantId, skippedCurrencies: computed.skippedCurrencies,
+      });
+    }
+  } else {
+    amount = computeInvoiceAmount(plan.priceMonthlyUsd, subscription.billingCycle);
+  }
+
+  const invoice = await cpDb.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(tenantInvoices)
+      .values({
+        tenantId: subscription.tenantId,
+        subscriptionId: subscription.id,
+        planId: plan.id,
+        kind: "subscription",
+        amount,
+        lineItems,
+        currency: "USD",
+        status: "open",
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        usageCutAt: pricing.billingModel === "flat" ? null : now,
+        dueDate: subscription.currentPeriodEnd,
+        paymentToken: crypto.randomBytes(24).toString("hex"),
+        merchantReference: generateMerchantReference(subscription.tenantId),
+      })
+      .returning();
+
+    await tx.insert(tenantBillingEvents).values({
+      tenantId: subscription.tenantId,
+      invoiceId: row.id,
+      type: "invoice_generated",
+      detail: { amount: row.amount, periodStart: row.periodStart, periodEnd: row.periodEnd, ...eventDetail },
+    });
+
+    // Usage models: mark this cut as the new settlement watermark so the next invoice only counts
+    // activity after it. Flat plans have no usage window, so leave lastSettlementAt untouched.
+    if (pricing.billingModel !== "flat") {
+      await tx.update(tenantSubscriptions)
+        .set({ lastSettlementAt: now, updatedAt: now })
+        .where(eq(tenantSubscriptions.id, subscription.id));
+    }
+
+    return row;
   });
 
   return { invoice, created: true };
@@ -121,6 +230,56 @@ export async function applyTenantInvoicePayment(
       if (!invoice) return { ok: false as const, error: "Invoice not found" };
       if (invoice.status === "paid") return { ok: true as const, alreadyPaid: true };
 
+      const now = new Date();
+
+      // Setup-fee invoice (0005): a one-time onboarding charge — mark it paid and flip the
+      // subscription's setup-fee status, but DON'T touch the billing period or reactivate the
+      // tenant (a suspended tenant paying their setup fee stays suspended until the renewal too).
+      if (invoice.kind === "setup") {
+        await tx.update(tenantInvoices).set({
+          status: "paid", paidAt: now,
+          markedPaidBy: opts.source === "manual" ? (opts.actorId ?? null) : null,
+          notes: opts.note ?? invoice.notes, updatedAt: now,
+        }).where(eq(tenantInvoices.id, invoiceId));
+        if (invoice.subscriptionId) {
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "paid", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, invoice.subscriptionId));
+        }
+        await tx.insert(tenantBillingEvents).values({
+          tenantId: invoice.tenantId, invoiceId: invoice.id, type: "setup_fee_paid",
+          detail: { source: opts.source, amount: invoice.amount },
+        });
+        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", noPeriodChange: true };
+      }
+
+      if (!invoice.subscriptionId || !invoice.planId) {
+        return { ok: false as const, error: "Invoice is not linked to a subscription" };
+      }
+
+      // Outstanding-fee-cap invoice (enforceOutstandingFeeCap, tenant-billing-enforcement.ts): an
+      // early, mid-cycle bill for platform fees that exceeded the cap. Its own periodStart/
+      // periodEnd mark the accrual window being billed early — NOT the subscription's renewal
+      // cycle — so paying it must not advance currentPeriodEnd (that's what the real periodic
+      // "subscription" invoice below does; conflating the two silently pushed the tenant's actual
+      // renewal a full cycle later every time a cap invoice was paid). Cap enforcement also never
+      // suspends on its own (see that function's docstring), so this doesn't touch tenant active
+      // status either — any real suspension is unrelated and stays gated on its own overdue
+      // "subscription" invoice. reconcileRevenueShareSettlement (called below, unconditionally)
+      // still settles the matching receivables via this invoice's usageCutAt/periodEnd.
+      if (invoice.kind === "revenue_share") {
+        await tx.update(tenantInvoices).set({
+          status: "paid", paidAt: now,
+          markedPaidBy: opts.source === "manual" ? (opts.actorId ?? null) : null,
+          notes: opts.note ?? invoice.notes, updatedAt: now,
+        }).where(eq(tenantInvoices.id, invoiceId));
+        await tx.insert(tenantBillingEvents).values({
+          tenantId: invoice.tenantId, invoiceId: invoice.id, type: "cap_invoice_paid",
+          detail: { source: opts.source, amount: invoice.amount },
+        });
+        return { ok: true as const, tenantId: invoice.tenantId, priorStatus: "active", noPeriodChange: true };
+      }
+
       // Locked too, not just the invoice row — otherwise two different open invoices for the
       // same subscription paid concurrently would both read the same stale currentPeriodEnd
       // and the second UPDATE would silently overwrite the first's period extension.
@@ -129,7 +288,6 @@ export async function applyTenantInvoicePayment(
       const [plan] = await tx.select().from(billingPlans).where(eq(billingPlans.id, invoice.planId)).limit(1);
       if (!plan) return { ok: false as const, error: "Plan not found" };
 
-      const now = new Date();
       const intervalMonths = effectiveBillingIntervalMonths(subscription.billingCycle, plan.billingIntervalMonths);
       const { periodStart: cycleStart, periodEnd: cycleEnd } = computeNextPeriod(now, subscription.currentPeriodEnd, intervalMonths);
 
@@ -153,6 +311,7 @@ export async function applyTenantInvoicePayment(
         licenseStatus: "active",
         suspendedAt: null,
         suspendReason: null,
+        viewOnlyGraceUntil: null,
       }).where(eq(cpTenants.id, subscription.tenantId));
 
       await tx.insert(tenantBillingEvents).values({
@@ -162,11 +321,45 @@ export async function applyTenantInvoicePayment(
         detail: { source: opts.source, actorId: opts.actorId ?? null, newPeriodEnd: cycleEnd },
       });
 
+      // First time this subscription becomes active (trial → paid, or a late first payment) and a
+      // setup fee is still owed → raise the one-time setup invoice now. Not retroactive: only
+      // subscriptions provisioned with setupFeeStatus='pending' ever reach here.
+      let setupInvoiceRaised = false;
+      if (subscription.status !== "active" && subscription.setupFeeStatus === "pending") {
+        const setupFeeUsd = money(
+          subscription.setupFeeOverrideUsd ?? plan.setupFeeUsd ?? plan.priceMonthlyUsd,
+        );
+        if (parseFloat(setupFeeUsd) > 0) {
+          await tx.insert(tenantInvoices).values({
+            tenantId: subscription.tenantId,
+            subscriptionId: subscription.id,
+            planId: plan.id,
+            kind: "setup",
+            amount: setupFeeUsd,
+            currency: "USD",
+            status: "open",
+            lineItems: [{ label: "One-time account setup fee", amount: setupFeeUsd }],
+            dueDate: new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000),
+            paymentToken: crypto.randomBytes(24).toString("hex"),
+            merchantReference: generateMerchantReference(subscription.tenantId),
+          });
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "invoiced", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, subscription.id));
+          setupInvoiceRaised = true;
+        } else {
+          await tx.update(tenantSubscriptions)
+            .set({ setupFeeStatus: "waived", updatedAt: now })
+            .where(eq(tenantSubscriptions.id, subscription.id));
+        }
+      }
+
       return {
         ok: true as const,
         tenantId: subscription.tenantId,
         wasSuspended: subscription.status === "suspended",
         priorStatus: subscription.status,
+        setupInvoiceRaised,
       };
     });
 
@@ -177,7 +370,28 @@ export async function applyTenantInvoicePayment(
     invalidateTenantActiveCache(tenantId);
     invalidateTenantModuleCache(tenantId);
 
-    sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
+    if (!(result as any).noPeriodChange) {
+      sendRestoredEmail(tenantId).catch((err) => structuredLog("error", "sendRestoredEmail failed", { tenantId, error: (err as Error).message }));
+    }
+
+    // Branded PDF receipt for the paid invoice + revenue-share settlement reconciliation.
+    cpDb.select().from(tenantInvoices).where(eq(tenantInvoices.id, invoiceId)).limit(1)
+      .then(async ([paidInv]) => {
+        if (!paidInv) return;
+        await sendInvoicePaidReceiptEmail(paidInv).catch((err) => structuredLog("error", "sendInvoicePaidReceiptEmail failed", { invoiceId, error: (err as Error).message }));
+        const { reconcileRevenueShareSettlement } = await import("./tenant-billing-enforcement");
+        await reconcileRevenueShareSettlement(paidInv);
+      })
+      .catch((err) => structuredLog("error", "post-payment reconciliation failed", { invoiceId, error: (err as Error).message }));
+
+    // A setup-fee invoice was just raised — email it to the tenant admins.
+    if ((result as any).setupInvoiceRaised) {
+      cpDb.select().from(tenantInvoices)
+        .where(and(eq(tenantInvoices.tenantId, tenantId), eq(tenantInvoices.kind, "setup"), eq(tenantInvoices.status, "open")))
+        .orderBy(desc(tenantInvoices.issuedAt)).limit(1)
+        .then(([setupInv]) => setupInv && sendInvoiceReminderEmail(setupInv))
+        .catch((err) => structuredLog("error", "setup-fee invoice email failed", { tenantId, error: (err as Error).message }));
+    }
 
     // First-ever conversion to a paid, working subscription — commission dedicated
     // infrastructure. NOT gated on priorStatus === "trialing" alone: the billing sweep moves a

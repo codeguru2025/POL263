@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { pushToClient } from "./push";
 import { sendEmail, escapeHtml } from "./email-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { sendSms } from "./sms-service";
 import { hasModule } from "./module-gate";
 
@@ -197,6 +198,11 @@ export interface NotificationContext {
   documentLabel?: string;
 }
 
+/** Merge tags still present after rendering — i.e. tags whose value was missing. */
+export function unfilledMergeTags(rendered: string): string[] {
+  return Array.from(new Set(rendered.match(/\{[a-z_]+\}/g) ?? []));
+}
+
 function renderTemplate(template: string, ctx: NotificationContext): string {
   let result = template;
   const replacements: Record<string, string | undefined> = {
@@ -294,6 +300,11 @@ export async function dispatchNotification(
     if (templates.length > 0) {
       let clientEmail: string | null | undefined;
       let clientPhone: string | null | undefined;
+      // Dial code for local-format ("0…") recipient numbers, resolved once per dispatch: the
+      // cross-border code when this notification is about a flagged policy, the org home code
+      // otherwise. Left undefined until the first SMS template needs it.
+      let smsCountryCode: string | undefined;
+      let smsCountryCodeResolved = false;
       for (const tmpl of templates) {
         const renderedSubject = renderTemplate(tmpl.subject || "", ctx);
         const renderedBody = renderTemplate(tmpl.bodyTemplate, ctx);
@@ -313,8 +324,11 @@ export async function dispatchNotification(
         // here on a real failure, or a message that never arrived stays recorded as delivered
         // with no way for staff/the client to ever discover it.
         try {
+          // Every early-exit below must correct the optimistic "sent" log row written above —
+          // otherwise the log records a message as sent that never left the building.
           if (tmpl.channel === "email" && !emailAllowed) {
             structuredLog("info", "Notification email skipped — email_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+            await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Email notifications are not enabled for this organization");
           } else if (tmpl.channel === "email") {
             if (clientEmail === undefined) {
               const client = await storage.getClient(clientId, orgId);
@@ -324,6 +338,7 @@ export async function dispatchNotification(
               const attachments = await resolveEmailAttachment(orgId, eventType, ctx);
               const result = await sendEmail({
                 to: clientEmail,
+                ...(await resolveTenantEmailOverrides(orgId, org)),
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,
@@ -339,27 +354,47 @@ export async function dispatchNotification(
               }
             } else {
               structuredLog("warn", "Notification email skipped — client has no email on file", { orgId, clientId, eventType });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Client has no email address on file");
             }
           } else if (tmpl.channel === "push") {
             await pushToClient(orgId, clientId, { title: renderedSubject, body: renderedBody, data: { policyId: ctx.policyId } });
           } else if (tmpl.channel === "sms" && !smsAllowed) {
             structuredLog("info", "Notification SMS skipped — sms_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+            await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "SMS notifications are not enabled for this organization");
           } else if (tmpl.channel === "sms") {
             if (clientPhone === undefined) {
               const client = await storage.getClient(clientId, orgId);
               clientPhone = client?.phone ?? null;
             }
-            if (clientPhone) {
+            if (clientPhone && !smsCountryCodeResolved) {
+              smsCountryCodeResolved = true;
+              const cf = await storage.getCountryFlagSettings(orgId);
+              let crossBorder = false;
+              if (cf.isEnabled && ctx.policyId) {
+                const pol = await storage.getPolicy(ctx.policyId, orgId);
+                crossBorder = !!pol?.isSouthAfrica;
+              }
+              smsCountryCode = crossBorder ? cf.flagCountryCode : cf.homeCountryCode;
+            }
+            // A merge tag with no value (e.g. {activation_code} for a client with no code, or
+            // {grace_end} for a policy with no grace date) is left in the text as-is by
+            // renderTemplate — never text a client a literal "{tag}".
+            const unfilled = clientPhone ? unfilledMergeTags(renderedBody) : [];
+            if (unfilled.length) {
+              structuredLog("warn", "Notification SMS skipped — merge tag(s) had no value", { orgId, clientId, eventType, unfilled });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", `Missing details for: ${unfilled.join(", ")}`);
+            } else if (clientPhone) {
               // sendSms() never throws — check its result explicitly, same reasoning as the
               // email branch above: the optimistic "sent" log written before this call needs
               // correcting on a real failure, or a message that never arrived stays recorded
               // as delivered with no way for staff/the client to ever discover it.
-              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional" });
+              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional", countryCode: smsCountryCode });
               if (!result.ok) {
                 await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
               }
             } else {
               structuredLog("warn", "Notification SMS skipped — client has no phone number on file", { orgId, clientId, eventType });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Client has no phone number on file");
             }
           }
         } catch (err) {
@@ -401,6 +436,7 @@ export async function dispatchNotification(
               // templated-path call site above for why the optimistic "sent" log needs correcting).
               const result = await sendEmail({
                 to: client.email,
+                ...(await resolveTenantEmailOverrides(orgId, org)),
                 fromName: ctx.orgName,
                 subject: renderedSubject,
                 text: renderedBody,

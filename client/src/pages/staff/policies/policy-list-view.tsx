@@ -36,6 +36,7 @@ function getStatusColor(status: string) {
     case "lapsed": return "bg-destructive/15 text-destructive border-destructive/30";
     case "inactive": return "bg-blue-500/15 text-blue-700 border-blue-200";
     case "cancelled": return "bg-gray-500/15 text-gray-600 border-gray-200";
+    case "archived": return "bg-zinc-500/15 text-zinc-600 border-zinc-200";
     default: return "bg-muted text-muted-foreground";
   }
 }
@@ -306,6 +307,7 @@ export function PolicyListView({
                       <SelectItem value="grace">Grace</SelectItem>
                       <SelectItem value="lapsed">Lapsed</SelectItem>
                       <SelectItem value="cancelled">Cancelled</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
                     </SelectContent>
                   </Select>
                   {countryFlagSettings?.isEnabled && (

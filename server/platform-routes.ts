@@ -35,6 +35,7 @@ import { auditLog } from "./route-helpers";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
+import { resolveOrSyncTenantUserId } from "./tenant-db";
 import { IMPORT_ENTITY_TYPES, type ImportEntityType } from "@shared/schema";
 import {
   parseUploadedFile, MAX_IMPORT_ROWS, getFieldSpec, transformAndValidateRow,
@@ -704,7 +705,9 @@ export function registerPlatformRoutes(app: Express): void {
         errorRows: errorReport.length,
         previewSnapshot: validRows,
         errorReport,
-        createdByUserId: user.id,
+        // createdByUserId is NOT NULL and FK'd to this org's own users table — must resolve to a
+        // tenant-local id for orgs on a dedicated database.
+        createdByUserId: await resolveOrSyncTenantUserId(id, user.id),
       });
 
       return res.status(201).json({
@@ -757,7 +760,8 @@ export function registerPlatformRoutes(app: Express): void {
       if (batch.status !== "previewed") return res.status(400).json({ message: `Batch is already ${batch.status}` });
       if (batch.successRows === 0) return res.status(400).json({ message: "No valid rows to import" });
 
-      const result = await storage.commitImportBatch(id, batchId, { userId: user.id });
+      const commitUserId = await resolveOrSyncTenantUserId(id, user.id);
+      const result = await storage.commitImportBatch(id, batchId, { userId: commitUserId });
       await auditLog(req, "bulk_import", AUDIT_ENTITY_TYPE_LABEL[batch.entityType as ImportEntityType], batchId, null, result, id);
       return res.json(result);
     } catch (err: any) {
@@ -776,7 +780,8 @@ export function registerPlatformRoutes(app: Express): void {
       if (!batch) return res.status(404).json({ message: "Import batch not found" });
       if (batch.status !== "committed") return res.status(400).json({ message: `Batch is ${batch.status}, not committed — nothing to roll back.` });
 
-      const result = await storage.rollbackImportBatch(id, batchId, { userId: user.id });
+      const rollbackUserId = await resolveOrSyncTenantUserId(id, user.id);
+      const result = await storage.rollbackImportBatch(id, batchId, { userId: rollbackUserId });
       if (!result.ok) return res.status(409).json({ message: result.reason });
 
       await auditLog(req, "rollback_import", AUDIT_ENTITY_TYPE_LABEL[batch.entityType as ImportEntityType], batchId, null, { rolledBack: true }, id);

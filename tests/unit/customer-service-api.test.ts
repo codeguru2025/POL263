@@ -78,6 +78,26 @@ vi.mock("../../server/customer-self-service", () => {
   };
 });
 
+// ─── multi-tenant routing layer mocks (internals covered by their own unit tests) ──
+const RES = vi.hoisted(() => ({ resolveConversationContext: vi.fn() }));
+vi.mock("../../server/customer-service-tenant-resolver", () => ({
+  resolveConversationContext: RES.resolveConversationContext,
+  normalizeWhatsAppNumber: (raw: unknown) => {
+    const d = String(raw ?? "").replace(/\D/g, "");
+    return d.length >= 9 ? d.slice(-9) : "";
+  },
+  computeTenantRef: (orgId: string) => "ref_" + orgId.slice(0, 6),
+}));
+vi.mock("../../server/customer-service-conversations", () => ({
+  createConversation: vi.fn(async () => ({ id: "conv-1" })),
+  resolveConversationTenant: vi.fn(async () => ({})),
+  transitionConversation: vi.fn(async () => ({})),
+  getConversationByChannel: vi.fn(async () => undefined),
+}));
+vi.mock("../../server/customer-service-session", () => ({ onVerificationSuccess: vi.fn() }));
+const AH = vi.hoisted(() => ({ requestAgentHandoff: vi.fn(async () => ({ queued: true, organizationId: "org" })) }));
+vi.mock("../../server/customer-service-agent-handoff", () => ({ requestAgentHandoff: AH.requestAgentHandoff }));
+
 import { registerCustomerServiceRoutes } from "../../server/customer-service-routes";
 import { issueVerificationToken } from "../../server/customer-service-integration";
 
@@ -113,6 +133,14 @@ const POLICY_A = {
   beneficiaryNationalId: null, beneficiaryPhone: null,
 };
 const CLIENT_ROW = { id: CLIENT_A, organizationId: ORG_A, title: "Mr", firstName: "Tendai", lastName: "Moyo" };
+
+/** Flip one character in the MIDDLE of a token. Never edit the last chars: in base64url the final
+ *  character can carry padding bits that decoding ignores, so a "tampered" tail can decode to the
+ *  exact same bytes and validate (a rare flake). A mid-string change always alters real bits. */
+function tamper(token: string): string {
+  const i = Math.floor(token.length / 2);
+  return token.slice(0, i) + (token[i] === "A" ? "B" : "A") + token.slice(i + 1);
+}
 
 function tok(claims: Partial<{ orgId: string; clientId: string; policyId: string }> = {}) {
   return issueVerificationToken({ orgId: ORG_A, clientId: CLIENT_A, policyId: "pol-A", ...claims }).token;
@@ -204,7 +232,7 @@ describe("authentication", () => {
   });
   it("valid secret + tampered token → 401", async () => {
     const t = tok();
-    const bad = t.slice(0, -2) + (t.endsWith("A") ? "BC" : "AA");
+    const bad = tamper(t);
     const r = await call("/api/customer-service/policies", { token: bad });
     expect(r.status).toBe(401);
   });
@@ -557,7 +585,7 @@ describe("token refresh", () => {
   });
   it("tampered token cannot be refreshed → 401", async () => {
     const t = tok();
-    const r = await call("/api/customer-service/token/refresh", { method: "POST", token: t.slice(0, -2) + "ZZ" });
+    const r = await call("/api/customer-service/token/refresh", { method: "POST", token: tamper(t) });
     expect(r.status).toBe(401);
   });
   it("refresh without a valid shared secret → 401", async () => {

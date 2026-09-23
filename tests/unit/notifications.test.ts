@@ -9,6 +9,9 @@ const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule, mockSendSms
     getActiveTemplatesByEvent: vi.fn(),
     getClient: vi.fn(),
     createNotificationLog: vi.fn(),
+    updateNotificationLogStatus: vi.fn(),
+    getCountryFlagSettings: vi.fn(),
+    getPolicy: vi.fn(),
   },
   mockSendEmail: vi.fn(),
   mockPushToClient: vi.fn(),
@@ -20,6 +23,9 @@ vi.mock("../../server/storage", () => ({ storage: mockStorage }));
 vi.mock("../../server/email-service", () => ({
   sendEmail: (...args: any[]) => mockSendEmail(...args),
   escapeHtml: (v: unknown) => String(v ?? ""),
+}));
+vi.mock("../../server/tenant-email-sending", () => ({
+  resolveTenantEmailOverrides: async (_orgId: string, org: any) => (org?.emailFromAddress ? { from: org.emailFromAddress } : {}),
 }));
 vi.mock("../../server/push", () => ({ pushToClient: (...args: any[]) => mockPushToClient(...args) }));
 vi.mock("../../server/module-gate", () => ({ hasModule: (...args: any[]) => mockHasModule(...args) }));
@@ -33,7 +39,7 @@ vi.mock("../../server/sms-service", () => ({
 
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 
-import { dispatchNotification } from "../../server/notifications";
+import { dispatchNotification, unfilledMergeTags } from "../../server/notifications";
 
 /**
  * Previously only "activation", "claim_status_change", and "kyc_status_change" emailed by
@@ -48,7 +54,12 @@ describe("dispatchNotification — default-channel email", () => {
     vi.clearAllMocks();
     mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]); // no admin-configured template
-    mockStorage.createNotificationLog.mockResolvedValue(undefined);
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: false, flagLabel: "South Africa", homeLabel: "Zimbabwe", homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
     mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
   });
 
@@ -100,5 +111,128 @@ describe("dispatchNotification — default-channel email", () => {
 
     expect(mockSendEmail).not.toHaveBeenCalled();
     expect(mockStorage.getClient).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A recipient number saved in local "0…" format needs a country dial code prepended before the
+ * SMS provider can route it. That code must reflect the recipient's country, not a single global
+ * default — a cross-border tenant (Falakhe: Zimbabwe + South Africa) otherwise misdelivers.
+ * The SMS branch passes country_flag_settings' flag/home code based on the notified policy's
+ * cross-border flag; server/phone.ts does the actual prepending.
+ */
+describe("dispatchNotification — SMS recipient country code", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0821234567", firstName: "Jane", lastName: "Doe" });
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
+    mockHasModule.mockResolvedValue(true);
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([
+      { id: "t-sms", channel: "sms", subject: "", bodyTemplate: "Hi {first_name}" },
+    ]);
+  });
+
+  it("uses the home country code for a non-flagged policy", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: true, homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011", firstName: "Jane" });
+
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ to: "0821234567", countryCode: "263" });
+  });
+
+  it("uses the flagged country code for a cross-border policy", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: true, homeCountryCode: "263", flagCountryCode: "27",
+    });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: true });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011", firstName: "Jane" });
+
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ countryCode: "27" });
+  });
+
+  it("uses the home code (never looks at the policy) when country flagging is disabled", async () => {
+    mockStorage.getCountryFlagSettings.mockResolvedValue({
+      isEnabled: false, homeCountryCode: "263", flagCountryCode: "27",
+    });
+
+    await dispatchNotification("org1", "pre_lapse_warning", "c1", { policyId: "p1", policyNumber: "FLK00011", firstName: "Jane" });
+
+    expect(mockSendSms.mock.calls[0][1]).toMatchObject({ countryCode: "263" });
+    expect(mockStorage.getPolicy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * SMS edge cases: a template whose tag has no value must never reach the client as a literal
+ * "{tag}", and every early exit must correct the optimistic "sent" log row (nothing was sent).
+ */
+describe("dispatchNotification — SMS edge cases", () => {
+  const smsTmpl = (body: string) => [{ id: "t1", channel: "sms", subject: "s", bodyTemplate: body }];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHasModule.mockResolvedValue(true);
+    mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getCountryFlagSettings.mockResolvedValue({ isEnabled: false, homeCountryCode: "263", flagCountryCode: "27" });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
+  });
+
+  it("sends a fully-rendered SMS and leaves the log as sent", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Code {activation_code}"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    await dispatchNotification("org1", "activation", "c1", { activationCode: "ACT-1" });
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1].message).toBe("Code ACT-1");
+    expect(mockStorage.updateNotificationLogStatus).not.toHaveBeenCalled();
+  });
+
+  it("does NOT send when a merge tag has no value, and marks the log skipped", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Code {activation_code}"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    await dispatchNotification("org1", "activation", "c1", {}); // client has no activation code
+    expect(mockSendSms).not.toHaveBeenCalled();
+    expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "skipped", expect.stringContaining("{activation_code}"));
+  });
+
+  it("marks the log skipped (not sent) when the client has no phone number", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi {client_name}"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: null });
+    await dispatchNotification("org1", "policy_capture", "c1", { clientName: "Jane" });
+    expect(mockSendSms).not.toHaveBeenCalled();
+    expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "skipped", expect.stringContaining("phone"));
+  });
+
+  it("marks the log skipped when the sms_notifications module is off", async () => {
+    mockHasModule.mockImplementation(async (_o: string, m: string) => m !== "sms_notifications");
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi"));
+    await dispatchNotification("org1", "policy_capture", "c1", {});
+    expect(mockSendSms).not.toHaveBeenCalled();
+    expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "skipped", expect.any(String));
+  });
+
+  it("still marks the log failed when the provider rejects the send", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    mockSendSms.mockResolvedValue({ ok: false, message: "Africala SMS failed: Ip Address Not Allowed" });
+    await dispatchNotification("org1", "policy_capture", "c1", {});
+    expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "failed", expect.stringContaining("Ip Address"));
+  });
+});
+
+describe("unfilledMergeTags", () => {
+  it("finds leftover tags once each, ignores ordinary braces-free text", () => {
+    expect(unfilledMergeTags("a {x_y} b {x_y} c {z}")).toEqual(["{x_y}", "{z}"]);
+    expect(unfilledMergeTags("Dear Jane, policy FLK1 is active.")).toEqual([]);
   });
 });

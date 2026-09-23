@@ -5,7 +5,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import argon2 from "argon2";
 import crypto from "crypto";
-import { generateSecret as generateTotpSecret, generateURI as generateTotpURI, verify as verifyTotp } from "otplib";
+import { generateTotpSecret, generateTotpUri, verifyTotpCode } from "./totp";
 import QRCode from "qrcode";
 import { eq } from "drizzle-orm";
 import { pool } from "./db";
@@ -116,27 +116,39 @@ export function applyPlatformOwnerTenantOverride(req: Request): void {
 // doesn't add a control-plane round trip to every request platform-wide; invalidateTenantActiveCache()
 // clears a specific tenant's entry immediately after a lifecycle change so enforcement is near-instant
 // rather than waiting out the TTL.
-const tenantActiveCache = new Map<string, { isActive: boolean; cachedAt: number }>();
+type TenantAccess = "active" | "view_only" | "denied";
+const tenantActiveCache = new Map<string, { access: TenantAccess; cachedAt: number }>();
 const TENANT_ACTIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export function invalidateTenantActiveCache(orgId: string) {
   tenantActiveCache.delete(orgId);
 }
 
-async function isTenantAccessAllowed(orgId: string): Promise<boolean> {
+/**
+ * "active"    — normal access.
+ * "view_only" — tenant is suspended but still inside its deletion-grace window: staff may log in
+ *               and READ, but every mutation is blocked (enforceTenantViewOnly middleware).
+ * "denied"    — suspended with no view-only window (legacy suspension), or window elapsed.
+ */
+async function resolveTenantAccess(orgId: string): Promise<TenantAccess> {
   const cached = tenantActiveCache.get(orgId);
-  if (cached && Date.now() - cached.cachedAt < TENANT_ACTIVE_CACHE_TTL_MS) return cached.isActive;
+  if (cached && Date.now() - cached.cachedAt < TENANT_ACTIVE_CACHE_TTL_MS) return cached.access;
   try {
-    const [row] = await cpDb.select({ isActive: cpTenants.isActive }).from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
+    const [row] = await cpDb
+      .select({ isActive: cpTenants.isActive, viewOnlyGraceUntil: cpTenants.viewOnlyGraceUntil })
+      .from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
     // No control-plane row for this org (not yet registered, or legacy) — don't block.
-    const isActive = row ? row.isActive : true;
-    tenantActiveCache.set(orgId, { isActive, cachedAt: Date.now() });
-    return isActive;
+    let access: TenantAccess = "active";
+    if (row && !row.isActive) {
+      access = row.viewOnlyGraceUntil && row.viewOnlyGraceUntil.getTime() > Date.now() ? "view_only" : "denied";
+    }
+    tenantActiveCache.set(orgId, { access, cachedAt: Date.now() });
+    return access;
   } catch (err) {
     // Control plane unreachable — fail open. A transient outage there must never lock out the
     // entire platform; getOrganization()/getOrgPaynowConfig() apply the same fail-open resilience.
     structuredLog("error", "Tenant active-status lookup failed, failing open", { orgId, error: (err as Error).message });
-    return true;
+    return "active";
   }
 }
 
@@ -380,7 +392,7 @@ async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | 
     return null;
   }
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-  let ok = !!code && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: code })).valid;
+  let ok = await verifyTotpCode(user.mfaSecret, code);
   if (!ok && code && Array.isArray(user.mfaBackupCodes)) {
     const codes: (string | null)[] = user.mfaBackupCodes;
     for (let i = 0; i < codes.length; i++) {
@@ -527,9 +539,14 @@ export function setupAuth(app: Express) {
       // platform-owner console). Never applied to the platform owner themselves — they must always
       // be able to log in to reactivate a tenant they suspended.
       if (user && orgId && !isPlatformOwnerEmail(user.email)) {
-        const allowed = await isTenantAccessAllowed(orgId);
-        if (!allowed) {
+        const access = await resolveTenantAccess(orgId);
+        if (access === "denied") {
           return done(null, null);
+        }
+        if (access === "view_only") {
+          // Let them in to read their data during the deletion-grace window; every mutation is
+          // rejected by enforceTenantViewOnly (registered in registerRoutes).
+          user.tenantViewOnly = true;
         }
       }
       done(null, user || null);
@@ -788,7 +805,7 @@ export function setupAuth(app: Express) {
     const user = req.user as any;
     const secret = generateTotpSecret();
     await storage.updateUser(user.id, { mfaSecret: secret } as any);
-    const otpauthUrl = generateTotpURI({ issuer: "POL263", label: user.email, secret });
+    const otpauthUrl = generateTotpUri({ issuer: "POL263", label: user.email, secret });
     const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
     return res.json({ secret, otpauthUrl, qrDataUrl });
   });
@@ -799,7 +816,7 @@ export function setupAuth(app: Express) {
     if (!user.mfaSecret) {
       return res.status(400).json({ message: "Start enrollment first" });
     }
-    if (!code || !(await verifyTotp({ secret: user.mfaSecret, token: code })).valid) {
+    if (!(await verifyTotpCode(user.mfaSecret, code))) {
       return res.status(400).json({ message: "Invalid code" });
     }
     const backupCodes = generateBackupCodes();
@@ -821,7 +838,7 @@ export function setupAuth(app: Express) {
       // session could otherwise strip MFA with nothing but the existing cookie. Require a fresh
       // TOTP/backup code instead — same step-up the login flow itself demands.
       const trimmedCode = typeof code === "string" ? code.trim() : "";
-      let codeOk = !!trimmedCode && !!user.mfaSecret && (await verifyTotp({ secret: user.mfaSecret, token: trimmedCode })).valid;
+      let codeOk = await verifyTotpCode(user.mfaSecret, trimmedCode);
       if (!codeOk && trimmedCode && Array.isArray(user.mfaBackupCodes)) {
         const codes: (string | null)[] = user.mfaBackupCodes;
         for (let i = 0; i < codes.length; i++) {
@@ -899,16 +916,20 @@ export function setupAuth(app: Express) {
     }
 
     const otp = String(Math.floor(100000 + Math.random() * 900000));
+    // Dial code for a local-format ("0…") number: staff belong to the org's home country.
+    const countryCode = user.organizationId
+      ? (await storage.getCountryFlagSettings(user.organizationId)).homeCountryCode
+      : undefined;
     let sendResult: { ok: boolean; message: string };
     if (channel === "sms") {
       const { sendSms, sendPlatformSms } = await import("./sms-service");
       const message = `Your POL263 verification code is ${otp}. It expires shortly — do not share it.`;
       sendResult = user.organizationId
-        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp" })
+        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp", countryCode })
         : await sendPlatformSms({ to: storedNumber, message, kind: "otp" });
     } else {
       const { sendWhatsAppOtp } = await import("./whatsapp-service");
-      sendResult = await sendWhatsAppOtp({ to: storedNumber, code: otp });
+      sendResult = await sendWhatsAppOtp({ to: storedNumber, code: otp, countryCode });
     }
     if (!sendResult.ok) {
       structuredLog("error", "MFA alt-channel send failed", { userId: user.id, channel, error: sendResult.message });
@@ -1247,7 +1268,7 @@ export function setupAuth(app: Express) {
       const effectivePermissions = await storage.getUserEffectivePermissions(user.id, effectiveOrganizationId);
 
       return res.json({
-        user: { ...sanitizeUser(user), effectiveOrganizationId },
+        user: { ...sanitizeUser(user), effectiveOrganizationId, tenantViewOnly: !!user.tenantViewOnly },
         roles: userRoles.map((r) => ({ name: r.name, branchId: r.branchId })),
         permissions: effectivePermissions,
       });
@@ -1309,6 +1330,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   session.lastActivityAt = now;
   next();
 }
+
+export { enforceTenantViewOnly } from "./tenant-view-only";
 
 /**
  * Permissions powerful enough (account/org-wide user and settings management) that SOC 2 access-

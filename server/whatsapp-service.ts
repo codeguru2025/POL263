@@ -15,10 +15,14 @@
  * blind since the template doesn't exist yet as of this writing (business verification pending).
  */
 import { structuredLog } from "./logger";
+import { ipv4Dispatcher, normalizeMsisdn } from "./phone";
 
 export interface SendWhatsAppOtpOptions {
   to: string;
   code: string;
+  /** Dial code (digits only) to prepend when `to` is in local "0…" format — resolved by the
+   *  caller from the recipient's country. Falls back to SMS_DEFAULT_COUNTRY_CODE / "263". */
+  countryCode?: string;
 }
 
 interface WhatsAppConfig {
@@ -42,9 +46,10 @@ export function isWhatsAppConfigured(): boolean {
   return !!c.accessToken && !!c.phoneNumberId;
 }
 
-/** Strips everything but digits — Cloud API expects a plain E.164-style number, no '+'/spaces. */
-function normalizePhoneForWhatsApp(raw: string): string {
-  return String(raw || "").replace(/\D/g, "");
+/** Cloud API expects a plain E.164-style number, no '+'/spaces. Shares server/phone.ts so a
+ *  local "0…" number gets the right country code (not blindly sent as "082…"). */
+function normalizePhoneForWhatsApp(raw: string, countryCode?: string): string {
+  return normalizeMsisdn(raw, countryCode);
 }
 
 export async function sendWhatsAppOtp(opts: SendWhatsAppOtpOptions): Promise<{ ok: boolean; message: string }> {
@@ -52,7 +57,7 @@ export async function sendWhatsAppOtp(opts: SendWhatsAppOtpOptions): Promise<{ o
   if (!accessToken || !phoneNumberId) {
     return { ok: false, message: "WhatsApp is not configured yet (pending Meta Business verification)." };
   }
-  const to = normalizePhoneForWhatsApp(opts.to);
+  const to = normalizePhoneForWhatsApp(opts.to, opts.countryCode);
   try {
     const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
       method: "POST",
@@ -69,7 +74,10 @@ export async function sendWhatsAppOtp(opts: SendWhatsAppOtpOptions): Promise<{ o
           ],
         },
       }),
-    });
+      // Force IPv4 (DO App Platform egress is IPv4-only); cap the wait well under the gateway timeout.
+      dispatcher: ipv4Dispatcher,
+      signal: AbortSignal.timeout(20_000),
+    } as any);
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       structuredLog("error", "WhatsApp OTP send failed", { status: res.status, error: data?.error?.message, to });

@@ -19,6 +19,17 @@ interface BillingSubscription {
   trialEndsAt: string | null; currentPeriodStart: string; currentPeriodEnd: string;
 }
 interface BillingPlan { id: string; name: string; priceMonthlyUsd: string; modules: string[] }
+interface EffectivePricing {
+  billingModel: "flat" | "per_policy" | "revenue_share";
+  baseFeeUsd: string; revenueSharePercent: string; monthlyMinimumUsd: string; outstandingFeeCapUsd: string | null;
+}
+
+function pricingSummary(p: EffectivePricing | null, plan: BillingPlan | null): string {
+  if (!p) return plan ? `$${plan.priceMonthlyUsd}/month` : "";
+  if (p.billingModel === "revenue_share") return `${p.revenueSharePercent}% of revenue collected · $${p.monthlyMinimumUsd}/mo minimum`;
+  if (p.billingModel === "per_policy") return `$${p.baseFeeUsd}/mo base + a fee per policy · $${p.monthlyMinimumUsd}/mo minimum`;
+  return `$${p.baseFeeUsd}/month`;
+}
 interface BillingInvoice {
   id: string; amount: string; currency: string; status: string;
   periodStart: string; periodEnd: string; dueDate: string; paidAt: string | null;
@@ -42,7 +53,7 @@ export default function StaffBilling() {
   const [payerEmail, setPayerEmail] = useState("");
   const [polling, setPolling] = useState(false);
 
-  const { data: subData, isLoading } = useQuery<{ subscription: BillingSubscription | null; plan: BillingPlan | null }>({ queryKey: ["/api/billing/subscription"] });
+  const { data: subData, isLoading } = useQuery<{ subscription: BillingSubscription | null; plan: BillingPlan | null; effectivePricing: EffectivePricing | null }>({ queryKey: ["/api/billing/subscription"] });
   const { data: invoices = [] } = useQuery<BillingInvoice[]>({ queryKey: ["/api/billing/invoices"] });
 
   function invalidate() {
@@ -121,13 +132,16 @@ export default function StaffBilling() {
                 <div className="flex flex-wrap items-center gap-3">
                   <Badge variant={STATUS_VARIANT[subscription.status] ?? "outline"}>{STATUS_LABEL[subscription.status] ?? subscription.status}</Badge>
                   <span className="text-sm font-medium">{plan?.name ?? "Unknown plan"}</span>
-                  {plan && <span className="text-sm text-muted-foreground">${plan.priceMonthlyUsd}/month</span>}
+                  <span className="text-sm text-muted-foreground">{pricingSummary(subData?.effectivePricing ?? null, plan ?? null)}</span>
                 </div>
                 {subscription.status === "trialing" && subscription.trialEndsAt && (
                   <p className="text-sm text-muted-foreground">Trial ends {new Date(subscription.trialEndsAt).toLocaleDateString()}.</p>
                 )}
-                {subscription.status === "active" && (
+                {subscription.status === "active" && subData?.effectivePricing?.billingModel === "flat" && (
                   <p className="text-sm text-muted-foreground">Renews {new Date(subscription.currentPeriodEnd).toLocaleDateString()}.</p>
+                )}
+                {subscription.status === "active" && subData?.effectivePricing && subData.effectivePricing.billingModel !== "flat" && (
+                  <p className="text-sm text-muted-foreground">Billed monthly on what you collect. Next invoice around {new Date(subscription.currentPeriodEnd).toLocaleDateString()}.</p>
                 )}
                 {(subscription.status === "past_due" || subscription.status === "suspended") && (
                   <p className="text-sm text-destructive">

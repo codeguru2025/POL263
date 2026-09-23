@@ -13,7 +13,7 @@
  *   DO_SPACES_CDN_URL   — optional CDN endpoint (e.g. https://mybucket.nyc3.cdn.digitaloceanspaces.com)
  */
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { structuredLog } from "./logger";
 import path from "path";
 import fs from "fs";
@@ -150,6 +150,37 @@ export async function deleteFile(key: string): Promise<void> {
   } catch (err: any) {
     structuredLog("error", "Failed to delete from object storage", { key, error: err.message });
   }
+}
+
+/**
+ * Permanently delete every object under a key prefix. Used by the Phase-6 tenant purge. Returns
+ * the number of objects deleted. On local-disk fallback, removes the matching uploads/ folder.
+ */
+export async function deletePrefix(prefix: string): Promise<number> {
+  const clean = prefix.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!clean) throw new Error("deletePrefix: refusing to delete an empty prefix");
+
+  if (!isObjectStorageEnabled) {
+    const dir = path.resolve(process.cwd(), "uploads", clean);
+    if (fs.existsSync(dir)) { fs.rmSync(dir, { recursive: true, force: true }); }
+    return 0;
+  }
+
+  const client = getClient();
+  let deleted = 0;
+  let ContinuationToken: string | undefined;
+  do {
+    const listed = await client.send(new ListObjectsV2Command({ Bucket: BUCKET!, Prefix: `${clean}/`, ContinuationToken }));
+    const objects = (listed.Contents ?? []).map((o) => ({ Key: o.Key! })).filter((o) => o.Key);
+    if (objects.length > 0) {
+      await client.send(new DeleteObjectsCommand({ Bucket: BUCKET!, Delete: { Objects: objects, Quiet: true } }));
+      deleted += objects.length;
+    }
+    ContinuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (ContinuationToken);
+
+  structuredLog("warn", "Deleted object-storage prefix", { prefix: clean, deleted });
+  return deleted;
 }
 
 /**

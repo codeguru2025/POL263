@@ -10,6 +10,517 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-23
+
+### Flaky test: "valid secret + tampered token → 401" sometimes got 200 (blocked a push)
+
+**Symptom:** `tests/unit/customer-service-api.test.ts` failed roughly 1 run in 20–60 with
+`expected 200 to be 401`, unrelated to whatever was being changed; it blocked the husky pre-push
+hook once and passed on rerun.
+
+**Root cause:** the test "tampered" a token by rewriting its last two characters. Those characters
+are the tail of the outer base64url wrapper around `encryptSecret()`'s output, whose own trailing
+base64 padding is ignored by Node's lenient decoder — so a tail edit sometimes decoded to the same
+ciphertext and the token legitimately still verified. Measured over 5,000 tokens with realistic
+claim sizes: old tampering stayed valid 302 times (~6%); flipping a character mid-string, 0 times.
+Not a security problem (the accepted token is still bound to the same plaintext) — the test was
+wrong, not the server.
+
+**Fix:** a `tamper()` helper in the test that flips a character in the middle of the token, used by
+both tampered-token tests (verify + refresh).
+
+**Lesson for next time:** a "tampered value is rejected" test must change bits that carry
+information. Editing the end of a base64/padded string is a coin-flip no-op. And if a test fails
+once and passes on rerun, don't just rerun — reproduce it in a loop with the failing input logged
+(my first theory here, padding *bits*, was wrong; the loop with realistic sizes gave the real answer).
+
+### Clients got "Policy Lapsed" twice — the first one a day early
+
+**Symptom:** spotted in review of the SMS/notification code (not yet reported by a client, but it
+already applied to email/in-app). A policy going lapsed produced two `policy_lapsed` notices, and
+the first went out while the policy was still in grace with a day left to pay.
+
+**Root cause:** two sweeps both sent it. `policy-lapse-sweep.ts` (owner of the grace→lapsed
+transition) sends `policy_lapsed` when it flips the status, for `graceEndDate < today`.
+`client-notification-sweep.ts` *also* sent `policy_lapsed` for any policy still in `grace` with
+`daysToGrace <= 0` — i.e. on the grace-end date itself, before the policy had lapsed, and again
+on every run until the other sweep caught up.
+
+**Fix:** removed the `policy_lapsed` dispatch (and the `lapseCount` increment) from
+`server/client-notification-sweep.ts`; the lapse sweep is the single sender. `lapseCount` stays in
+the result type (always 0) so the digest API shape is unchanged; the digest toast no longer shows it.
+
+**Lesson for next time:** when two scheduled jobs can observe the same state change, exactly one
+should own the notification — the one that performs the transition. If a notification is sent
+from a job that only *reads* status, it will fire early and repeatedly. grep every
+`dispatchNotification(..., "<event>"` and confirm each event has one sender per state change.
+
+### Notification log said "sent" for SMS/email that never left; SMS could text a literal `{tag}`
+
+**Symptom:** found during an edge-case review right after 19 SMS templates were enabled for
+Falakhe. (1) `notification_logs` would show a row as `sent` for every client with no phone/email
+on file, and for every event when the channel's module was off — nothing had been sent. (2) A
+template whose merge tag had no value (e.g. `activation` for a client with no activation code,
+`grace_start` for a policy with no grace-end date) was sent to the client with the raw text
+`{activation_code}` in it.
+
+**Root cause:** `dispatchNotification()` writes the log row as `sent` *before* attempting
+delivery (optimistic, so a crash still leaves a trail) and only corrected it on a provider
+failure. Every early exit (module off, no address, no phone) skipped the correction. Separately,
+`renderTemplate()` leaves a tag untouched when its value is `undefined`, and nothing checked the
+rendered text before sending.
+
+**Fix:** `server/notifications.ts` — each early exit now sets the log to `skipped` with a reason
+(`skipped`, not `failed`, so it doesn't inflate failure counts); new exported
+`unfilledMergeTags()` and an SMS-only guard that skips (and logs `skipped: Missing details for:
+{tag}`) instead of sending a message containing an unfilled tag.
+
+**Verified:** 6 new cases in `tests/unit/notifications.test.ts` (sent / unfilled tag / no phone /
+module off / provider rejects). Three older country-code tests had the same latent flaw — their
+`Hi {first_name}` fixture never supplied a first name, so they had been asserting on a message
+containing a literal tag; fixtures corrected, not the guard.
+
+**Lesson for next time:** any "write the log as success first, correct on failure" pattern needs
+the correction on *every* non-send exit, not just the error branch — grep for early
+`else`/`skipped` branches after an optimistic log insert. And when enabling a channel for a new
+set of templates, check each tag against what every dispatch site actually puts in the context.
+
+---
+
+## 2026-09-21 — Diaspora integration day: genericity + edge-case pass
+
+**Context:** everything built for the Diaspora Funeral Services integration (dynamic pricing,
+public payment links, PDF emails, CSRF bearer bypass) was written parameterized by orgId from the
+start — no literal Diaspora IDs/refcodes in any logic. But "not hardcoded" and "actually usable by
+any other tenant" turned out to be different questions. A deliberate pass found five real issues:
+
+1. **`PUBLIC_API_BEARER_TOKEN` was one global secret for every tenant.** Superseded earlier the
+   same day (see the "dedicated rate limits + CSRF bearer-token bypass" entry above) but wrong on
+   reflection: one shared token across every tenant's marketing-site integration means no
+   per-tenant revocation, no attribution of which integration made a call, and one leak exposing
+   every tenant's public write routes at once. Replaced with the same per-tenant credential model
+   the customer-service API already uses — `server/public-api-bearer.ts`,
+   `script/provision-public-api-credential.ts`. Diaspora's control-plane row was provisioned with
+   its already-deployed secret unchanged, so nothing broke for them; the old env var is now dead
+   config on the DO app.
+2. **POL263's own hosted `/pay/policy/:token` page couldn't actually complete a self-registration
+   payment for any tenant that didn't build a custom frontend.** `payment_links.method` is now
+   nullable for auto-created links (a self-registered client hasn't picked a method yet), but
+   `client/src/pages/public/pay-policy.tsx` had no UI to let them choose one — clicking "Pay Now"
+   would just 400 forever. Added a method picker, shown only when the link has no method baked in.
+   Diaspora's build works around this (their own frontend, per their own choice of integration
+   shape); any other tenant relying on POL263's default page would have hit a dead end.
+3. Two "cover amount cannot exceed..." validation messages hardcoded a `$` sign regardless of the
+   policy's actual currency — cosmetic but wrong for a ZAR/ZiG tenant.
+4. `resolveJoinUrl` (server/quote-pdf.ts) didn't normalize `organizations.website` — a value saved
+   without a protocol (e.g. "example.com" instead of "https://example.com") produced a relative
+   link that resolves against whatever page an email/PDF happens to be opened in, not the tenant's
+   actual site.
+5. Auto-creating a payment link right after `handlePublicPolicyRegistration` commits the policy
+   wasn't wrapped in error handling — a transient failure there would 500 a request whose policy
+   had already been successfully created, and a client retrying on that 500 would then hit the
+   duplicate-policy check instead of understanding what happened. Now best-effort/logged.
+
+**Lesson for next time:** parameterizing by orgId proves a feature isn't hardcoded to one tenant;
+it doesn't prove the feature *works* for a tenant that exercises it differently (no custom
+frontend, a non-USD currency, an unset website field). After building anything meant to be
+tenant-generic, walk through it once as if a *different* tenant were the one using it, specifically
+via whatever path doesn't match the tenant it was actually built against.
+
+---
+
+## 2026-09-20 — Public PII-writing endpoints missing dedicated rate limits
+
+**Symptom:** none reported yet — found while reviewing whether onboarding Diaspora Funeral
+Services' marketing site (calling POL263's public quote/lead/registration API) introduced new
+risk. It didn't introduce a new vulnerability class, but it did widen exposure to an existing gap.
+
+**Root cause:** `server/index.ts` mounts a dedicated `publicLimiter` (30 req/min) specifically
+because, per its own comment, "the blanket /api limiter (200/min) is too generous for endpoints
+anyone on the internet can hit anonymously." That limiter was applied to `/api/public/agent-card`,
+`/api/public/quote`, `/api/public/verify`, and `/api/public/tenant-context` — but never extended
+to three routes added later that are just as unauthenticated and strictly more sensitive:
+`/api/public/agent-vcard/*` (includes `quote-lead`, which writes a Lead + Quote row),
+`/api/public/register-policy`, and `/api/public/walkin-register` (both write a full Client +
+Policy row carrying real PII — name, national ID, DOB, dependents, beneficiary). All three were
+falling back to the 200 req/min blanket `/api` limiter.
+
+**Fix (`server/index.ts`):** added `/api/public/agent-vcard` to the existing `publicLimiter`
+(30/min), and created a stricter `publicRegistrationLimiter` (10/min) for `/api/public/
+register-policy` and `/api/public/walkin-register` since those two create real, PII-bearing
+database rows rather than just reading/quoting.
+
+**Verified:** `npx tsc --noEmit` clean. No existing test suite exercises rate-limit wiring
+directly (it's config, not logic), so this was verified by reading the route mount list, not by
+a new test.
+
+**Lesson for next time:** when adding a new `/api/public/*` route, check whether it needs to join
+`publicLimiter` (or something stricter) — the blanket `/api` limiter's comment says outright it's
+not meant to be the real protection for anonymous-write endpoints. This class of gap (a
+new public route silently inheriting the generous default instead of the deliberate stricter one)
+won't show up in tests; it only surfaces by reading `server/index.ts`'s route-limiter mount list
+against the actual `/api/public/*` route list in `server/routes.ts`.
+
+---
+
+## 2026-09-08 — Outstanding-fee-cap raised a new (nonsense) invoice every single day
+
+**Symptom:** Falakhe's most recent platform-fee invoice showed line items summing to $483.45 but a
+"Total due" of $25.98. It also had ~10 sibling invoices, one or two per day 09-01 → 09-08, each
+$0.60–$34, all `open`, all with the same mismatch.
+
+**Two bugs in `enforceOutstandingFeeCap` (`server/tenant-billing-enforcement.ts`):**
+1. **Line items copied from the wrong basis.** The invoice `amount` is `uninvoicedAccrualUsd`
+   (accrued fees minus what open invoices already cover — a small delta), but `lineItems` was
+   `[...rawAccrual.lineItems, capLine]` — `rawAccrual` being the *entire* unsettled ledger. So the
+   line items described $483 while only $25.98 was billed. Fixed: line items are now one plain
+   line that equals the amount, plus a $0 "why" line spelling out the exposure vs the cap.
+2. **No cooldown — it re-raised daily.** The guard was only `exposureUsd > cap && uninvoicedAccrual
+   >= $0.01`. Every sweep, a bit more fee had accrued, so every sweep raised a fresh tiny invoice.
+   Fixed: `recentUnpaidCapInvoiceExists(tenantId, graceDays)` — skip if a cap invoice raised in the
+   last grace-period window is still unpaid. Once a cap invoice is out, escalation is the
+   past-due → grace → suspend path's job, not more invoices. Also stamped `tenant_billing_events.
+   invoice_id` on the cap event so the link is queryable.
+
+**Cleanup:** the ~10 junk cap invoices for Falakhe were voided directly in the control plane
+(they were bug artifacts; the fees they represent sit in the still-open base invoice
+BILL-…20260831 for $367.60, whose own line items are consistent). LGR-217 correction (separate,
+above) was also done this session.
+
+**Lesson for next time:** an invoice's `lineItems` must always sum to its `amount` — when you
+build one from a computed breakdown but bill a different (net/delta/capped) number, rebuild the
+line items around the number you're actually charging. And any "bill early" control needs an
+"already billed, don't repeat" guard or the daily sweep turns it into a spam cannon.
+
+---
+
+## 2026-09-08 — Group receipt 500s for a platform owner in a dedicated-DB tenant: audit-log FK poisons the whole transaction
+
+**Symptom:** Augustus (platform owner) receipted a group ("Siyabonga Nkosi"), selected all 16
+members, got `500 Internal Server Error`. Nothing was saved — all 16 receipts rolled back.
+
+**Root cause (two layers):**
+1. `POST /api/group-receipt` does all its work — 16 `payment_transactions` + 16 `payment_receipts`
+   + status updates + `auditLog(..., txDb)` — inside one `withOrgTransaction`. The final audit
+   insert has `actor_id = <registry user id>`, which doesn't exist in Falakhe's dedicated DB
+   `users` table (platform owners aren't mirrored there by id) → FK violation on
+   `audit_logs_actor_id_users_id_fk`.
+2. `storage.createAuditLog` *has* a fallback for exactly this (retry with `actor_id = null`), and
+   an earlier fix (2026-09-07) made its FK detection look at `error.cause`. **But the retry ran on
+   the same connection whose transaction the first failed INSERT had already aborted** — every
+   subsequent statement fails with "current transaction is aborted". The retry threw,
+   `auditLog`'s `if (tx) throw err` re-threw, `withOrgTransaction` rolled back everything → 500.
+   The prod-log tell: the failing INSERT's params showed `actor_id` **empty** (the retry), and the
+   `after` payload already contained 16 fully-formed receipt results.
+
+**Fix (`server/storage.ts` `createAuditLog`):** when called with a caller transaction, wrap each
+INSERT attempt in a `SAVEPOINT` (`ROLLBACK TO SAVEPOINT` on failure) so the actor-id-drop retry
+runs on a clean sub-transaction instead of a poisoned one. Non-tx path unchanged.
+
+**Also fixed (`server/routes.ts`):** the group-ledger credit in both `/api/group-receipt` and
+`/api/groups/legacy-receipts` passed `createdBy: user.id` (raw registry id) →
+`group_ledger_entries.created_by` FK violation → caught, logged "Group ledger credit failed", and
+**the group's balance silently never moved**. Now resolves via `resolveOrSyncTenantUserId` first.
+(The prod logs showed this firing for Falakhe's legacy receipts LGR-…-217/218.)
+
+**Lesson for next time:** any retry-after-failure inside a `withOrgTransaction` needs a SAVEPOINT —
+Postgres aborts the whole transaction on the first error, so "catch and try a slightly different
+INSERT" only works with `SAVEPOINT` / `ROLLBACK TO SAVEPOINT`. And every `createdBy` / `actor_id` /
+`recorded_by` write in a dedicated-DB tenant that takes `user.id` directly is a latent FK bomb for
+platform-owner actions — grep for `createdBy: user.id` / `recordedBy: user.id` before shipping a
+new tenant-scoped write.
+
+---
+
+## 2026-09-07 — SMS phone normalization prepended one global country code, misdelivering a cross-border tenant's clients
+
+**Symptom:** A South African client's phone saved in local format (`0821234567`) would be sent to
+the SMS provider as `263821234567` (Zimbabwe) instead of `27821234567` (South Africa) — an invalid
+or misdirected destination. Same class of bug latent in the WhatsApp MFA-fallback path.
+
+**Root cause:** `server/sms-service.ts`'s `normalizePhoneForSms` prepended a single process-wide
+`SMS_DEFAULT_COUNTRY_CODE` (default `263`) to any `0…` number, with zero per-recipient country
+awareness. This was flagged-not-fixed on 2026-08-26 (see the 2026-09-01 entry's "deliberately not
+fixed") because it needed a schema decision: where does a recipient's country come from? Falakhe
+is a two-country tenant (`policies.is_south_africa`), and the app already has tenant-configurable
+cross-border flagging (`country_flag_settings`) — that's the answer.
+
+**Fix (files):**
+- `server/phone.ts` (new) — `normalizeMsisdn(raw, defaultCountryCode?)`: honors `+CC` / `00CC`
+  international formats as-is, only prepends a code to genuine local `0…` numbers, and takes the
+  code from the caller rather than a global. Single source of truth for both SMS and WhatsApp.
+- `shared/schema.ts` + `migrations/0120_country_flag_dial_codes.sql` — `country_flag_settings`
+  gains `home_country_code` (default `263`) and `flag_country_code` (default `27`).
+- `server/notifications.ts` — the SMS branch resolves the code once per dispatch: `flagCountryCode`
+  when country flagging is on *and* the notified policy carries the cross-border flag,
+  `homeCountryCode` otherwise. Passed to `sendSms` via the new `SendSmsOptions.countryCode`.
+- `server/sms-service.ts` / `server/whatsapp-service.ts` — thread `countryCode` through to
+  `normalizeMsisdn`; `normalizePhoneForSms` kept as a thin wrapper for existing call sites/tests.
+- `server/auth.ts` — MFA SMS/WhatsApp fallback passes the staff user's org home code.
+- `server/routes.ts` + `client/src/pages/staff/settings.tsx` — the two dial codes are editable in
+  Settings → Country Flag (digits-only, layman copy).
+
+**Verified:** `npm run check` clean; new `tests/unit/phone.test.ts` (8 cases incl. the exact
+`0821234567 → 27…` regression) + 3 new SMS-country-code cases in `tests/unit/notifications.test.ts`;
+full suite 603/603. Not live-tested — the Africala integration is still pre-first-send (Sender IDs
+now registered; see project memory).
+
+**Lesson for next time:** when a "prepend a default country code" helper exists, check whether the
+tenant is single-country. The tell is a global env var or hardcoded constant used for a
+per-recipient value. The right generalization here was an *existing* per-org config table
+(`country_flag_settings`) keyed off an *existing* per-policy flag (`is_south_africa`) — not a new
+per-client column and not a new global. Look for a table that already models the distinction
+before adding schema.
+
+### Same day — "Send test SMS" showed a DO 502 page instead of the provider's rejection reason
+
+**Symptom:** clicking the new Send-test-SMS button returned DigitalOcean's generic
+`Error code: 502 / connection timed out` HTML page, twice — first because of an IPv6 stall, then,
+after that was fixed, still 502.
+
+**Two root causes:**
+1. `api2.smsala.com` is dual-stack; DO App Platform egress (with a dedicated egress IP) is
+   IPv4-only, and undici tried the AAAA records first and stalled ~10s each. Fix: `ipv4Dispatcher`
+   (undici `Agent` with `connect.family=4`) in `server/phone.ts`, used by `sms-service.ts` and
+   `whatsapp-service.ts`, plus a 20s `AbortSignal.timeout`.
+2. `POST /api/sms-config/test` returned **HTTP 502** for a *provider rejection*
+   (`Ip Address Not Allowed`). The DO ingress intercepts any 5xx from the app and swaps the body
+   for its own error page, so the real reason never reached the browser. Fix: always return 200;
+   the `{ok, message}` body carries success/failure, and the client toast branches on `ok`.
+   **Runtime logs (`level:"info" ... "POST /api/sms-config/test 502 in 374ms"` — 374ms, not 60s)
+   were the tell: a fast 502 is an app-chosen status, a slow one is a gateway timeout.**
+
+**Also fixed while here — `createAuditLog`'s FK-violation fallback never fired.** It inspected
+`error.message` / `error.constraint`, but Drizzle wraps the pg error — the constraint name and
+SQLSTATE are on `error.cause`. So every platform-owner action inside a dedicated-DB tenant (whose
+`users` table has no row for that platform owner) failed to audit-log, retried identically, and
+gave up. Now checks `error.cause.code === "23503"` / `error.cause.constraint` / the text of both.
+
+**Lesson for next time:** (a) an app endpoint must never return 5xx for a normal
+business-logic failure the caller needs to see — the platform hides the body. (b) When matching on
+a DB error's constraint name or SQLSTATE, look at `error.cause`, not `error` — the ORM wrapper's
+own `.message` is generic. (c) Response time distinguishes a self-inflicted 502 from a gateway
+timeout.
+
+### Same day — Africala SMS hardcoded `messageEncoding: "1"` (Unicode)
+
+**Symptom:** every SMS would bill at the Unicode rate (~70 chars/segment) instead of GSM-7
+(~160), roughly doubling per-message cost. Noticed when Augustus pasted Africala's own sample
+`SendSmsV2` payload, which uses `"0"`.
+
+**Root cause:** `server/sms-service.ts` hardcoded `messageEncoding: "1"` — presumably a
+play-it-safe default written before the real API example was in hand.
+
+**Fix:** `isGsm7()` in `server/phone.ts` (GSM 03.38 basic + extension table); the provider sends
+`"0"` when the message is GSM-7-encodable, `"1"` only when it genuinely needs it (emoji, smart
+quotes, non-Latin). `server/phone.ts` now also holds `isGsm7` alongside `normalizeMsisdn` — both
+are dependency-free messaging helpers, importable from one-off scripts (`script/test-africala-sms.ts`).
+Covered in `tests/unit/phone.test.ts`.
+
+**Lesson for next time:** for a paid third-party API, don't hardcode an enum "to be safe" — the
+safe-looking value (Unicode) was the expensive one. Match the vendor's documented example, and
+for encoding/segment-count fields, compute from the payload.
+
+---
+
+## 2026-09-01 — Full-app audit: 4 parallel domains, 11 fixes (1 critical secret leak, 3 critical billing-correctness bugs, 1 high RBAC bypass, N+1s, a fail-open judgment call)
+
+**Context:** Augustus asked to check the entire app for edge cases, N+1 queries, and vulnerabilities.
+Ran 4 parallel audits (security, N+1/performance, edge cases in the newest billing-model code,
+transaction atomicity) against the current `release/customer-service-api` branch. All findings
+verified against real code before fixing (no fixes taken on an auditor's word alone).
+
+**1. CRITICAL — `GET /api/organizations` and `PATCH /api/organizations/:id` leaked
+`paynowIntegrationKey`, `paynowAuthEmail`, and the tenant's dedicated-DB connection string to any
+authenticated staff user of any role.** `GET /api/organizations/:id` already scrubbed these three
+fields for non-platform-owners, but the list endpoint and the PATCH endpoint's two response
+branches never did. A low-privilege account (even `driver`/`mortuary_attendant`) could read the
+PayNow secret via a plain `GET /api/organizations` — enough to forge a paid PayNow webhook
+callback — and a `manager`/`administrator` got the same leak just by saving any org setting.
+**Fix:** new `sanitizeOrgForClient()` in `server/route-helpers.ts`, applied at all 3 sites in
+`server/routes.ts`.
+
+**2. HIGH — `GET /api/reports/export/:type` collapsed every report type's permission into one
+`read:policy` check.** The route's own `finance`/`payroll`/`commissions`/`platform`/etc. cases
+serve data whose dedicated endpoints require `read:finance`/`read:payroll`/`read:commission`, but
+the export route never checked those. A `staff` or `agent` account (which has `read:policy` but
+none of the others) could export full payroll (names + national IDs + salaries), commissions, or
+platform-finance data through this one route despite every other endpoint correctly blocking it.
+**Fix:** `REPORT_EXPORT_EXTRA_PERMISSION` lookup table in `server/routes.ts`, checked before the
+switch.
+
+**3. LOW — legacy SHA-256 password/security-answer comparison in `client-auth.ts` used `===`
+instead of `crypto.timingSafeEqual`**, unlike every other secret comparison in the codebase.
+Fixed to timing-safe (fixed-length hex digests, safe to compare directly).
+
+**4. CRITICAL — paying an outstanding-fee-cap invoice silently pushed the tenant's real renewal a
+full billing cycle later.** `applyTenantInvoicePayment` (`server/tenant-billing-service.ts`) only
+special-cased `kind: "setup"` invoices; a cap invoice (`kind: "revenue_share"`, raised early by
+`enforceOutstandingFeeCap` with its own accrual-window `periodStart`/`periodEnd`, not the
+subscription's actual cycle) fell into the generic branch and unconditionally advanced
+`currentPeriodEnd` by a full cycle from `now`. Every cap invoice paid was a full cycle of lost
+subscription revenue. **Fix:** cap invoices now get the same "mark paid, don't touch the period or
+tenant active status" treatment as setup invoices.
+
+**5. CRITICAL — a currency with no configured FX rate had its platform-fee revenue silently
+zeroed on the invoice, then those receivables were marked settled anyway.** `computeRevenueShareInvoiceFromFees`
+(`server/billing-model-math.ts`) defaulted a missing rate to `0`, producing a real (nonzero)
+line item billed as `$0.00`; `reconcileRevenueShareSettlement` then settled *every* unsettled
+receivable up to the cutoff with no per-currency check, permanently writing off that revenue with
+no error. **Fix:** a currency with no rate is now excluded from the invoice entirely
+(`skippedCurrencies`, logged as a warning) rather than zeroed, and settlement only marks currencies
+the invoice actually billed (derived from its own line items).
+
+**6. CRITICAL — revenue-share settlement reconciliation ran fire-and-forget after payment; a crash
+or transient DB error silently lost it forever, double-billing the tenant's fees next cycle.**
+`applyTenantInvoicePayment` fired `reconcileRevenueShareSettlement` in a detached `.then()` with no
+durable record of failure — the invoice was already marked "paid" by then, so simply re-running
+payment application would never retry it (short-circuits on `status === "paid"`). **Fix:** new
+`tenant_invoices.settled_at` column (migration `control-plane/0009_invoice_settled_at.sql`), set on
+every deterministic completion (including "nothing to settle here" no-ops) but deliberately left
+null on a thrown error; a new backstop step in the daily tenant-billing sweep
+(`retryUnsettledRevenueShareInvoices`) finds and retries any paid invoice stuck unsettled for over
+an hour.
+
+**7. HIGH — a tenant's 7-day/1-day pre-deletion warning emails were permanently suppressed after
+their first suspension cycle.** `tenant-deletion-sweep.ts`'s `alreadyDid()` checked the append-only
+`tenant_billing_events` log for the warning type ever having fired for this tenant, with no
+scoping to the current suspension — so a tenant suspended, warned, reactivated, then suspended
+again months later got zero warning before permanent deletion. **Fix:** `alreadyDid()` now scopes
+to events at/after the tenant's current `suspendedAt`.
+
+**8. MEDIUM — a transient control-plane outage made `isRevenueShareBillingForOrg` unconditionally
+assume `true`, letting a flat/per-policy tenant accrue phantom, never-invoiced `platform_receivables`.**
+(Augustus's call, confirmed via AskUserQuestion.) **Fix:** `server/platform-fee.ts` now falls back
+to that org's own last successfully-resolved billing model on an outage, only defaulting to `true`
+when the org has genuinely never been resolved before.
+
+**9. LOW — "waive setup fee" (`platform-billing-routes.ts`) did two non-transactional writes** (void
+the open invoice, then flip `setupFeeStatus`); a crash between them left the invoice voided but the
+subscription still thinking a fee was owed. Wrapped in one `cpDb.transaction`.
+
+**10. N+1 — `POST /api/product-versions/:id/recalculate-premiums` never got switched to the batched
+premium-recalc path built in the 2026-08-04 fix for `GET /api/policies`** — still one ~6-query
+loop iteration per policy, real timeout risk on a large product version. Routed through the
+existing `batchRecalculatePolicyPremiums`.
+
+**11. N+1 — `POST /api/groups/:id/add-ons/bulk-apply` and `storage.bulkImportGroupMembers`
+(historical Excel import) issued one INSERT per policy/member/contribution, fully sequential** — a
+300-member society's bulk-apply did 300 serial round trips. Both converted to multi-row `INSERT`s.
+(`resolveExternalRef`'s per-row N+1 inside the generic legacy-import commit path was assessed and
+deliberately left as-is — that loop's dominant cost is the inherently-sequential
+`getNextMemberNumberInTx` member-number generation, so batching just the lookup wouldn't
+meaningfully help, and the surrounding logic is complex enough that the risk outweighed the
+marginal gain on an admin/one-time-per-tenant path.)
+
+**Also same session:** added `server/turnstile.ts` (Cloudflare Turnstile bot/abuse-protection
+verification, no-op until `TURNSTILE_SECRET_KEY` is configured) and wired it into
+`/api/client-auth/claim`, `/login`, and `/reset-password` — the server-side enforcement half of a
+Cloudflare rollout Augustus asked about; the client-side widget is deferred until he generates a
+real Turnstile site key to test against (building/shipping an untestable frontend blind isn't
+good practice). CSP (`server/index.ts`) pre-allowlists `challenges.cloudflare.com` for when it
+lands.
+
+**Verified:** `npm run check` clean throughout; `npm run test` 591/592 (the one failure,
+`customer-service-api.test.ts`, is a pre-existing flake unrelated to any of these changes — passes
+standalone in isolation). New `tests/unit/turnstile.test.ts` covers the no-op/pass/fail-closed/
+fail-open paths.
+
+**Lesson for next time:** the billing-model expansion (2026-08-31, `project_billing_models` memory)
+shipped 9 phases in one session with no live walkthrough against real tenant data — this is the
+second same-week audit to find CRITICAL bugs in exactly that code (see also `project_audit_2026_08_26`
+and this file's 2026-08-26 entries). Any large single-session feature shipment in this codebase is
+worth a dedicated audit pass soon after, not just a typecheck+test-suite green light — tests here
+covered the math functions in isolation but none of these 3 billing bugs were unit-testable without
+already knowing to look for them (period-extension conflation, missing-FX-rate settlement, and
+fire-and-forget reconciliation are all integration-shaped bugs).
+
+---
+
+## 2026-09-01 — Group ledger historical import 500s on Falakhe: legacy-import routes never resolved the tenant-local user id
+
+**Symptom:** Augustus tried to upload burial-society group ledger history for Falakhe (`POST
+/api/groups/ledger/import/preview`) and got a 500. Pulled DO runtime logs (`GET
+/v2/apps/{id}/deployments/{active}/logs?type=RUN`, see 2026-08-04 entry for the method) and found:
+`error: "Failed query: insert into \"import_batches\" ... "` at 2026-09-01T10:34:39Z, immediately
+after a successful preview validation (6 of 7 rows valid, 1 flagged as a spreadsheet totals row —
+that flagging was correct and not the bug).
+
+**Root cause:** Falakhe runs on a dedicated per-tenant Postgres database (commissioned 2026-08-04,
+see that day's entry) with its own local `users` table — every user-reference FK on tenant-scoped
+tables must be resolved/mirrored via `resolveOrSyncTenantUserId(orgId, userId)` before being used,
+never the raw shared-DB `user.id` (this pattern is used at 20+ other call sites in `routes.ts`
+already). The three legacy-import routes added in the 2026-08-12 group-ledger-import phase
+(`POST /api/groups/ledger/import/preview`, `.../batches/:id/commit`, `.../batches/:id/rollback`)
+all skipped it — passed `user.id` straight through to `storage.createImportBatch`
+(`created_by_user_id`), `storage.commitImportBatch` (`group_ledger_entries.created_by`), and
+`storage.rollbackImportBatch` (`rolled_back_by_user_id`), each of which FKs to the tenant DB's own
+`users` table. Confirmed by direct query: the staff user's id did not exist in Falakhe's dedicated-
+DB `users` table at all. The identical bug existed in the platform-owner-only generic import routes
+in `platform-routes.ts` (`createImportBatch`/`commitImportBatch`/`rollbackImportBatch`, all three
+call sites) — latent since 2026-08-04 (when Falakhe became the first dedicated-DB tenant) but never
+triggered because no platform-owner import had run against a dedicated-DB tenant since.
+
+**Fix:** `server/routes.ts` (3 call sites) and `server/platform-routes.ts` (3 call sites, plus the
+missing `resolveOrSyncTenantUserId` import) now resolve the tenant-local id before every
+`createImportBatch`/`commitImportBatch`/`rollbackImportBatch` call.
+
+**Verified:** `npm run check` clean, `npm run test` 587/587 passing. Confirmed the FK gap directly
+against Falakhe's dedicated DB before fixing (staff user absent from its `users` table) rather than
+guessing from the stack-trace-less Drizzle error message.
+
+**Lesson for next time:** any *new* route added against a tenant-scoped table must be checked for
+this pattern if the org can be on a dedicated database — grep the new route for a raw `user.id` (or
+an `actor.userId`/`{ userId: user.id }` passthrough) landing on a FK'd `*_user_id`/`created_by`
+column, and search for whether the feature has a platform-owner-only twin (generic import, legacy
+import, etc.) that needs the identical fix — this bug shipped in `routes.ts` for one feature and
+`platform-routes.ts` for its sibling, three call sites each, and both went unnoticed for weeks
+because Falakhe was the only dedicated-DB tenant and neither path had been exercised against it
+until today. See also `feedback_debugging_patterns.md` memory (`resolveOrSyncTenantUserId, not
+"?? user.id"`) — this is the same class of bug, just a passthrough instead of a `??`.
+
+---
+
+## 2026-08-31 — MFA login failing intermittently: otplib v13 `verify()` has ZERO clock-skew tolerance by default
+
+**Symptom:** staff enter their correct authenticator code on `/staff/mfa-verify` and get "Invalid
+code". Retrying a few seconds later often works. Users whose phone clock had drifted from the
+server never got in at all — and after 5 failed attempts (`MFA_PENDING_MAX_ATTEMPTS`) the pending
+challenge is cleared and they have to restart the whole Google-OAuth flow, still failing.
+Production logs showed the tell-tale pattern: `POST /api/auth/mfa/verify-login 400` immediately
+followed ~9s later by `200` for the same login.
+
+**Root cause:** `server/auth.ts` imported `verify as verifyTotp` from `otplib` and called it bare —
+`verifyTotp({ secret, token })` — at all three TOTP check sites (login `verifyPendingMfaCode`,
+`/api/auth/mfa/confirm`, `/api/auth/mfa/disable`). **otplib v13 is a full rewrite** (added in the
+2026-08-18 SOC2/MFA commit `d0ab27f`, so MFA was built against 13.x from day one — not a version
+bump regression). Its verify option for clock tolerance is `epochTolerance` (in *seconds*, not
+"window" in steps like otplib ≤12 and every other TOTP library), and it **defaults to `0`**. Zero
+tolerance means a code is accepted only if generated in the server's exact current 30-second
+window — no allowance for (a) the DigitalOcean server clock vs the user's phone clock drifting a
+few seconds, (b) the seconds a human takes to read six digits and press submit, (c) a code read at
+:28 of a window and submitted at :31 (server is now in the next window). RFC 6238 §5.2 explicitly
+recommends a validation window for exactly this; ±1 step (30s) is the near-universal default.
+Reproduced directly: a token generated 35s in the past → `{valid:false}` bare, `{valid:true,delta:-1}`
+with `epochTolerance:30`.
+
+**Fix:** new `server/totp.ts` — a single wrapper (`verifyTotpCode`, `generateTotpSecret`,
+`generateTotpUri`) so the tolerance lives in ONE place: `verify({ secret, token, epochTolerance:
+TOTP_EPOCH_TOLERANCE_SEC })` with `TOTP_EPOCH_TOLERANCE_SEC = 30` (symmetric ±1 step — absorbs both
+a slow and a fast device clock). `verifyTotpCode` returns a plain boolean, trims the code, and
+never throws. `server/auth.ts` now imports from `./totp`; the three `(await verifyTotp({...})).valid`
+call sites collapse to `await verifyTotpCode(secret, code)`. `tests/unit/mfa-totp.test.ts`
+regression-tests it with real otplib: prev/next-window tokens pass, two-windows-away fail.
+
+**Lesson for next time:** when a crypto/OTP/JWT library is on a **brand-new major version** (otplib
+jumped to 13.x; the well-documented ecosystem knowledge is all 11/12.x), do not assume option names
+or defaults carry over. Check the actual installed version's types for the security-relevant knobs
+— here `epochTolerance` (seconds, default 0) replaced `window` (steps, default 1), and passing the
+old `window:` param is silently ignored. And: MFA/TOTP tests that only mock the library never catch
+a zero-tolerance default — the regression test must run real `otplib` with a time-shifted token.
+
+---
+
 ## 2026-08-26 — Pre-push review: payment-route race condition, 2 misattributed audit-log entries, 1 timing side-channel
 
 Ran a dedicated `/code-review high` pass over the full day's diff before pushing (payment-route
@@ -57,7 +568,8 @@ country awareness — a real bug for a multi-country tenant (Falakhe has SA clie
 `is_south_africa`), but that's pre-existing code from a different, not-yet-live feature (SMS
 integration is still blocked on Sender ID approval — see project memory), not something touched
 this session, and fixing it properly needs a schema decision (where does a client's country come
-from?) rather than a quick patch. Also noted but not changed: `MFA_REQUIRED_PERMISSIONS`
+from?) rather than a quick patch. _(Fixed 2026-09-07 — see that entry at the top of this log:
+`country_flag_settings` gained per-org home/flag dial codes, selected per policy.)_ Also noted but not changed: `MFA_REQUIRED_PERMISSIONS`
 (`server/auth.ts`) is a hardcoded in-code Set rather than a DB-driven flag on the permissions table
 — a deliberate, defensible tradeoff (an admin-editable "which permissions require MFA" setting
 would itself need protecting), not a bug, but worth remembering if a new privileged permission is

@@ -14,3 +14,4 @@ testsprite_tests/tmp/
 .design-sync/
 .ds-sync/
 ds-bundle/
+script/_tmp_*

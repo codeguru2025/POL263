@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, handleZodError, getAddOnPrice, computePolicyPremium, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -31,6 +31,9 @@ import { buildAiInsightContext, buildNoteEnhanceContext, AI_SURFACE_PERMISSION, 
 import { generateRequisitionPdf } from "./requisition-pdf";
 import { generatePaymentVoucherPdf } from "./payment-voucher-pdf";
 import { recommendProducts, signQuoteToken, verifyQuoteToken } from "./quote-engine";
+import { verifyTurnstileToken } from "./turnstile";
+import { buildQuotePdfBuffer, resolveJoinUrl } from "./quote-pdf";
+import { buildPolicyApplicationPdfBuffer } from "./policy-client-forms";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
@@ -51,6 +54,7 @@ import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCach
 import { resolveAuditRefs } from "./audit-ref-resolver";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { sendEmail, escapeHtml } from "./email-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
 import { tenantSubscriptions, billingPlans, tenantInvoices, tenantFeatureFlags } from "@shared/control-plane-schema";
 import { provisionTenantCore, rollbackFailedProvisioning } from "./tenant-provisioning";
@@ -83,6 +87,7 @@ import {
   insertMortuaryServiceRateSchema, insertCaseServiceChargeSchema,
   insertCemeterySchema, insertEquipmentItemSchema, insertPitchingAssignmentSchema,
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
+  insertAgeBandRateCardSchema, AGE_BANDS,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
@@ -171,6 +176,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     max: 20,
     keyGenerator: (req: any) => req.user?.id ?? req.ip,
     message: { message: "Too many AI requests, please try again in a few minutes." },
+  });
+
+  // Test-SMS button (POST /api/sms-config/test) — tight cap so it can't be used as a free relay.
+  const smsTestLimiter = rateLimit({
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: getAiRedisStore?.("sms-test"),
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    keyGenerator: (req: any) => req.user?.id ?? req.ip,
+    message: { ok: false, message: "Too many test messages — wait a few minutes and try again." },
   });
 
   async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
@@ -1192,6 +1208,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (typeof phone !== "string" || !phone.trim()) {
       return res.status(400).json({ message: "Phone number is required" });
     }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
@@ -1237,7 +1255,141 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       eventType: "quote_request",
       payloadJson: { leadId: lead.id, quoteId },
     });
+    // Best-effort, fire-and-forget — a failed/slow email must never block the visitor's "quote
+    // captured" response. Only fires when the quote was actually persisted (real DOBs given) and
+    // an email address was provided; the vCard flow's own quick estimate (no email yet) never hits this.
+    if (quoteId && typeof email === "string" && email.trim() && await hasModule(orgId, "email_notifications")) {
+      (async () => {
+        const built = await buildQuotePdfBuffer(quoteId!, orgId);
+        if (!built) return;
+        const org = await storage.getOrganization(orgId);
+        const orgName = org?.name || "POL263";
+        const joinUrl = resolveJoinUrl({ website: org?.website ?? null }, refCode, quoteId!);
+        const emailOverrides = await resolveTenantEmailOverrides(orgId, org);
+        await sendEmail({
+          to: email.trim(),
+          ...emailOverrides,
+          fromName: orgName,
+          subject: `Your Quote from ${orgName}`,
+          text: `Dear ${built.quote.policyholderName},\n\nYour personalised quote is attached. Ready to proceed? ${joinUrl}\n\n— ${orgName}`,
+          html: `<p>Dear ${escapeHtml(built.quote.policyholderName)},</p><p>Your personalised quote is attached.</p><p><a href="${joinUrl}">Click here to join</a></p><p>— ${escapeHtml(orgName)}</p>`,
+          attachments: [{ filename: built.filename, content: built.buffer, contentType: "application/pdf" }],
+        });
+      })().catch((err) => structuredLog("error", "Quote PDF email failed", { error: err?.message, quoteId }));
+    }
     return res.status(201).json({ leadId: lead.id, quoteId });
+  });
+
+  // "Arrange a Funeral Now" — a bereavement request from someone who may or may not hold a
+  // policy. Always captures a Lead for the sales/ops pipeline (same as quote-lead above); when
+  // requestedAddOnIds are given, also creates a standalone cash-service quotation (funeral_
+  // quotations, funeralCaseId null — the existing "quote before a case exists" pattern staff
+  // already use) priced at full cash value via resolveAddOnCashCharge with hasPolicy: false —
+  // this request has no session, so there's no policy context to check against; a real
+  // policyholder's discount only applies once staff open an actual funeral case and check their
+  // policy's add-ons (POST /api/funeral-cases/:id/service-charges-from-addon). Returns
+  // { reference } as the DFS-side integration already expects, plus the full quotation if one
+  // was created.
+  app.post("/api/public/funeral-request", async (req, res) => {
+    const { refCode, firstName, lastName, phone, email, deceasedName, deceasedAge, deceasedSex, message, requestedAddOnIds } = req.body;
+    if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
+      return res.status(400).json({ message: "First and last name are required" });
+    }
+    if (typeof phone !== "string" || !phone.trim()) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+
+    const lead = await storage.createLead({
+      organizationId: orgId,
+      agentId: agent.id,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      phone: phone.trim(),
+      email: typeof email === "string" && email.trim() ? email.trim() : null,
+      source: "arrange_a_funeral",
+      stage: "captured",
+      productInterest: typeof message === "string" && message.trim() ? message.trim() : (typeof deceasedName === "string" ? `Re: ${deceasedName}` : null),
+    });
+
+    let quote: Awaited<ReturnType<typeof storage.createStandaloneQuotation>> | null = null;
+    const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
+    if (requestedIds.length > 0) {
+      const orgAddOns = await storage.getAddOns(orgId);
+      const matchedAddOns = requestedIds
+        .map((id) => orgAddOns.find((a: any) => a.id === id))
+        .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false);
+      // A quotation carries one currency for the whole document — every add-on requested here is
+      // assumed to share the org's own add-on currency (they're all seeded/configured together);
+      // this takes the first matched add-on's rather than hardcoding one.
+      const quotationCurrency = matchedAddOns[0]?.currency || "USD";
+      const items = matchedAddOns.map((addOn: any) => {
+        const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+        return { description: addOn.name, quantity: "1.00", unitPrice: amount.toFixed(2), lineTotal: amount.toFixed(2) };
+      });
+      if (items.length > 0) {
+        quote = await storage.createStandaloneQuotation(orgId, {
+          currency: quotationCurrency,
+          status: "draft",
+          notes: "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.",
+          deceasedName: typeof deceasedName === "string" && deceasedName.trim() ? deceasedName.trim() : undefined,
+          deceasedAge: typeof deceasedAge === "number" ? deceasedAge : undefined,
+          deceasedSex: typeof deceasedSex === "string" ? deceasedSex : undefined,
+          informantFullNames: `${firstName.trim()} ${lastName.trim()}`,
+          informantPhone: phone.trim(),
+          quotationDate: await todayForOrg(orgId),
+          vatRate: 0,
+        }, items);
+      }
+    }
+
+    await auditLog(req, "CREATE_ARRANGE_FUNERAL_REQUEST", "Lead", lead.id, null, { lead, quotationId: quote?.id });
+    return res.status(201).json({
+      reference: quote?.quotationNumber ?? lead.id,
+      leadId: lead.id,
+      quotation: quote,
+    });
+  });
+
+  // Live running-total preview as a visitor toggles service selections — no Lead, no Quotation,
+  // nothing persisted. Same "read-only, cheap to call repeatedly" role /api/public/quote plays for
+  // the insurance premium estimate. Call this on every selection change; call
+  // /api/public/funeral-request only once, when they actually submit.
+  app.post("/api/public/funeral-request-estimate", async (req, res) => {
+    const { refCode, requestedAddOnIds } = req.body;
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
+    const orgAddOns = requestedIds.length > 0 ? await storage.getAddOns(orgId) : [];
+    const matchedAddOns = requestedIds
+      .map((id) => orgAddOns.find((a: any) => a.id === id))
+      .filter((a: any): a is NonNullable<typeof a> => !!a && a.isActive !== false);
+    const items = matchedAddOns.map((addOn: any) => {
+      const { amount } = resolveAddOnCashCharge(addOn, { hasPolicy: false, alreadyCoveredByPolicy: false });
+      return { addOnId: addOn.id, name: addOn.name, unitPrice: amount.toFixed(2) };
+    });
+    const total = items.reduce((sum, it) => sum + parseFloat(it.unitPrice), 0);
+    return res.json({ items, total: total.toFixed(2), currency: matchedAddOns[0]?.currency || "USD" });
+  });
+
+  // Fetches a previously-submitted cash-service quotation back — lets DFS show/link to it after
+  // the visitor has moved on from the moment they submitted it, the same "come back to a saved
+  // quote" role GET /api/public/quote/:id plays for insurance quotes. Needs refCode alongside the
+  // id since, unlike insurance quotes, there's no central cross-tenant pointer table for these —
+  // simpler to just resolve org the same way every other public route here already does.
+  app.get("/api/public/funeral-request/:id", async (req, res) => {
+    const refCode = typeof req.query.ref === "string" ? req.query.ref : "";
+    const agent = await storage.getUserByReferralCode(refCode);
+    const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
+    if (!agent || !orgId) return res.status(404).json({ message: "Not found" });
+    const quotation = await storage.getQuotationById(req.params.id as string, orgId);
+    if (!quotation) return res.status(404).json({ message: "Not found" });
+    return res.json(quotation);
   });
 
   // Public, unauthenticated shareable quote — resolves org via the central quote_tokens pointer
@@ -1338,7 +1490,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ranked product recommendation (server/quote-engine.ts) rather than a single plan's price —
   // this is the vCard's "suggest the most appropriate product" flow.
   app.post("/api/public/quote", async (req, res) => {
-    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth, org: bodyOrg } = req.body;
+    const { refCode, productVersionId, currency, paymentSchedule, addOnIds, memberCount, dependentDateOfBirths, policyholderDateOfBirth, coverAmount, dependentCoverAmounts, org: bodyOrg } = req.body;
     if (typeof refCode !== "string" || !refCode.trim()) return res.status(400).json({ message: "refCode is required" });
     const agent = await storage.getUserByReferralCode(refCode.trim());
     const orgId = agent ? await resolveVcardOrgId(agent, bodyOrg ?? req.query.org) : null;
@@ -1380,6 +1532,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       undefined,
       typeof memberCount === "number" ? memberCount : undefined,
       resolvedDobs,
+      undefined,
+      undefined,
+      {
+        policyholderDateOfBirth: typeof policyholderDateOfBirth === "string" ? policyholderDateOfBirth : undefined,
+        policyholderCoverAmount: typeof coverAmount === "number" ? coverAmount : undefined,
+        dependentCoverAmounts: Array.isArray(dependentCoverAmounts) ? dependentCoverAmounts : undefined,
+      },
     );
     return res.json({
       premium,
@@ -1469,11 +1628,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/country-flag-settings", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const before = await storage.getCountryFlagSettings(user.organizationId);
-    const { isEnabled, flagLabel, homeLabel } = req.body;
+    const { isEnabled, flagLabel, homeLabel, homeCountryCode, flagCountryCode } = req.body;
     const data: Record<string, any> = {};
     if (typeof isEnabled === "boolean") data.isEnabled = isEnabled;
     if (typeof flagLabel === "string" && flagLabel.trim()) data.flagLabel = flagLabel.trim();
     if (typeof homeLabel === "string" && homeLabel.trim()) data.homeLabel = homeLabel.trim();
+    // Dial codes: digits only, no "+" — used to normalize local-format phone numbers for SMS/WhatsApp.
+    const cleanDialCode = (v: unknown) => (typeof v === "string" ? v.replace(/\D/g, "") : "");
+    if (cleanDialCode(homeCountryCode)) data.homeCountryCode = cleanDialCode(homeCountryCode);
+    if (cleanDialCode(flagCountryCode)) data.flagCountryCode = cleanDialCode(flagCountryCode);
     const updated = await storage.upsertCountryFlagSettings(user.organizationId, data);
     await auditLog(req, "UPDATE_COUNTRY_FLAG_SETTINGS", "CountryFlagSettings", user.organizationId, before, updated);
     return res.json(updated);
@@ -1867,7 +2030,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       if (user.organizationId) {
         const org = await storage.getOrganization(user.organizationId);
-        return res.json(org ? [org] : []);
+        return res.json(org ? [sanitizeOrgForClient(org)] : []);
       }
       return res.json([]);
     } catch (err: any) {
@@ -1887,8 +2050,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const org = await storage.getOrganization(id);
     if (!org) return res.status(404).json({ message: "Not found" });
     const isPlatformOwner = (user as any).isPlatformOwner ?? (user as any).email?.toLowerCase() === PLATFORM_OWNER_EMAIL.toLowerCase();
-    const { paynowIntegrationKey: _pik, databaseUrl: _du, paynowAuthEmail: _pae, ...safeOrg } = org as any;
-    return res.json(isPlatformOwner ? org : safeOrg);
+    return res.json(isPlatformOwner ? org : sanitizeOrgForClient(org as any));
   });
 
   app.patch("/api/organizations/:id", requireAuth, async (req, res) => {
@@ -1981,14 +2143,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getOrganization(id);
     if (!before) return res.status(404).json({ message: "Not found" });
     if (Object.keys(sanitizedOrg).length === 0 && Object.keys(sanitizedTenant).length === 0) {
-      return res.json(before);
+      return res.json(isPlatformOwner ? before : sanitizeOrgForClient(before as any));
     }
     const updated = Object.keys(sanitizedOrg).length > 0 ? await storage.updateOrganization(id, sanitizedOrg as any) : before;
     if (Object.keys(sanitizedTenant).length > 0) {
       await cpDb.update(cpTenants).set(sanitizedTenant as any).where(eq(cpTenants.id, id));
     }
     await auditLog(req, "UPDATE_ORGANIZATION", "Organization", id, before, { ...updated, ...sanitizedTenant }, id);
-    return res.json({ ...updated, ...sanitizedTenant });
+    const result = { ...updated, ...sanitizedTenant };
+    return res.json(isPlatformOwner ? result : sanitizeOrgForClient(result as any));
   });
 
   /**
@@ -3208,6 +3371,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(updated);
   });
 
+  // ─── Age-band rate cards (individual_age_rated pricing) ──────
+  // The dynamic-pricing engine's rate source (server/route-helpers.ts, computeIndividualAgeRatedPremium):
+  // monthly premium per $1,000 of sum assured, by age band, per product version + currency. Only
+  // meaningful for a product whose pricingModel is "individual_age_rated" — harmless/unused rows
+  // for any "bundled_family" product.
+  app.get("/api/product-versions/:id/age-band-rates", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
+    const user = req.user as any;
+    const pv = await storage.getProductVersion(req.params.id as string, user.organizationId);
+    if (!pv) return res.status(404).json({ message: "Version not found" });
+    return res.json(await storage.getAgeBandRateCards(req.params.id as string, user.organizationId));
+  });
+
+  app.post("/api/product-versions/:id/age-band-rates", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const pv = await storage.getProductVersion(req.params.id as string, user.organizationId);
+    if (!pv) return res.status(404).json({ message: "Version not found" });
+    if (!AGE_BANDS.includes(req.body.ageBand)) {
+      return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
+    }
+    const parsed = insertAgeBandRateCardSchema.parse({
+      ...req.body,
+      productVersionId: req.params.id as string,
+      organizationId: user.organizationId,
+    });
+    const card = await storage.createAgeBandRateCard(parsed);
+    await auditLog(req, "CREATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", card.id, null, card);
+    return res.status(201).json(card);
+  });
+
+  app.patch("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    const updated = await storage.updateAgeBandRateCard(req.params.id as string, req.body, user.organizationId);
+    if (!updated) return res.status(404).json({ message: "Rate card not found" });
+    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, updated);
+    return res.json(updated);
+  });
+
+  app.delete("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
+    const user = req.user as any;
+    await storage.deleteAgeBandRateCard(req.params.id as string, user.organizationId);
+    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, null);
+    return res.status(204).end();
+  });
+
   // ─── Benefits & Add-ons ─────────────────────────────────────
 
   app.get("/api/benefit-catalog", requireAuth, requireTenantScope, requirePermission("read:product"), async (req, res) => {
@@ -3866,7 +4073,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "One or more selected dependents do not belong to this client." });
       }
     }
-    const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
+    const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
       { clientId: policyInsert.clientId, role: "policy_holder" },
     ];
     for (const m of dependentsToAdd) {
@@ -3883,6 +4090,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberAddOns.length > 0
         ? memberAddOns
         : (addOnIds as string[]).map((id: string) => ({ memberRef: "holder", addOnId: id }));
+
+    // individual_age_rated: computePolicyPremium above ran without a policyholder DOB or any
+    // per-member cover amounts (neither was known yet at that point in the request), so its result
+    // is discarded here and replaced with the real breakdown now that memberRows (and each
+    // dependent's real DOB via authorizedDeps) are finalized — same "compute early, override once
+    // more context exists" pattern already used for isCustomPremiumProduct above.
+    let ageRatedMembers: Awaited<ReturnType<typeof computeIndividualAgeRatedPremium>>["members"] | null = null;
+    if (issuedProduct?.pricingModel === "individual_age_rated") {
+      const requestedMemberCoverByDependentId = new Map<string, number>();
+      for (const m of dependentsToAdd) {
+        if (m.dependentId && typeof (m as any).coverAmount === "number") requestedMemberCoverByDependentId.set(m.dependentId, (m as any).coverAmount);
+      }
+      const dependentsForRating = memberRows.slice(1).map((mr) => ({
+        dateOfBirth: authorizedDeps.find((d: any) => d.id === mr.dependentId)?.dateOfBirth ?? null,
+        coverAmount: mr.dependentId ? requestedMemberCoverByDependentId.get(mr.dependentId) : undefined,
+      }));
+      const policyholderCoverInput = typeof req.body.coverAmount === "number" ? req.body.coverAmount : undefined;
+      const defaultCover = issuedProduct.coverAmount != null ? parseFloat(String(issuedProduct.coverAmount)) : 0;
+      const effectivePolicyholderCover = policyholderCoverInput ?? defaultCover;
+      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount > effectivePolicyholderCover);
+      if (overCap) {
+        return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount (${policyInsert.currency || "USD"} ${effectivePolicyholderCover}).` });
+      }
+      const breakdown = await computeIndividualAgeRatedPremium(
+        user.organizationId, productVersion.id, issuedProduct, policyInsert.currency || "USD", policyInsert.paymentSchedule || "monthly",
+        Number((productVersion as any).dependentMaxAge ?? 20),
+        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput },
+        dependentsForRating,
+      );
+      policyInsert.premiumAmount = breakdown.total.toFixed(2);
+      ageRatedMembers = breakdown.members;
+      memberRows.forEach((mr, i) => {
+        mr.coverAmount = ageRatedMembers?.[i]?.coverAmount;
+        mr.premiumContribution = ageRatedMembers?.[i]?.contribution;
+      });
+    }
 
     const { policy } = await storage.createPolicyWithInitialSetup(user.organizationId, {
       policy: policyInsert,
@@ -4374,6 +4617,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await txDb.insert(policyStatusHistory).values({
         policyId: policy.id, fromStatus: policy.status, toStatus, reason, changedBy: effectiveUserId,
       });
+      // Cancelling a policy auto-archives it in the same transaction so it stops attracting the
+      // full per-policy platform fee. It can still be revived later (archived → active).
+      if (toStatus === "cancelled") {
+        const [archivedRow] = await txDb.update(policies).set({ status: "archived" })
+          .where(and(eq(policies.id, policy.id), eq(policies.organizationId, user.organizationId)))
+          .returning();
+        await txDb.insert(policyStatusHistory).values({
+          policyId: policy.id, fromStatus: "cancelled", toStatus: "archived", changedBy: effectiveUserId,
+          reason: "Auto-archived on cancellation",
+        });
+        return archivedRow;
+      }
       return row;
     });
 
@@ -4834,21 +5089,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const pv = await storage.getProductVersion(pvId, user.organizationId);
     if (!pv) return res.status(404).json({ message: "Product version not found" });
 
+    // Batched (preloads members/dependents/add-ons/products org-wide once, then computes each
+    // policy's premium in-memory and writes drifted rows in bounded chunks of 5) instead of the
+    // old per-policy loop, which issued ~6 sequential DB round trips per policy — a product
+    // version with hundreds/thousands of policies could exceed the tenant DB pool's connection
+    // cap on a single request (same class of bug as GET /api/policies before its 2026-08-04 fix
+    // — see docs/BUGFIX-LOG.md — this admin endpoint had never been switched over).
     const allPolicies = await storage.getPoliciesByProductVersion(pvId, user.organizationId);
+    const activePolicies = allPolicies.filter((p: any) => p.status !== "cancelled");
+    const recalced = await batchRecalculatePolicyPremiums(activePolicies, user.organizationId);
     let updated = 0;
-    let skipped = 0;
-    for (const p of allPolicies) {
-      if (p.status === "cancelled") continue;
-      try {
-        const before = parseFloat(String(p.premiumAmount ?? "0"));
-        const recalced = await recalculatePolicyPremiumIfNeeded(p, user.organizationId);
-        const after = parseFloat(String(recalced?.premiumAmount ?? before));
-        if (Math.abs(after - before) >= 0.01) updated++;
-      } catch (err: any) {
-        skipped++;
-        structuredLog("warn", "recalculate-premiums: skipped policy", { policyId: p.id, error: err?.message });
-      }
+    for (let i = 0; i < activePolicies.length; i++) {
+      const before = parseFloat(String(activePolicies[i].premiumAmount ?? "0"));
+      const after = parseFloat(String(recalced[i]?.premiumAmount ?? before));
+      if (Math.abs(after - before) >= 0.01) updated++;
     }
+    const skipped = allPolicies.length - activePolicies.length;
     await auditLog(req, "BATCH_RECALCULATE_PREMIUMS", "ProductVersion", pvId, null, { pvId, total: allPolicies.length, updated, skipped });
     return res.json({ total: allPolicies.length, updated, skipped });
   });
@@ -5373,6 +5629,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(410).json({ message: "This payment link has expired." });
     }
     if (link.status !== "active") return res.status(410).json({ message: "This payment link is no longer usable." });
+    // A staff-created link already has a method chosen up front; a link auto-created at
+    // self-registration (see handlePublicPolicyRegistration) leaves it null until the payer
+    // picks one here. A body-supplied method only overrides when the link itself has none —
+    // a staff-picked method on an existing link is never silently changed by the payer's request.
+    let method = link.method;
+    if (!method) {
+      if (typeof req.body.method !== "string" || !PAYMENT_LINK_METHODS.has(req.body.method)) {
+        return res.status(400).json({ message: "A payment method is required." });
+      }
+      method = req.body.method as string;
+      await storage.updatePaymentLink(link.id, { method }, orgId);
+    }
     try {
       let intentId = link.paymentIntentId;
       // If a prior attempt on this link ended terminally (client cancelled the PIN prompt,
@@ -5409,7 +5677,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await initiatePaynowPayment({
         intentId,
         organizationId: orgId,
-        method: link.method,
+        method,
         payerPhone: link.payerPhone || undefined,
         actorType: "client",
       });
@@ -6006,6 +6274,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // batches credit later, per-policy, at approval time (POST /api/payment-receipts/:id/approve)
       // since each pending receipt in a backdated batch is approved individually.
       try {
+        // createdBy FKs users.id in the tenant DB — a platform owner's registry id isn't there
+        // until mirrored, so resolve it (else the ledger credit silently fails and the group
+        // balance never moves — exactly what the prod logs showed for Falakhe).
+        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
         await storage.createGroupLedgerEntry({
           organizationId: user.organizationId,
           groupId,
@@ -6015,7 +6287,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           description: `Group receipt ${groupRef}`,
           referenceType: "payment_receipt",
           referenceId: results[0]?.id,
-          createdBy: user.id,
+          createdBy: ledgerCreatedBy,
         });
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (group receipt)", { groupId, groupRef, error: err?.message });
@@ -6384,6 +6656,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       apiTokenChanged: !!patch.apiToken,
     });
     return res.json({ ok: true });
+  });
+
+  // Diagnostic: the public IPv4 address the server sends from — the exact IP an SMS provider's
+  // allowlist must contain. Answers "which IP did SMSala see?" without another round of guessing.
+  app.get("/api/sms-config/egress-ip", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (_req, res) => {
+    const { ipv4Dispatcher } = await import("./phone");
+    const out: Record<string, string> = {};
+    for (const url of ["https://api.ipify.org", "https://ifconfig.me/ip"]) {
+      try {
+        const r = await fetch(url, { dispatcher: ipv4Dispatcher, signal: AbortSignal.timeout(8000) } as any);
+        out[new URL(url).host] = (await r.text()).trim();
+      } catch (e: any) {
+        out[new URL(url).host] = `error: ${e?.message || "failed"}`;
+      }
+    }
+    return res.json(out);
+  });
+
+  // Send a one-off test SMS through the tenant's own SMS config, from the server (so it exercises
+  // the real provider path and the app's egress IP — not the operator's browser). Rate-limited to
+  // avoid it being used as a free SMS relay.
+  app.post("/api/sms-config/test", requireAuth, requireTenantScope, requirePermission("manage:settings"), smsTestLimiter, async (req, res) => {
+    const user = req.user as any;
+    const rawTo = typeof req.body?.to === "string" ? req.body.to.trim() : "";
+    if (!rawTo || rawTo.replace(/\D/g, "").length < 8) {
+      return res.status(400).json({ ok: false, message: "Enter a valid phone number to send the test to." });
+    }
+    const { sendSms } = await import("./sms-service");
+    const org = await storage.getOrganization(user.organizationId);
+    const cf = await storage.getCountryFlagSettings(user.organizationId);
+    const result = await sendSms(user.organizationId, {
+      to: rawTo,
+      message: `${org?.name || "POL263"}: this is a test message confirming SMS is working. No action needed.`,
+      kind: "transactional",
+      countryCode: cf.homeCountryCode,
+    });
+    await auditLog(req, "SEND_TEST_SMS", "Organization", user.organizationId, null, {
+      to: rawTo.replace(/\d(?=\d{3})/g, "•"), ok: result.ok,
+    });
+    // Always 200 — a provider rejection ("Ip Address Not Allowed", "Insufficient Credit", …) is a
+    // normal outcome the client must see, not a server error. Returning 5xx here makes the DO
+    // ingress swap our JSON body for a generic 502 page, hiding the real reason. The `ok` field
+    // carries success/failure.
+    return res.json(result);
   });
 
   app.post("/api/apply-credit-balances", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
@@ -8424,6 +8740,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const result = await sendEmail({
       to: recipientEmail,
+      ...(await resolveTenantEmailOverrides(user.organizationId, org)),
       fromName: orgName,
       subject: `Your Insurance Quote from ${orgName}`,
       text: [
@@ -10388,6 +10705,50 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(charge);
   });
 
+  // Charges a benefit from the add-ons catalogue (add_ons.coverIncrementAmount) at bereavement or
+  // for a walk-in cash quote — the same per-item cash value that raises sum assured/premium when
+  // selected at join/quote time. Free if the case's policy already has it attached, 10% off if
+  // the case has a policy but this benefit wasn't part of it, full price for a case with no
+  // policy at all. See resolveAddOnCashCharge (server/route-helpers.ts).
+  app.post("/api/funeral-cases/:id/service-charges-from-addon", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
+    const user = req.user as any;
+    const funeralCaseId = req.params.id as string;
+    const caseRow = await storage.getFuneralCase(funeralCaseId, user.organizationId);
+    if (!caseRow) return res.status(404).json({ message: "Funeral case not found" });
+    const addOnId = typeof req.body.addOnId === "string" ? req.body.addOnId : "";
+    if (!addOnId) return res.status(400).json({ message: "addOnId is required" });
+    const orgAddOns = await storage.getAddOns(user.organizationId);
+    const addOn = orgAddOns.find((a: any) => a.id === addOnId);
+    if (!addOn || addOn.isActive === false) return res.status(400).json({ message: "Add-on not found or inactive" });
+    const quantity = req.body.quantity !== undefined ? parseFloat(String(req.body.quantity)) : 1;
+    if (!Number.isFinite(quantity) || quantity <= 0) return res.status(400).json({ message: "quantity must be a positive number" });
+
+    const hasPolicy = !!caseRow.policyId;
+    let alreadyCoveredByPolicy = false;
+    if (hasPolicy) {
+      const policyAddOns = await storage.getPolicyAddOns(caseRow.policyId as string, user.organizationId);
+      alreadyCoveredByPolicy = policyAddOns.some((pa: any) => pa.addOnId === addOnId);
+    }
+    const { amount, note } = resolveAddOnCashCharge(addOn, { hasPolicy, alreadyCoveredByPolicy, quantity });
+    const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    const parsed = insertCaseServiceChargeSchema.parse({
+      organizationId: user.organizationId,
+      funeralCaseId,
+      addOnId: addOn.id,
+      serviceKey: addOn.id,
+      name: addOn.name,
+      quantity: quantity.toFixed(2),
+      computedAmount: amount.toFixed(2),
+      currency: addOn.currency || "USD",
+      status: amount > 0 ? "unpaid" : "paid",
+      notes: [note, typeof req.body.notes === "string" && req.body.notes.trim() ? req.body.notes.trim() : null].filter(Boolean).join(" "),
+      createdByUserId: effectiveUserId,
+    });
+    const charge = await storage.createCaseServiceCharge(parsed);
+    await auditLog(req, "CREATE_CASE_SERVICE_CHARGE", "CaseServiceCharge", charge.id, null, charge);
+    return res.status(201).json(charge);
+  });
+
   app.post("/api/case-service-charges/:id/payment", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const id = req.params.id as string;
@@ -11357,12 +11718,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       versions: (versionsByProduct[p.id] || []).filter((v) => v.isActive !== false),
     }));
     const branches = await storage.getBranchesByOrg(orgId);
+    const orgAddOns = await storage.getAddOns(orgId);
     return res.json({
       agentName: agent.displayName || agent.email,
       referralCode: ref,
       products: withVersions,
       branches: branches.filter((b) => b.isActive),
       nationalIdFormat: await resolveOrgNationalIdFormat(orgId),
+      // The real add-ons catalogue (id, name, description, category, cash value) — what
+      // getServiceCatalogue() in pol263.ts was waiting on ("pending an add_ons schema
+      // extension"). Send an add-on's id back as requestedAddOnIds on /api/public/quote,
+      // /api/public/register-policy, /api/public/funeral-request(-estimate).
+      addOns: orgAddOns.filter((a: any) => a.isActive).map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        category: a.category,
+        pricingMode: a.pricingMode,
+        cashValue: a.coverIncrementAmount,
+      })),
     });
   });
 
@@ -11385,7 +11759,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // for a shared-DB org — same pattern used everywhere else a cross-context user id becomes a
     // tenant-DB foreign key (see feedback_debugging_patterns memory: this exact bug class).
     if (agentId) agentId = await resolveOrSyncTenantUserId(orgId, agentId);
-    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt } = req.body;
+    const { firstName, lastName, email, phone, dateOfBirth, nationalId, productVersionId, currency, paymentSchedule, paymentMethod: rawPaymentMethod, dependents: rawDeps, beneficiary: rawBeneficiary, consentedAt: rawConsentedAt, coverAmount: policyholderCoverInput, addOnIds: rawAddOnIds, memberAddOns: rawMemberAddOns } = req.body;
+    // "holder" resolves to the policyholder; a dependent-scoped entry's memberRef is "dependent:<i>"
+    // where <i> is that dependent's position in the `dependents` array on this same request — a
+    // dependent has no id yet when the request arrives, unlike the internal "Issue New Policy"
+    // route (POST /api/policies), which addresses existing dependents by their real id.
+    const requestedAddOnIds: string[] = Array.isArray(rawAddOnIds) ? rawAddOnIds : [];
+    const requestedMemberAddOns: { memberRef: string; addOnId: string }[] = Array.isArray(rawMemberAddOns) ? rawMemberAddOns : [];
     const nationalIdNorm = normalizeNationalId(nationalId)!;
     // Best-effort — a missing/malformed value just means consent wasn't recorded, not a
     // registration failure (older clients calling this endpoint, e.g. agent-app, won't send it).
@@ -11439,7 +11819,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const publicRegNationalIdFormat = await resolveOrgNationalIdFormat(orgId);
       const depsList = Array.isArray(rawDeps) ? rawDeps : [];
       const createdDeps: Awaited<ReturnType<typeof storage.createDependent>>[] = [];
-      for (const d of depsList) {
+      // Aligned 1:1 with createdDeps (pushed in the same iteration a dependent is actually
+      // created) — individual_age_rated only; unused/ignored for bundled_family products.
+      const createdDepCoverAmounts: (number | undefined)[] = [];
+      // Maps a dependent's original position in `depsList` to its final index in createdDeps
+      // (they can diverge — an invalid dependent in depsList is silently skipped), so
+      // "dependent:<original index>" memberAddOns can still be resolved after the fact.
+      const originalIndexToCreatedIndex = new Map<number, number>();
+      // Surfaced in the 201 response's `warnings` array — a dependent/beneficiary silently
+      // dropped with no way for the caller to detect it from the response was a real bug, not
+      // just a documentation gap (see the dob/gender comment below for the exact failure mode
+      // this bit us with before). Still doesn't reject the whole request: an unrelated bad
+      // dependent shouldn't block the policy the caller actually cares about, but the caller now
+      // has a way to know something was dropped and why.
+      const warnings: string[] = [];
+      for (let originalIndex = 0; originalIndex < depsList.length; originalIndex++) {
+        const d = depsList[originalIndex];
         const dFirst = toUpperTrim(d.firstName, false);
         const dLast = toUpperTrim(d.lastName, false);
         const dRel = toUpperTrim(d.relationship, false);
@@ -11452,8 +11847,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // submitted through this form: the public registration UI (client/src/pages/join/
         // register.tsx) never even collects gender, so every dependent failed this check with
         // no error shown to the registrant. Only name + relationship are genuinely required.
-        if (!dFirst || !dLast || !dRel) continue;
-        if (dNationalId && !isValidNationalId(dNationalId, publicRegNationalIdFormat)) continue;
+        if (!dFirst || !dLast || !dRel) {
+          warnings.push(`Dependent ${originalIndex + 1} skipped: firstName, lastName, and relationship are required.`);
+          continue;
+        }
+        if (dNationalId && !isValidNationalId(dNationalId, publicRegNationalIdFormat)) {
+          warnings.push(`Dependent ${originalIndex + 1} (${dFirst} ${dLast}) skipped: national ID ${nationalIdFormatHint(publicRegNationalIdFormat)}.`);
+          continue;
+        }
         createdDeps.push(await storage.createDependent({
           organizationId: orgId,
           clientId: client.id,
@@ -11464,16 +11865,106 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           nationalId: dNationalId || null,
           gender: dGender,
         }));
+        createdDepCoverAmounts.push(typeof d.coverAmount === "number" ? d.coverAmount : undefined);
+        originalIndexToCreatedIndex.set(originalIndex, createdDeps.length - 1);
       }
-      const premium = await computePolicyPremium(
-        orgId, productVersionId, currency || "USD", paymentSchedule || "monthly",
-        [], [], undefined, createdDeps.map((d) => d.dateOfBirth || null),
-      );
-      let ben = rawBeneficiary && rawBeneficiary.firstName && rawBeneficiary.lastName ? rawBeneficiary : null;
+
+      // Resolves every requested add-on to a real org add-on row, validating it's active. For
+      // individual_age_rated products, only pricingMode "cover_topup" is meaningful (there's no
+      // flat/percentage concept in per-life age-rated pricing) — anything else is rejected rather
+      // than silently ignored, so a misconfigured request fails loudly instead of quietly
+      // under-pricing the policy.
+      const orgAddOnsForRequest = requestedAddOnIds.length + requestedMemberAddOns.length > 0
+        ? await storage.getAddOns(orgId)
+        : [];
+      const addOnById = new Map(orgAddOnsForRequest.map((a: any) => [a.id, a]));
+      // "holder" or "dependent:<i>" -> resolved memberAddOns entry for createPolicyWithInitialSetup
+      // (memberRef there means "holder" or a real dependentId, both of which are available now).
+      const resolvedMemberAddOns: { memberRef: string; addOnId: string }[] = [];
+      const policyholderCoverTopups: number[] = [];
+      const dependentCoverTopups = new Map<number, number>(); // createdDeps index -> summed topup
+
+      const allRequested: { memberRef: string; addOnId: string }[] = [
+        ...requestedAddOnIds.map((addOnId) => ({ memberRef: "holder", addOnId })),
+        ...requestedMemberAddOns,
+      ];
+      for (const entry of allRequested) {
+        const addOn = addOnById.get(entry.addOnId);
+        if (!addOn || addOn.isActive === false) {
+          res.status(400).json({ message: `Add-on ${entry.addOnId} is invalid or inactive.` });
+          return;
+        }
+        if (product.pricingModel === "individual_age_rated" && addOn.pricingMode !== "cover_topup") {
+          res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` });
+          return;
+        }
+        const increment = parseFloat(String(addOn.coverIncrementAmount ?? 0));
+        if (entry.memberRef === "holder") {
+          policyholderCoverTopups.push(increment);
+          resolvedMemberAddOns.push({ memberRef: "holder", addOnId: entry.addOnId });
+        } else if (entry.memberRef.startsWith("dependent:")) {
+          const originalIndex = Number(entry.memberRef.slice("dependent:".length));
+          const createdIndex = originalIndexToCreatedIndex.get(originalIndex);
+          if (createdIndex === undefined) {
+            res.status(400).json({ message: `Add-on ${entry.addOnId} references a dependent that was not created.` });
+            return;
+          }
+          dependentCoverTopups.set(createdIndex, (dependentCoverTopups.get(createdIndex) ?? 0) + increment);
+          resolvedMemberAddOns.push({ memberRef: createdDeps[createdIndex].id, addOnId: entry.addOnId });
+        } else {
+          res.status(400).json({ message: `Unrecognized memberRef "${entry.memberRef}" — use "holder" or "dependent:<index>".` });
+          return;
+        }
+      }
+      const policyholderCoverTopup = policyholderCoverTopups.reduce((a, b) => a + b, 0);
+
+      let premium: string;
+      let ageRatedMembers: Awaited<ReturnType<typeof computeIndividualAgeRatedPremium>>["members"] | null = null;
+      if (product.pricingModel === "individual_age_rated") {
+        const defaultCover = product.coverAmount != null ? parseFloat(String(product.coverAmount)) : 0;
+        const effectivePolicyholderCover = (typeof policyholderCoverInput === "number" ? policyholderCoverInput : defaultCover) + policyholderCoverTopup;
+        for (let i = 0; i < createdDepCoverAmounts.length; i++) {
+          const dc = createdDepCoverAmounts[i];
+          const depTopup = dependentCoverTopups.get(i) ?? 0;
+          if (dc != null && dc + depTopup > effectivePolicyholderCover) {
+            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount (${currency || "USD"} ${effectivePolicyholderCover}).` });
+            return;
+          }
+        }
+        const breakdown = await computeIndividualAgeRatedPremium(
+          orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
+          Number(pv.dependentMaxAge ?? 20),
+          {
+            dateOfBirth,
+            coverAmount: typeof policyholderCoverInput === "number" ? policyholderCoverInput : undefined,
+            coverTopup: policyholderCoverTopup || undefined,
+          },
+          createdDeps.map((d, i) => ({
+            dateOfBirth: d.dateOfBirth,
+            coverAmount: createdDepCoverAmounts[i],
+            coverTopup: dependentCoverTopups.get(i),
+          })),
+        );
+        premium = breakdown.total.toFixed(2);
+        ageRatedMembers = breakdown.members;
+      } else {
+        premium = await computePolicyPremium(
+          orgId, productVersionId, currency || "USD", paymentSchedule || "monthly",
+          requestedAddOnIds, resolvedMemberAddOns.length > 0 ? resolvedMemberAddOns : undefined,
+          undefined, createdDeps.map((d) => d.dateOfBirth || null),
+        );
+      }
+      const beneficiaryWasProvided = rawBeneficiary && typeof rawBeneficiary === "object" && Object.keys(rawBeneficiary).length > 0;
+      let ben = beneficiaryWasProvided ? rawBeneficiary : null;
       if (ben) {
         const bf = toUpperTrim(ben.firstName, false); const bl = toUpperTrim(ben.lastName, false);
         const br = toUpperTrim(ben.relationship, false); const bn = ben.nationalId ? normalizeNationalId(ben.nationalId) : null;
         const bp = toUpperTrim(ben.phone, false);
+        if (!bf || !bl) warnings.push("Beneficiary skipped: firstName and lastName are required.");
+        else if (!br) warnings.push("Beneficiary skipped: relationship is required.");
+        else if (!ben.nationalId || !bn) warnings.push("Beneficiary skipped: nationalId is required.");
+        else if (!isValidNationalId(ben.nationalId, publicRegNationalIdFormat)) warnings.push(`Beneficiary skipped: national ID ${nationalIdFormatHint(publicRegNationalIdFormat)}.`);
+        else if (!bp) warnings.push("Beneficiary skipped: phone is required.");
         if (!bf || !bl || !br || !bn || !bp || !isValidNationalId(ben.nationalId, publicRegNationalIdFormat)) ben = null;
         else ben = { firstName: bf, lastName: bl, relationship: br, nationalId: bn, phone: bp };
       }
@@ -11495,9 +11986,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
         return;
       }
-      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string }> = [
-        { clientId: client.id, role: "policy_holder" },
-        ...createdDeps.map((dep) => ({ dependentId: dep.id, role: "dependent" as const })),
+      const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
+        { clientId: client.id, role: "policy_holder", coverAmount: ageRatedMembers?.[0]?.coverAmount, premiumContribution: ageRatedMembers?.[0]?.contribution },
+        ...createdDeps.map((dep, i) => ({
+          dependentId: dep.id, role: "dependent" as const,
+          coverAmount: ageRatedMembers?.[i + 1]?.coverAmount, premiumContribution: ageRatedMembers?.[i + 1]?.contribution,
+        })),
       ];
       const { policy } = await storage.createPolicyWithInitialSetup(orgId, {
         policy: policyParsed,
@@ -11506,7 +12000,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           reason: agentId ? "Registered via agent link" : "Walk-in self-registration",
           changedBy: null,
         },
-        members: memberRows, memberAddOns: [],
+        members: memberRows, memberAddOns: resolvedMemberAddOns,
       });
       await storage.createAuditLog({
         organizationId: orgId,
@@ -11537,8 +12031,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         activationCode: client.activationCode || undefined,
         policyId: policy.id,
       }).catch(() => {});
+      // Lets a referral-driven registration (e.g. a tenant's own marketing site) send the client
+      // straight to a public, no-login payment step — the exact same token-based flow already
+      // used for SMS payment links (GET/POST /api/pay/:token*) — instead of requiring account
+      // claim + login first. Skipped for a pure walk-in (agentId null): payment_links.
+      // createdByUserId is a real, NOT NULL user FK, and a walk-in has no referring agent to
+      // attribute it to; staff can still create one manually via POST /api/policies/:id/payment-links.
+      // The policy is already committed at this point — a failure creating the payment link must
+      // never turn an already-successful registration into an error response to the client (who
+      // would otherwise see a 500 for something that actually worked, and might retry into the
+      // "duplicate policy" 400 below on a second attempt). Best-effort: log and return null.
+      let paymentLink: { token: string; expiresAt: Date; url: string | null } | null = null;
+      if (agentId && parseFloat(policy.premiumAmount) > 0) {
+        try {
+          const link = await storage.createPaymentLink({
+            organizationId: orgId,
+            policyId: policy.id,
+            clientId: client.id,
+            token: crypto.randomBytes(24).toString("base64url"),
+            amount: policy.premiumAmount,
+            currency: policy.currency,
+            payerPhone: client.phone || null,
+            status: "active",
+            createdByUserId: agentId,
+            expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+          } as any);
+          // Convenience for a tenant with no frontend of its own for this step — the token alone
+          // resolves the org (loadPublicPaymentLink), so this page works from any hostname
+          // regardless of which tenant it belongs to. A caller building its own payment UI
+          // (e.g. against a custom domain) can ignore this and use just the token.
+          const appBase = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+          paymentLink = { token: link.token, expiresAt: link.expiresAt, url: appBase ? `${appBase}/pay/policy/${link.token}` : null };
+        } catch (err: any) {
+          structuredLog("error", "Auto payment-link creation failed after policy registration", { error: err?.message, policyId: policy.id, orgId });
+        }
+      }
       res.status(201).json({
         policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
+        paymentLink,
+        warnings,
         message: agentId
           ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
           : "Policy registered. Use your policy number and activation code to claim your account.",
@@ -11557,6 +12088,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!lastName) missingFields.push("lastName");
     if (!productVersionId) missingFields.push("productVersionId");
     if (missingFields.length > 0) return res.status(400).json({ message: `Missing required fields: ${missingFields.join(", ")}` });
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return res.status(400).json({ message: turnstile.reason });
     const agent = await storage.getUserByReferralCode(referralCode);
     if (!agent) return res.status(400).json({ message: "Invalid referral code" });
     const orgId = await resolveVcardOrgId(agent, req.body.org ?? req.query.org);
@@ -11782,15 +12315,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!addOn) return res.status(404).json({ message: "Add-on not found" });
     const policiesList = await storage.getPoliciesByGroupId(user.organizationId, groupId);
     const tdb = await getDbForOrg(user.organizationId);
+    // One multi-row INSERT instead of one round trip per policy — a 300-member society's "apply
+    // add-on to whole group" click was previously fully sequential (300 serial round trips).
     let applied = 0;
-    for (const p of policiesList) {
+    if (policiesList.length > 0) {
+      const valueRows = sql.join(policiesList.map((p) => sql`(${p.id}, ${addOnId})`), sql`, `);
       const result = await tdb.execute(sql`
         INSERT INTO policy_add_ons (policy_id, add_on_id)
-        VALUES (${p.id}, ${addOnId})
+        VALUES ${valueRows}
         ON CONFLICT (policy_id, add_on_id) WHERE policy_member_id IS NULL DO NOTHING
         RETURNING id
       `);
-      if ((result.rows ?? result).length > 0) applied++;
+      applied = (result.rows ?? result).length;
     }
     await auditLog(req, "BULK_APPLY_GROUP_ADDON", "Group", groupId, null, { addOnId, addOnName: addOn.name, applied, totalPolicies: policiesList.length });
     return res.json({ applied, totalPolicies: policiesList.length, alreadyHadIt: policiesList.length - applied });
@@ -11985,6 +12521,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const seenInFile = new Set<string>();
       const validRows: any[] = [];
       const errorReport: { rowIndex: number; field: string; message: string }[] = [];
+      // createdByUserId is NOT NULL and FK'd to this org's own users table — must resolve to a
+      // tenant-local id (mirrors the caller in) for orgs on a dedicated database.
+      const createdByUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
 
       cached.rows.forEach((rawRow, idx) => {
         const result = transformAndValidateRow("group_ledger_entry", rawRow, idx, columnMapping);
@@ -12014,7 +12553,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         errorRows: errorReport.length,
         previewSnapshot: validRows,
         errorReport,
-        createdByUserId: user.id,
+        createdByUserId,
       });
 
       return res.status(201).json({ batchId: batch.id, totalRows: batch.totalRows, successRows: batch.successRows, errorRows: batch.errorRows, sampleErrors: errorReport.slice(0, 50) });
@@ -12040,7 +12579,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (batch.status !== "previewed") return res.status(400).json({ message: `Batch is already ${batch.status}` });
       if (batch.successRows === 0) return res.status(400).json({ message: "No valid rows to import" });
 
-      const result = await storage.commitImportBatch(user.organizationId, batchId, { userId: user.id });
+      const commitUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const result = await storage.commitImportBatch(user.organizationId, batchId, { userId: commitUserId });
       await auditLog(req, "bulk_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, result);
       return res.json(result);
     } catch (err: any) {
@@ -12058,7 +12598,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!batch || batch.entityType !== "group_ledger_entry") return res.status(404).json({ message: "Import batch not found" });
       if (batch.status !== "committed") return res.status(400).json({ message: `Batch is ${batch.status}, not committed — nothing to roll back.` });
 
-      const result = await storage.rollbackImportBatch(user.organizationId, batchId, { userId: user.id });
+      const rollbackUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const result = await storage.rollbackImportBatch(user.organizationId, batchId, { userId: rollbackUserId });
       if (!result.ok) return res.status(409).json({ message: result.reason });
 
       await auditLog(req, "rollback_import", AUDIT_ENTITY_TYPE_LABEL.group_ledger_entry, batchId, null, { rolledBack: true });
@@ -12281,6 +12822,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       try {
+        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
         await storage.createGroupLedgerEntry({
           organizationId: user.organizationId,
           groupId,
@@ -12290,7 +12832,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           description: `Legacy group receipt ${receiptNumber}`,
           referenceType: "legacy_group_receipt",
           referenceId: created.id as string,
-          createdBy: user.id,
+          createdBy: ledgerCreatedBy,
         });
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (legacy group receipt)", { groupId, error: err?.message });
@@ -12922,6 +13464,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   registerFinanceFormRoutes(app);
   registerPlatformRoutes(app);
   registerPlatformBillingRoutes(app);
+  (await import("./access-profile-routes")).registerAccessProfileRoutes(app);
   registerBillingPublicRoutes(app);
   registerTenantSignupPublicRoutes(app);
   registerInboundEmailPublicRoutes(app);
@@ -12932,9 +13475,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/billing/subscription", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const orgId = (req.user as any).organizationId as string;
     const [subscription] = await cpDb.select().from(tenantSubscriptions).where(eq(tenantSubscriptions.tenantId, orgId)).limit(1);
-    if (!subscription) return res.json({ subscription: null, plan: null });
+    if (!subscription) return res.json({ subscription: null, plan: null, effectivePricing: null });
     const [plan] = await cpDb.select().from(billingPlans).where(eq(billingPlans.id, subscription.planId)).limit(1);
-    return res.json({ subscription, plan: plan || null });
+
+    let effectivePricing = null;
+    if (plan) {
+      try {
+        const { resolveEffectivePricing } = await import("./billing-model-math");
+        const { getTenantModuleSet } = await import("./module-gate");
+        const { billingFeatures, billingSettings } = await import("@shared/control-plane-schema");
+        const [moduleSet, allFeatures, settingsRow] = await Promise.all([
+          getTenantModuleSet(orgId),
+          cpDb.select().from(billingFeatures).where(eq(billingFeatures.isActive, true)),
+          cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1),
+        ]);
+        const s = settingsRow[0];
+        effectivePricing = resolveEffectivePricing(
+          plan,
+          allFeatures.filter((f) => moduleSet.has(f.key)),
+          subscription,
+          {
+            platformFeeRatePercent: s?.platformFeeRatePercent ?? null,
+            defaultMonthlyMinimumUsd: s?.defaultMonthlyMinimumUsd ?? null,
+            defaultOutstandingFeeCapUsd: s?.defaultOutstandingFeeCapUsd ?? null,
+          },
+        );
+      } catch (err: any) {
+        structuredLog("error", "tenant billing effective-pricing failed", { orgId, error: err?.message });
+      }
+    }
+    return res.json({ subscription, plan: plan || null, effectivePricing });
   });
 
   app.get("/api/billing/invoices", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
@@ -13354,9 +13924,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
+  // This route serves report types spanning several permission domains behind one handler —
+  // the base `read:policy` guard above only covers the policy-shaped report types. Anything
+  // exposing finance/payroll/commission data must be additionally checked here against the
+  // same permission its own dedicated endpoint requires (e.g. GET /api/payments needs
+  // read:finance, GET /api/payroll/employees needs read:payroll) — otherwise a role with only
+  // read:policy (e.g. "staff", "agent") could export data none of its other endpoints expose.
+  const REPORT_EXPORT_EXTRA_PERMISSION: Record<string, string> = {
+    finance: "read:finance",
+    "underwriter-payable": "read:finance",
+    expenditures: "read:finance",
+    platform: "read:finance",
+    payments: "read:finance",
+    cashups: "read:finance",
+    receipts: "read:finance",
+    payroll: "read:payroll",
+    commissions: "read:commission",
+    "commission-payments": "read:commission",
+  };
+
   app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
+    const requiredExtraPermission = REPORT_EXPORT_EXTRA_PERMISSION[reportType];
+    if (requiredExtraPermission) {
+      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      if (!perms.includes(requiredExtraPermission)) {
+        return res.status(403).json({ message: "Insufficient permissions for this report type" });
+      }
+    }
     const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
     const CURRENCIES = ["USD", "ZAR", "ZIG"] as const;

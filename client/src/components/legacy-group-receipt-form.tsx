@@ -19,7 +19,7 @@ interface MemberRow {
  * Receipt tab (both previously had independent, byte-identical copies of this form hitting the
  * same POST /api/groups/legacy-receipts endpoint).
  */
-export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string; onSuccess: (receipt: any) => void }) {
+export function LegacyGroupReceiptForm({ groupId, onSuccess, intro }: { groupId: string; onSuccess: (receipt: any) => void; intro?: string }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   // Defensive: guarantees unique ids even if this ever renders more than once on the same page
@@ -70,8 +70,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess }: { groupId: string
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        This group has no member policies yet. Record the lump-sum payment here — it will appear in financials
-        immediately. Once members are added and given policies, future payments use the member-selection form below.
+        {intro ?? "This group has no member policies yet. Record the lump-sum payment here — it will appear in financials immediately. Once members are added and given policies, future payments use the member-selection form below."}
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-md">
         <div>

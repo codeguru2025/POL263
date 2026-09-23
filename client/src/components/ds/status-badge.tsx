@@ -6,12 +6,13 @@ import {
   Ban,
   XCircle,
   AlertTriangle,
+  Archive,
   Loader2,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
 
-export type PolicyStatusKey = "inactive" | "active" | "grace" | "lapsed" | "cancelled" | "removed" | string;
+export type PolicyStatusKey = "inactive" | "active" | "grace" | "lapsed" | "cancelled" | "archived" | "removed" | string;
 
 const POLICY: Record<string, { label: string; className: string; Icon: LucideIcon }> = {
   inactive: { label: "Inactive", className: "bg-sky-500/12 text-sky-800 border-sky-200/80 dark:text-sky-200", Icon: CircleDot },
@@ -19,6 +20,7 @@ const POLICY: Record<string, { label: string; className: string; Icon: LucideIco
   grace: { label: "Grace", className: "bg-amber-500/12 text-amber-900 border-amber-200/80 dark:text-amber-100", Icon: Clock },
   lapsed: { label: "Lapsed", className: "bg-rose-500/12 text-rose-900 border-rose-200/80 dark:text-rose-100", Icon: XCircle },
   cancelled: { label: "Cancelled", className: "bg-slate-500/12 text-slate-800 border-slate-200/70 dark:text-slate-200", Icon: Ban },
+  archived: { label: "Archived", className: "bg-zinc-500/12 text-zinc-700 border-zinc-200/70 dark:text-zinc-300", Icon: Archive },
   removed: { label: "Removed", className: "bg-slate-500/12 text-slate-700 border-slate-200/70 dark:text-slate-300", Icon: Ban },
 };
 

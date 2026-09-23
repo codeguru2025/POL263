@@ -51,6 +51,10 @@ import {
   CS_ERROR,
 } from "./customer-service-integration";
 import { insertClientFeedbackSchema } from "@shared/schema";
+import { resolveConversationContext, computeTenantRef, normalizeWhatsAppNumber } from "./customer-service-tenant-resolver";
+import { createConversation, resolveConversationTenant, transitionConversation } from "./customer-service-conversations";
+import { getBrandingContext, toBrandingResponse } from "./customer-service-branding";
+import { requestAgentHandoff } from "./customer-service-agent-handoff";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -227,6 +231,83 @@ export function registerCustomerServiceRoutes(app: Express): void {
     }
     await platformAuditLog(req, "CUSTOMER_SERVICE_TOKEN_REFRESH", "CustomerServiceIntegration", auth.orgId, null, { refreshed: true });
     res.json({ verification_token: refreshed.token, expires_in: refreshed.expiresIn });
+  });
+
+  // ---- tenant resolution (Phase 5/6) --------------------------------------
+  //
+  // Pre-verification. Auth = ANY valid customer_service shared secret (proves "an authorized
+  // POL263 integration is calling") — the resolved orgId from that secret is IGNORED here; the
+  // tenant this conversation belongs to is determined by the WhatsApp number / channel / policy
+  // number, NOT the secret. RESOLUTION IS NOT AUTHENTICATION (Phase 9): the customer still has
+  // to pass /verify next. Never returns tenant names / customer data for an ambiguous or
+  // unknown number (Phase 3) — branding is only returned for a dedicated-channel match.
+  app.post("/api/customer-service/resolve", async (req: Request, res: Response) => {
+    const auth = await authenticateCustomerServiceRequest(req);
+    if (!auth) {
+      res.status(401).json(CS_ERROR.unauthorized);
+      return;
+    }
+    const body: any = req.body || {};
+    const whatsappRaw = body.whatsapp_number ?? body.from;
+    const channelId = body.channel_id != null && String(body.channel_id).trim() !== "" ? String(body.channel_id).trim() : null;
+    const policyNumber = body.policy_number;
+    const number = normalizeWhatsAppNumber(whatsappRaw);
+    if (!number) {
+      res.status(400).json(CS_ERROR.invalid_request);
+      return;
+    }
+
+    let resolution;
+    try {
+      resolution = await resolveConversationContext({ whatsappNumber: whatsappRaw, channelId, policyNumber });
+    } catch (err) {
+      structuredLog("error", "CUSTOMER_SERVICE_RESOLVE_ERROR", { requestId: (req as any).requestId, error: (err as Error).message });
+      res.status(500).json({ error: "internal_error" });
+      return;
+    }
+
+    // Conversation row: create if missing; stamp the resolved tenant when we have one (trusted).
+    try {
+      const conv = await createConversation({ channelType: "whatsapp", channelId, whatsappNumber: number });
+      if (
+        (resolution.resolutionType === "unique" || resolution.resolutionType === "dedicated_channel") &&
+        resolution.organizationId
+      ) {
+        await resolveConversationTenant(conv.id, { organizationId: resolution.organizationId });
+        await transitionConversation(conv.id, "VERIFY");
+      }
+    } catch (err) {
+      structuredLog("warn", "CUSTOMER_SERVICE_RESOLVE_CONV_FAILED", { error: (err as Error).message });
+    }
+
+    structuredLog("info", "CUSTOMER_SERVICE_RESOLVE", {
+      requestId: (req as any).requestId,
+      ip: req.ip,
+      resolutionType: resolution.resolutionType,
+      channel: channelId ? "dedicated?" : "shared",
+    });
+    await platformAuditLog(req, "CUSTOMER_SERVICE_RESOLVE", "CustomerServiceIntegration", resolution.organizationId ?? undefined, null, {
+      resolutionType: resolution.resolutionType,
+    });
+
+    const out: Record<string, unknown> = {
+      resolution_type: resolution.resolutionType,
+      next_action:
+        resolution.resolutionType === "unique" || resolution.resolutionType === "dedicated_channel"
+          ? "verify"
+          : "ask_policy_number",
+    };
+    if (
+      (resolution.resolutionType === "unique" || resolution.resolutionType === "dedicated_channel") &&
+      resolution.organizationId
+    ) {
+      out.tenant_ref = computeTenantRef(resolution.organizationId);
+      if (resolution.resolutionType === "dedicated_channel") {
+        // The channel itself is this tenant's own number — zero ambiguity, safe to brand now.
+        out.branding = toBrandingResponse(await getBrandingContext(resolution.organizationId));
+      }
+    }
+    res.json(out);
   });
 
   // Everything below requires shared secret + verification token (requireVerifiedCustomer
@@ -796,6 +877,106 @@ export function registerCustomerServiceRoutes(app: Express): void {
       await storage.deleteDependent(dep.id, ctx.orgId);
       await audit(req, "CUSTOMER_SERVICE_DELETE_DEPENDENT", { dependentId: dep.id });
       res.json({ deleted: true });
+    }),
+  );
+
+  // ---- tenant branding (Phase 7) — verified tenant only ------------------
+  app.get(
+    "/api/customer-service/branding",
+    guard,
+    h("CUSTOMER_SERVICE_GET_BRANDING", async (req, res, ctx) => {
+      const branding = await getBrandingContext(ctx.orgId);
+      await audit(req, "CUSTOMER_SERVICE_GET_BRANDING");
+      res.json({ branding: toBrandingResponse(branding) });
+    }),
+  );
+
+  // ---- make payment (Phase 12) — convenience wrapper over existing services --
+  app.post(
+    "/api/customer-service/pay",
+    guard,
+    h("CUSTOMER_SERVICE_PAY", async (req, res, ctx) => {
+      const body = req.body || {};
+      const policyRef = body.policy_number ?? body.policy_id ?? body.policyId;
+      const policy = policyRef ? await assertPolicyBelongsToVerifiedClient(String(policyRef), ctx) : null;
+      if (!policy) {
+        res.status(403).json(CS_ERROR.forbidden);
+        return;
+      }
+      const amountNum = parseFloat(String(body.amount));
+      const idempotencyKey = typeof body.idempotency_key === "string" ? body.idempotency_key : body.idempotencyKey;
+      if (!idempotencyKey || !Number.isFinite(amountNum) || amountNum <= 0) {
+        res.status(400).json(CS_ERROR.invalid_request);
+        return;
+      }
+      const created = await createPaymentIntent({
+        organizationId: ctx.orgId,
+        clientId: ctx.clientId,
+        policyId: policy.id,
+        amount: String(body.amount),
+        currency: policy.currency || "USD",
+        purpose: typeof body.purpose === "string" ? body.purpose : "premium",
+        idempotencyKey: String(idempotencyKey),
+      });
+      if (created.error || !created.intent) {
+        res.status(400).json(CS_ERROR.invalid_request);
+        return;
+      }
+      const initiated = await initiatePaynowPayment({
+        intentId: created.intent.id,
+        organizationId: ctx.orgId,
+        method: typeof body.method === "string" ? body.method : "ecocash",
+        payerPhone: typeof body.payer_phone === "string" ? body.payer_phone : body.payerPhone,
+        payerEmail: typeof body.payer_email === "string" ? body.payer_email : body.payerEmail,
+        actorType: "client",
+        actorId: null,
+      });
+      await audit(req, "CUSTOMER_SERVICE_PAY", { intentId: created.intent.id, initiated: initiated.ok });
+      if (!initiated.ok) {
+        // Intent exists; the bot can retry initiation or poll status.
+        res.status(200).json({
+          payment_intent_id: created.intent.id,
+          status: created.intent.status,
+          pay_url: null,
+          needs_otp: false,
+          message: "Payment could not be started right now. Please try again shortly.",
+        });
+        return;
+      }
+      res.json({
+        payment_intent_id: created.intent.id,
+        status: created.intent.status,
+        pay_url: initiated.redirectUrl ?? null,
+        poll_url: initiated.pollUrl ?? null,
+        innbucks_code: initiated.innbucksCode ?? null,
+        innbucks_expiry: initiated.innbucksExpiry ?? null,
+        needs_otp: !!initiated.omariOtpUrl,
+      });
+    }),
+  );
+
+  // ---- talk to an agent (Phase 15) — routes to the VERIFIED tenant's queue --
+  app.post(
+    "/api/customer-service/agent-handoff",
+    guard,
+    h("CUSTOMER_SERVICE_AGENT_HANDOFF", async (req, res, ctx) => {
+      const body = req.body || {};
+      const channelId = body.channel_id != null && String(body.channel_id).trim() !== "" ? String(body.channel_id).trim() : null;
+      const whatsappNumber = normalizeWhatsAppNumber(body.whatsapp_number ?? body.from ?? "");
+      const result = await requestAgentHandoff(req, {
+        organizationId: ctx.orgId, // ALWAYS from verified context — never the body
+        clientId: ctx.clientId,
+        policyId: ctx.verifiedPolicyId ?? null,
+        whatsappNumber,
+        channelId,
+        reason: typeof body.reason === "string" ? body.reason.slice(0, 500) : null,
+      });
+      const branding = await getBrandingContext(ctx.orgId);
+      res.json({
+        queued: result.queued,
+        support_phone: branding.supportPhone,
+        support_email: branding.supportEmail,
+      });
     }),
   );
 }

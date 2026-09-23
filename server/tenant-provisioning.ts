@@ -193,6 +193,8 @@ export async function provisionTenantCore(org: Organization, opts: ProvisionTena
         trialEndsAt,
         currentPeriodStart: now,
         currentPeriodEnd: trialEndsAt,
+        // Owed once the trial converts to a paid subscription — see applyTenantInvoicePayment.
+        setupFeeStatus: "pending",
       });
     } else {
       structuredLog("warn", "No billing plan exists yet — skipping auto-trial subscription", { orgId: org.id });
