@@ -32,7 +32,7 @@ rendered text before sending.
 `unfilledMergeTags()` and an SMS-only guard that skips (and logs `skipped: Missing details for:
 {tag}`) instead of sending a message containing an unfilled tag.
 
-**Verified:** 8 new cases in `tests/unit/notifications.test.ts` (sent / unfilled tag / no phone /
+**Verified:** 6 new cases in `tests/unit/notifications.test.ts` (sent / unfilled tag / no phone /
 module off / provider rejects). Three older country-code tests had the same latent flaw — their
 `Hi {first_name}` fixture never supplied a first name, so they had been asserting on a message
 containing a literal tag; fixtures corrected, not the guard.
