@@ -198,6 +198,11 @@ export interface NotificationContext {
   documentLabel?: string;
 }
 
+/** Merge tags still present after rendering — i.e. tags whose value was missing. */
+export function unfilledMergeTags(rendered: string): string[] {
+  return Array.from(new Set(rendered.match(/\{[a-z_]+\}/g) ?? []));
+}
+
 function renderTemplate(template: string, ctx: NotificationContext): string {
   let result = template;
   const replacements: Record<string, string | undefined> = {
@@ -319,8 +324,11 @@ export async function dispatchNotification(
         // here on a real failure, or a message that never arrived stays recorded as delivered
         // with no way for staff/the client to ever discover it.
         try {
+          // Every early-exit below must correct the optimistic "sent" log row written above —
+          // otherwise the log records a message as sent that never left the building.
           if (tmpl.channel === "email" && !emailAllowed) {
             structuredLog("info", "Notification email skipped — email_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+            await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Email notifications are not enabled for this organization");
           } else if (tmpl.channel === "email") {
             if (clientEmail === undefined) {
               const client = await storage.getClient(clientId, orgId);
@@ -346,11 +354,13 @@ export async function dispatchNotification(
               }
             } else {
               structuredLog("warn", "Notification email skipped — client has no email on file", { orgId, clientId, eventType });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Client has no email address on file");
             }
           } else if (tmpl.channel === "push") {
             await pushToClient(orgId, clientId, { title: renderedSubject, body: renderedBody, data: { policyId: ctx.policyId } });
           } else if (tmpl.channel === "sms" && !smsAllowed) {
             structuredLog("info", "Notification SMS skipped — sms_notifications module not enabled for this tenant", { orgId, clientId, eventType });
+            await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "SMS notifications are not enabled for this organization");
           } else if (tmpl.channel === "sms") {
             if (clientPhone === undefined) {
               const client = await storage.getClient(clientId, orgId);
@@ -366,7 +376,14 @@ export async function dispatchNotification(
               }
               smsCountryCode = crossBorder ? cf.flagCountryCode : cf.homeCountryCode;
             }
-            if (clientPhone) {
+            // A merge tag with no value (e.g. {activation_code} for a client with no code, or
+            // {grace_end} for a policy with no grace date) is left in the text as-is by
+            // renderTemplate — never text a client a literal "{tag}".
+            const unfilled = clientPhone ? unfilledMergeTags(renderedBody) : [];
+            if (unfilled.length) {
+              structuredLog("warn", "Notification SMS skipped — merge tag(s) had no value", { orgId, clientId, eventType, unfilled });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", `Missing details for: ${unfilled.join(", ")}`);
+            } else if (clientPhone) {
               // sendSms() never throws — check its result explicitly, same reasoning as the
               // email branch above: the optimistic "sent" log written before this call needs
               // correcting on a real failure, or a message that never arrived stays recorded
@@ -377,6 +394,7 @@ export async function dispatchNotification(
               }
             } else {
               structuredLog("warn", "Notification SMS skipped — client has no phone number on file", { orgId, clientId, eventType });
+              await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Client has no phone number on file");
             }
           }
         } catch (err) {

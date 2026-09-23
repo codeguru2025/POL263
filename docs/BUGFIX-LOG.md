@@ -10,6 +10,40 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-23
+
+### Notification log said "sent" for SMS/email that never left; SMS could text a literal `{tag}`
+
+**Symptom:** found during an edge-case review right after 19 SMS templates were enabled for
+Falakhe. (1) `notification_logs` would show a row as `sent` for every client with no phone/email
+on file, and for every event when the channel's module was off — nothing had been sent. (2) A
+template whose merge tag had no value (e.g. `activation` for a client with no activation code,
+`grace_start` for a policy with no grace-end date) was sent to the client with the raw text
+`{activation_code}` in it.
+
+**Root cause:** `dispatchNotification()` writes the log row as `sent` *before* attempting
+delivery (optimistic, so a crash still leaves a trail) and only corrected it on a provider
+failure. Every early exit (module off, no address, no phone) skipped the correction. Separately,
+`renderTemplate()` leaves a tag untouched when its value is `undefined`, and nothing checked the
+rendered text before sending.
+
+**Fix:** `server/notifications.ts` — each early exit now sets the log to `skipped` with a reason
+(`skipped`, not `failed`, so it doesn't inflate failure counts); new exported
+`unfilledMergeTags()` and an SMS-only guard that skips (and logs `skipped: Missing details for:
+{tag}`) instead of sending a message containing an unfilled tag.
+
+**Verified:** 8 new cases in `tests/unit/notifications.test.ts` (sent / unfilled tag / no phone /
+module off / provider rejects). Three older country-code tests had the same latent flaw — their
+`Hi {first_name}` fixture never supplied a first name, so they had been asserting on a message
+containing a literal tag; fixtures corrected, not the guard.
+
+**Lesson for next time:** any "write the log as success first, correct on failure" pattern needs
+the correction on *every* non-send exit, not just the error branch — grep for early
+`else`/`skipped` branches after an optimistic log insert. And when enabling a channel for a new
+set of templates, check each tag against what every dispatch site actually puts in the context.
+
+---
+
 ## 2026-09-21 — Diaspora integration day: genericity + edge-case pass
 
 **Context:** everything built for the Diaspora Funeral Services integration (dynamic pricing,
