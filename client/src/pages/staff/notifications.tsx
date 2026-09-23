@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Bell, Plus, Loader2, Pencil, Trash2, Send, Tag } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { SmsEventToggles } from "@/components/sms-event-toggles";
 
 interface MergeTag { tag: string; description: string; example: string }
 interface EventType { value: string; label: string }
@@ -233,6 +234,13 @@ export default function StaffNotifications() {
     setEditId(t.id); setFormName(t.name); setFormEvent(t.eventType);
     setFormChannel(t.channel); setFormSubject(t.subject || "");
     setFormBody(t.bodyTemplate); setShowDialog(true);
+  };
+
+  const openSmsSetup = (eventType: string) => {
+    resetForm();
+    setFormEvent(eventType);
+    setFormChannel("sms");
+    setShowDialog(true);
   };
 
   const insertTag = (tag: string) => {
@@ -471,6 +479,10 @@ export default function StaffNotifications() {
             </Table>
           )}
         </CardSection>
+
+        {eventTypes.length > 0 && (
+          <SmsEventToggles templates={templates} eventTypes={eventTypes} onSetup={openSmsSetup} />
+        )}
 
         <CardSection title="Message Templates" description="Each template triggers automatically when its event occurs. Dynamic tags are replaced with real policy data." icon={Bell}>
           {isLoading ? (
