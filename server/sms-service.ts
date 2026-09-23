@@ -52,6 +52,15 @@ export function normalizePhoneForSms(raw: string, defaultCountryCode?: string): 
   return normalizeMsisdn(raw, defaultCountryCode);
 }
 
+/** Sender IDs SMSala has routed OTP-only — every message must carry messageType=3. Extend via
+ *  SMS_OTP_ONLY_SENDERS (comma-separated) when another tenant's sender is set up the same way. */
+export function isOtpOnlySender(senderId: string): boolean {
+  const list = ["FALAKHE", ...(process.env.SMS_OTP_ONLY_SENDERS || "").split(",")]
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  return list.includes(senderId.trim().toUpperCase());
+}
+
 class AfricalaProvider implements SmsProvider {
   readonly name = "africala";
 
@@ -66,11 +75,14 @@ class AfricalaProvider implements SmsProvider {
       return { ok: false, message: "Africala is not configured for this organization. Set an API token and Sender ID in Settings." };
     }
 
-    // messageType 1=Promotional, 2=Transactional, 3=OTP.
+    // messageType 1=Promotional, 2=Transactional, 3=OTP. Some Sender IDs are provisioned on an
+    // OTP-only route (SMSala: "FALAKHE" must always send messageType=3), so those override `kind`.
     // messageEncoding: SMSala's live panel dropdown maps 0=Default, 1=ASCII, 2=Octets, 3=Latin1,
     // 8=UCS2 (the numbering in their PDF's encoding table is off by one). "0" (Default) lets the
     // gateway auto-pick the on-wire encoding — this matches the sample Africala support sent.
-    const messageType = opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
+    const messageType = isOtpOnlySender(sourceAddress)
+      ? "3"
+      : opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
     const messageEncoding = "0";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 

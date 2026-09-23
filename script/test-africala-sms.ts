@@ -38,7 +38,10 @@ async function main() {
 
   const destinationAddress = normalizeMsisdn(rawTo, cc);
   const messageEncoding = isGsm7(text) ? "0" : "1";
-  const payload = [{ apiToken, messageType: "2", messageEncoding, destinationAddress, sourceAddress, messageText: text }];
+  // 1=Promotional, 2=Transactional, 3=OTP. Sender "FALAKHE" sits on an OTP-only route (per
+  // SMSala, Sep 2026) so it must send messageType 3; override with --type.
+  const messageType = arg("type") || (/^falakhe$/i.test(sourceAddress) ? "3" : "2");
+  const payload = [{ apiToken, messageType, messageEncoding, destinationAddress, sourceAddress, messageText: text }];
 
   console.log("POST https://api2.smsala.com/SendSmsV2");
   console.log("payload:", JSON.stringify([{ ...payload[0], apiToken: "***" }], null, 2));
