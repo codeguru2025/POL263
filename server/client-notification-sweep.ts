@@ -139,10 +139,12 @@ async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResu
       if (daysToGrace === 7 || daysToGrace === 3 || daysToGrace === 1) {
         await dispatchNotification(orgId, "pre_lapse_warning", p.clientId, ctx);
         result.preLapseCount++;
-      } else if (daysToGrace <= 0 && p.status === "grace") {
-        await dispatchNotification(orgId, "policy_lapsed", p.clientId, ctx);
-        result.lapseCount++;
       }
+      // Deliberately NO "policy_lapsed" dispatch here. The lapse sweep (policy-lapse-sweep.ts) owns
+      // the grace→lapsed transition and sends that notice when it actually happens. Sending it from
+      // this sweep too meant clients got two "lapsed" texts — and the first one went out on the
+      // grace-end date itself (daysToGrace <= 0), while the policy was still in grace and payable.
+      // result.lapseCount stays in the result shape for the digest UI but is no longer incremented.
     }
 
     const members = await storage.getPolicyMembers(p.id, orgId);

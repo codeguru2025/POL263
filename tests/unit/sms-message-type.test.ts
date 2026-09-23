@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 
 // sms-service imports sms-config -> control-plane-db, which needs a live DB at import time.
 vi.mock("../../server/sms-config", () => ({ getOrgSmsConfig: vi.fn(), platformConfig: vi.fn() }));
+vi.mock("../../server/user-notifications", () => ({ notifyUsersWithPermission: vi.fn() }));
 
 import { isOtpOnlySender } from "../../server/sms-service";
 

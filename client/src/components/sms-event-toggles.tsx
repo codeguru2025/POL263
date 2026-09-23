@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest } from "@/lib/queryClient";
 import { MessageSquare, Loader2 } from "lucide-react";
 
@@ -46,6 +47,9 @@ export function SmsEventToggles({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  // Same rule the server enforces on PUT/POST /api/notification-templates (platform owner bypasses).
+  const { permissions, isPlatformOwner } = useAuth();
+  const canEdit = isPlatformOwner || permissions.includes("write:notification");
 
   const smsFor = (eventType: string) => templates.filter((t) => t.channel === "sms" && t.eventType === eventType);
 
@@ -87,17 +91,23 @@ export function SmsEventToggles({
         </p>
         <div className="flex gap-2">
           <Button
-            size="sm" variant="outline" disabled={setActive.isPending || activeCount === 0}
+            size="sm" variant="outline" disabled={!canEdit || setActive.isPending || activeCount === 0}
             onClick={() => { if (confirm("Turn OFF SMS for every event? You can switch them back on one by one.")) bulk(false); }}
             data-testid="button-sms-all-off"
           >
             Turn all off
           </Button>
-          <Button size="sm" variant="outline" disabled={setActive.isPending} onClick={() => bulk(true)} data-testid="button-sms-all-on">
+          <Button size="sm" variant="outline" disabled={!canEdit || setActive.isPending} onClick={() => bulk(true)} data-testid="button-sms-all-on">
             Turn all on
           </Button>
         </div>
       </div>
+
+      {!canEdit && (
+        <p className="mb-3 text-sm text-muted-foreground" data-testid="text-sms-readonly">
+          You can see these settings but not change them. Ask an administrator to update SMS messages.
+        </p>
+      )}
 
       {bothPaymentTextsOn && (
         <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
@@ -119,7 +129,7 @@ export function SmsEventToggles({
                 <p className="text-xs text-muted-foreground">{info?.when ?? r.value.replace(/_/g, " ")}</p>
               </div>
               {r.sms.length === 0 ? (
-                <Button size="sm" variant="outline" onClick={() => onSetup(r.value)} data-testid={`button-sms-setup-${r.value}`}>
+                <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => onSetup(r.value)} data-testid={`button-sms-setup-${r.value}`}>
                   Set up
                 </Button>
               ) : (
@@ -129,7 +139,7 @@ export function SmsEventToggles({
                   )}
                   <Switch
                     checked={isOn}
-                    disabled={setActive.isPending}
+                    disabled={!canEdit || setActive.isPending}
                     aria-label={`Send SMS for ${r.label}`}
                     onCheckedChange={(v) => setActive.mutate({ ids: r.sms.map((t) => t.id as string), isActive: v })}
                     data-testid={`switch-sms-${r.value}`}

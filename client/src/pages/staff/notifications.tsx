@@ -216,7 +216,7 @@ export default function StaffNotifications() {
       }
       toast({
         title: "Notification digest complete",
-        description: `${data.birthdayCount} birthday, ${data.anniversaryCount} anniversary, ${data.premiumDueCount} premium-due, ${data.preLapseCount} pre-lapse, ${data.lapseCount} lapsed${data.errors?.length ? `, ${data.errors.length} error(s)` : ""}`,
+        description: `${data.birthdayCount} birthday, ${data.anniversaryCount} anniversary, ${data.premiumDueCount} premium-due, ${data.preLapseCount} pre-lapse${data.errors?.length ? `, ${data.errors.length} error(s)` : ""}`,
       });
     },
     onError: (err: any) => toast({ title: "Run failed", description: err.message, variant: "destructive" }),

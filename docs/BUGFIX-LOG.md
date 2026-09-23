@@ -12,6 +12,27 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-09-23
 
+### Clients got "Policy Lapsed" twice — the first one a day early
+
+**Symptom:** spotted in review of the SMS/notification code (not yet reported by a client, but it
+already applied to email/in-app). A policy going lapsed produced two `policy_lapsed` notices, and
+the first went out while the policy was still in grace with a day left to pay.
+
+**Root cause:** two sweeps both sent it. `policy-lapse-sweep.ts` (owner of the grace→lapsed
+transition) sends `policy_lapsed` when it flips the status, for `graceEndDate < today`.
+`client-notification-sweep.ts` *also* sent `policy_lapsed` for any policy still in `grace` with
+`daysToGrace <= 0` — i.e. on the grace-end date itself, before the policy had lapsed, and again
+on every run until the other sweep caught up.
+
+**Fix:** removed the `policy_lapsed` dispatch (and the `lapseCount` increment) from
+`server/client-notification-sweep.ts`; the lapse sweep is the single sender. `lapseCount` stays in
+the result type (always 0) so the digest API shape is unchanged; the digest toast no longer shows it.
+
+**Lesson for next time:** when two scheduled jobs can observe the same state change, exactly one
+should own the notification — the one that performs the transition. If a notification is sent
+from a job that only *reads* status, it will fire early and repeatedly. grep every
+`dispatchNotification(..., "<event>"` and confirm each event has one sender per state change.
+
 ### Notification log said "sent" for SMS/email that never left; SMS could text a literal `{tag}`
 
 **Symptom:** found during an edge-case review right after 19 SMS templates were enabled for

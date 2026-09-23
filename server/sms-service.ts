@@ -16,6 +16,7 @@
 import { structuredLog } from "./logger";
 import { ipv4Dispatcher, normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
+import { notifyUsersWithPermission } from "./user-notifications";
 
 export interface SendSmsOptions {
   to: string;
@@ -36,11 +37,85 @@ export interface SmsProviderCredentials {
   senderId: string;
 }
 
+/** Account-level failures — they affect every message, not one recipient, so staff need telling. */
+export type SmsAccountIssue = "credit" | "token" | "ip";
+
+export interface SmsSendResult {
+  ok: boolean;
+  message: string;
+  providerMessageId?: string;
+  accountIssue?: SmsAccountIssue;
+}
+
 export interface SmsProvider {
   readonly name: string;
   isConfigured(creds: SmsProviderCredentials): boolean;
-  send(creds: SmsProviderCredentials, opts: SendSmsOptions): Promise<{ ok: boolean; message: string; providerMessageId?: string }>;
+  send(creds: SmsProviderCredentials, opts: SendSmsOptions): Promise<SmsSendResult>;
 }
+
+// ── Circuit breaker ─────────────────────────────────────────────────────────
+// The daily notification sweeps send one message at a time and await each. If the provider is
+// down (each call can wait the full 20s timeout) or the account is broken (bad token / no credit /
+// IP not allowed — every message will fail identically), a sweep over thousands of clients would
+// run for hours and log thousands of identical failures. After CIRCUIT_THRESHOLD consecutive
+// account-level/network failures for a token, further sends fail instantly for a cooldown, then
+// one probe goes through. Per-recipient rejections (bad number etc.) don't count.
+const CIRCUIT_THRESHOLD = 3;
+const CIRCUIT_COOLDOWN_MS = 60_000;
+const circuits = new Map<string, { fails: number; openUntil: number }>();
+
+function circuitIsOpen(key: string): boolean {
+  const c = circuits.get(key);
+  return !!c && c.openUntil > Date.now();
+}
+function circuitFailure(key: string): void {
+  const c = circuits.get(key) ?? { fails: 0, openUntil: 0 };
+  c.fails++;
+  if (c.fails >= CIRCUIT_THRESHOLD) {
+    c.openUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+    c.fails = 0;
+  }
+  circuits.set(key, c);
+}
+function circuitOk(key: string): void {
+  circuits.delete(key);
+}
+
+// ── Staff alert for account-level failures ──────────────────────────────────
+const ACCOUNT_ALERT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const lastAccountAlert = new Map<string, number>(); // per instance — worst case one alert per instance per interval
+const ISSUE_ALERT: Record<SmsAccountIssue, { title: string; body: string }> = {
+  credit: {
+    title: "SMS is not sending — out of credit",
+    body: "The SMS provider account has no credit left, so text messages are not being sent. Please top up the SMSala balance.",
+  },
+  token: {
+    title: "SMS is not sending — invalid API token",
+    body: "The SMS provider rejected the saved API token. Open Settings → SMS and enter the current token from SMSala.",
+  },
+  ip: {
+    title: "SMS is not sending — server not allowed",
+    body: "The SMS provider does not recognise this server's address. Add the platform's outgoing IP addresses to the API token's allowed IP list on the SMSala panel.",
+  },
+};
+function alertAccountIssue(orgId: string, issue: SmsAccountIssue): void {
+  const key = `${orgId}:${issue}`;
+  const last = lastAccountAlert.get(key) ?? 0;
+  if (Date.now() - last < ACCOUNT_ALERT_INTERVAL_MS) return;
+  lastAccountAlert.set(key, Date.now());
+  // notifyUsersWithPermission never throws; not awaited so a slow inbox write can't delay a send.
+  void notifyUsersWithPermission(orgId, "manage:settings", { type: "GENERAL", ...ISSUE_ALERT[issue], metadata: { sms: issue } });
+}
+
+/** Test hook — clears breaker + alert-throttle state between cases. */
+export function resetSmsHealthState(): void {
+  circuits.clear();
+  lastAccountAlert.clear();
+}
+
+/** SMSala OperationCodes that mean the ACCOUNT is unusable (not one bad recipient):
+ *  -1 "Invalid Api Token", -2 "Insufficient Credit Balance", -3 "Ip Address Not Allowed". */
+const AFRICALA_ACCOUNT_CODES: Record<number, SmsAccountIssue> = { [-1]: "token", [-2]: "credit", [-3]: "ip" };
 
 /**
  * Normalize a recipient number to bare international digits. Thin wrapper over
@@ -68,7 +143,7 @@ class AfricalaProvider implements SmsProvider {
     return !!(creds.apiToken && creds.senderId);
   }
 
-  async send(creds: SmsProviderCredentials, opts: SendSmsOptions): Promise<{ ok: boolean; message: string; providerMessageId?: string }> {
+  async send(creds: SmsProviderCredentials, opts: SendSmsOptions): Promise<SmsSendResult> {
     const apiToken = creds.apiToken;
     const sourceAddress = creds.senderId;
     if (!apiToken || !sourceAddress) {
@@ -85,6 +160,10 @@ class AfricalaProvider implements SmsProvider {
       : opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
     const messageEncoding = "0";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
+
+    if (circuitIsOpen(apiToken)) {
+      return { ok: false, message: "SMS is paused for about a minute after repeated provider errors — it will retry automatically." };
+    }
 
     try {
       const res = await fetch("https://api2.smsala.com/SendSmsV2", {
@@ -109,6 +188,7 @@ class AfricalaProvider implements SmsProvider {
 
       if (!res.ok || !first) {
         structuredLog("error", "Africala SMS send failed — bad response", { status: res.status, body });
+        circuitFailure(apiToken);
         return { ok: false, message: `Africala SMS failed: HTTP ${res.status}` };
       }
       // OperationCode 0 = success per Africala's docs; anything else (or a non-"Success" Status)
@@ -116,13 +196,18 @@ class AfricalaProvider implements SmsProvider {
       // in the body, not just the HTTP status code.
       if (first.OperationCode !== 0 || first.Status !== "Success") {
         structuredLog("error", "Africala SMS send failed — provider rejected", { destinationAddress, response: first });
-        return { ok: false, message: `Africala SMS failed: ${first.Remarks || first.Status || "unknown error"}` };
+        const accountIssue = AFRICALA_ACCOUNT_CODES[first.OperationCode as number];
+        if (accountIssue) circuitFailure(apiToken);
+        else circuitOk(apiToken); // reachable and authenticated — this was just a bad recipient/message
+        return { ok: false, message: `Africala SMS failed: ${first.Remarks || first.Status || "unknown error"}`, accountIssue };
       }
 
+      circuitOk(apiToken);
       structuredLog("info", "SMS sent via Africala", { to: destinationAddress, messageId: first.MessageId });
       return { ok: true, message: `SMS sent to ${destinationAddress}`, providerMessageId: String(first.MessageId) };
     } catch (err: any) {
       structuredLog("error", "Africala SMS send threw", { error: err?.message, to: destinationAddress });
+      circuitFailure(apiToken);
       return { ok: false, message: `Africala SMS failed: ${err?.message || "network error"}` };
     }
   }
@@ -155,7 +240,7 @@ export async function isSmsConfigured(orgId: string): Promise<boolean> {
 
 /** Send an SMS on behalf of an org. Never throws — returns {ok:false, message} if unconfigured
  *  or the send fails. Credentials are resolved per-org (see server/sms-config.ts). */
-export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<{ ok: boolean; message: string; providerMessageId?: string }> {
+export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<SmsSendResult> {
   const provider = getProvider();
   if (!provider) {
     return { ok: false, message: `SMS provider "${process.env.SMS_PROVIDER || "africala"}" is not recognized.` };
@@ -164,7 +249,9 @@ export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<{ ok
   if (!provider.isConfigured(creds)) {
     return { ok: false, message: `SMS is not configured for provider "${provider.name}" for this organization. Set an API token and Sender ID in Settings.` };
   }
-  return provider.send(creds, opts);
+  const result = await provider.send(creds, opts);
+  if (result.accountIssue) alertAccountIssue(orgId, result.accountIssue);
+  return result;
 }
 
 /**
@@ -172,7 +259,7 @@ export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<{ ok
  * entirely. For platform-owner accounts, which have no organizationId to resolve a tenant's own
  * SMS config from — currently only used by the staff MFA SMS-fallback flow (server/auth.ts).
  */
-export async function sendPlatformSms(opts: SendSmsOptions): Promise<{ ok: boolean; message: string; providerMessageId?: string }> {
+export async function sendPlatformSms(opts: SendSmsOptions): Promise<SmsSendResult> {
   const provider = getProvider();
   if (!provider) {
     return { ok: false, message: `SMS provider "${process.env.SMS_PROVIDER || "africala"}" is not recognized.` };
