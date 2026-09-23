@@ -134,6 +134,14 @@ const POLICY_A = {
 };
 const CLIENT_ROW = { id: CLIENT_A, organizationId: ORG_A, title: "Mr", firstName: "Tendai", lastName: "Moyo" };
 
+/** Flip one character in the MIDDLE of a token. Never edit the last chars: in base64url the final
+ *  character can carry padding bits that decoding ignores, so a "tampered" tail can decode to the
+ *  exact same bytes and validate (a rare flake). A mid-string change always alters real bits. */
+function tamper(token: string): string {
+  const i = Math.floor(token.length / 2);
+  return token.slice(0, i) + (token[i] === "A" ? "B" : "A") + token.slice(i + 1);
+}
+
 function tok(claims: Partial<{ orgId: string; clientId: string; policyId: string }> = {}) {
   return issueVerificationToken({ orgId: ORG_A, clientId: CLIENT_A, policyId: "pol-A", ...claims }).token;
 }
@@ -224,7 +232,7 @@ describe("authentication", () => {
   });
   it("valid secret + tampered token → 401", async () => {
     const t = tok();
-    const bad = t.slice(0, -2) + (t.endsWith("A") ? "BC" : "AA");
+    const bad = tamper(t);
     const r = await call("/api/customer-service/policies", { token: bad });
     expect(r.status).toBe(401);
   });
@@ -577,7 +585,7 @@ describe("token refresh", () => {
   });
   it("tampered token cannot be refreshed → 401", async () => {
     const t = tok();
-    const r = await call("/api/customer-service/token/refresh", { method: "POST", token: t.slice(0, -2) + "ZZ" });
+    const r = await call("/api/customer-service/token/refresh", { method: "POST", token: tamper(t) });
     expect(r.status).toBe(401);
   });
   it("refresh without a valid shared secret → 401", async () => {

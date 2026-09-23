@@ -12,6 +12,28 @@ convention" note in `CLAUDE.md`.
 
 ## 2026-09-23
 
+### Flaky test: "valid secret + tampered token → 401" sometimes got 200 (blocked a push)
+
+**Symptom:** `tests/unit/customer-service-api.test.ts` failed roughly 1 run in 20–60 with
+`expected 200 to be 401`, unrelated to whatever was being changed; it blocked the husky pre-push
+hook once and passed on rerun.
+
+**Root cause:** the test "tampered" a token by rewriting its last two characters. Those characters
+are the tail of the outer base64url wrapper around `encryptSecret()`'s output, whose own trailing
+base64 padding is ignored by Node's lenient decoder — so a tail edit sometimes decoded to the same
+ciphertext and the token legitimately still verified. Measured over 5,000 tokens with realistic
+claim sizes: old tampering stayed valid 302 times (~6%); flipping a character mid-string, 0 times.
+Not a security problem (the accepted token is still bound to the same plaintext) — the test was
+wrong, not the server.
+
+**Fix:** a `tamper()` helper in the test that flips a character in the middle of the token, used by
+both tampered-token tests (verify + refresh).
+
+**Lesson for next time:** a "tampered value is rejected" test must change bits that carry
+information. Editing the end of a base64/padded string is a coin-flip no-op. And if a test fails
+once and passes on rerun, don't just rerun — reproduce it in a loop with the failing input logged
+(my first theory here, padding *bits*, was wrong; the loop with realistic sizes gave the real answer).
+
 ### Clients got "Policy Lapsed" twice — the first one a day early
 
 **Symptom:** spotted in review of the SMS/notification code (not yet reported by a client, but it
