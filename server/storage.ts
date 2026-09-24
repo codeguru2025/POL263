@@ -847,6 +847,13 @@ export interface IStorage {
 // just needs to be unique per statement, not globally.
 let auditSavepointSeq = 0;
 
+// Tenant-owned rows: an update may never re-home a row into another org or rewrite its id —
+// routes pass req.body straight through in places, so this is enforced here for every caller.
+function stripImmutableKeys<T extends Record<string, any>>(data: T): T {
+  const { id: _id, organizationId: _org, ...rest } = data as any;
+  return rest as T;
+}
+
 export class DatabaseStorage implements IStorage {
   async getOrganization(id: string): Promise<Organization | undefined> {
     const [org] = await db.select().from(organizations).where(eq(organizations.id, id));
@@ -1501,7 +1508,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateClient(id: string, data: Partial<InsertClient>, orgId: string): Promise<Client | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(clients).set(data).where(eq(clients.id, id)).returning();
+    const [updated] = await tdb.update(clients).set(stripImmutableKeys(data)).where(and(eq(clients.id, id), eq(clients.organizationId, orgId))).returning();
     return updated;
   }
 
@@ -1631,7 +1638,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getProduct(id: string, orgId: string): Promise<Product | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [product] = await tdb.select().from(products).where(eq(products.id, id));
+    const [product] = await tdb.select().from(products).where(and(eq(products.id, id), eq(products.organizationId, orgId)));
     return product;
   }
   async createProduct(product: InsertProduct): Promise<Product> {
@@ -1641,7 +1648,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateProduct(id: string, data: Partial<InsertProduct>, orgId: string): Promise<Product | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(products).set(data).where(eq(products.id, id)).returning();
+    const [updated] = await tdb.update(products).set(stripImmutableKeys(data)).where(and(eq(products.id, id), eq(products.organizationId, orgId))).returning();
     return updated;
   }
   async deleteProduct(id: string, orgId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -1675,7 +1682,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getProductVersion(id: string, orgId: string): Promise<ProductVersion | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [pv] = await tdb.select().from(productVersions).where(eq(productVersions.id, id));
+    const [pv] = await tdb.select().from(productVersions).where(and(eq(productVersions.id, id), eq(productVersions.organizationId, orgId)));
     return pv;
   }
   async createProductVersion(pv: InsertProductVersion): Promise<ProductVersion> {
@@ -1699,7 +1706,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateProductVersion(id: string, data: Partial<InsertProductVersion>, orgId: string): Promise<ProductVersion | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(productVersions).set(data).where(eq(productVersions.id, id)).returning();
+    const [updated] = await tdb.update(productVersions).set(stripImmutableKeys(data)).where(and(eq(productVersions.id, id), eq(productVersions.organizationId, orgId))).returning();
     return updated;
   }
   async getBenefitCatalogItems(orgId: string): Promise<BenefitCatalogItem[]> {
@@ -1731,17 +1738,17 @@ export class DatabaseStorage implements IStorage {
   }
   async updateAddOn(id: string, data: Partial<InsertAddOn>, orgId: string): Promise<AddOn | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(addOns).set(data).where(eq(addOns.id, id)).returning();
+    const [updated] = await tdb.update(addOns).set(stripImmutableKeys(data)).where(and(eq(addOns.id, id), eq(addOns.organizationId, orgId))).returning();
     return updated;
   }
   async updateBenefitCatalogItem(id: string, data: Partial<InsertBenefitCatalogItem>, orgId: string): Promise<BenefitCatalogItem | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(benefitCatalogItems).set(data).where(eq(benefitCatalogItems.id, id)).returning();
+    const [updated] = await tdb.update(benefitCatalogItems).set(stripImmutableKeys(data)).where(and(eq(benefitCatalogItems.id, id), eq(benefitCatalogItems.organizationId, orgId))).returning();
     return updated;
   }
   async updateBenefitBundle(id: string, data: Partial<InsertBenefitBundle>, orgId: string): Promise<BenefitBundle | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(benefitBundles).set(data).where(eq(benefitBundles.id, id)).returning();
+    const [updated] = await tdb.update(benefitBundles).set(stripImmutableKeys(data)).where(and(eq(benefitBundles.id, id), eq(benefitBundles.organizationId, orgId))).returning();
     return updated;
   }
   async getAgeBandConfigs(orgId: string): Promise<AgeBandConfig[]> {
@@ -1750,7 +1757,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateAgeBandConfig(id: string, data: Partial<InsertAgeBandConfig>, orgId: string): Promise<AgeBandConfig | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(ageBandConfigs).set(data).where(eq(ageBandConfigs.id, id)).returning();
+    const [updated] = await tdb.update(ageBandConfigs).set(stripImmutableKeys(data)).where(and(eq(ageBandConfigs.id, id), eq(ageBandConfigs.organizationId, orgId))).returning();
     return updated;
   }
   async createAgeBandConfig(config: InsertAgeBandConfig): Promise<AgeBandConfig> {
@@ -1760,7 +1767,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getAgeBandRateCards(productVersionId: string, orgId: string): Promise<AgeBandRateCard[]> {
     const tdb = await getDbForOrg(orgId);
-    return tdb.select().from(ageBandRateCards).where(eq(ageBandRateCards.productVersionId, productVersionId));
+    return tdb.select().from(ageBandRateCards).where(and(eq(ageBandRateCards.productVersionId, productVersionId), eq(ageBandRateCards.organizationId, orgId)));
   }
   async createAgeBandRateCard(card: InsertAgeBandRateCard): Promise<AgeBandRateCard> {
     const tdb = await getDbForOrg(card.organizationId);
@@ -1769,12 +1776,12 @@ export class DatabaseStorage implements IStorage {
   }
   async updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(ageBandRateCards).set(data).where(eq(ageBandRateCards.id, id)).returning();
+    const [updated] = await tdb.update(ageBandRateCards).set(stripImmutableKeys(data)).where(and(eq(ageBandRateCards.id, id), eq(ageBandRateCards.organizationId, orgId))).returning();
     return updated;
   }
   async deleteAgeBandRateCard(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(ageBandRateCards).where(eq(ageBandRateCards.id, id));
+    await tdb.delete(ageBandRateCards).where(and(eq(ageBandRateCards.id, id), eq(ageBandRateCards.organizationId, orgId)));
   }
 
   // ─── Policies ──────────────────────────────────────────────
@@ -2678,7 +2685,7 @@ export class DatabaseStorage implements IStorage {
 
   async updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(policies).set(data).where(eq(policies.id, id)).returning();
+    const [updated] = await tdb.update(policies).set(stripImmutableKeys(data)).where(and(eq(policies.id, id), eq(policies.organizationId, orgId))).returning();
     return updated;
   }
   async createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void> {
@@ -3004,7 +3011,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getPaymentTransaction(id: string, orgId: string): Promise<PaymentTransaction | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [tx] = await tdb.select().from(paymentTransactions).where(eq(paymentTransactions.id, id));
+    const [tx] = await tdb.select().from(paymentTransactions).where(and(eq(paymentTransactions.id, id), eq(paymentTransactions.organizationId, orgId)));
     return tx;
   }
   async hasPlatformReceivableForTransaction(orgId: string, transactionId: string): Promise<boolean> {
@@ -3330,7 +3337,7 @@ export class DatabaseStorage implements IStorage {
 
   async getPaymentIntentById(id: string, orgId: string): Promise<PaymentIntent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [row] = await tdb.select().from(paymentIntents).where(eq(paymentIntents.id, id));
+    const [row] = await tdb.select().from(paymentIntents).where(and(eq(paymentIntents.id, id), eq(paymentIntents.organizationId, orgId)));
     return row;
   }
   async getPaymentIntentByOrgAndIdempotencyKey(orgId: string, idempotencyKey: string): Promise<PaymentIntent | undefined> {
@@ -3386,7 +3393,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePaymentIntent(id: string, data: Partial<InsertPaymentIntent>, orgId: string): Promise<PaymentIntent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(paymentIntents).set({ ...data, updatedAt: new Date() }).where(eq(paymentIntents.id, id)).returning();
+    const [updated] = await tdb.update(paymentIntents).set({ ...stripImmutableKeys(data), updatedAt: new Date() }).where(and(eq(paymentIntents.id, id), eq(paymentIntents.organizationId, orgId))).returning();
     return updated;
   }
   async createPaymentLink(link: InsertPaymentLink): Promise<PaymentLink> {
@@ -3491,7 +3498,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getPaymentReceiptById(id: string, orgId: string): Promise<PaymentReceipt | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [row] = await tdb.select().from(paymentReceipts).where(eq(paymentReceipts.id, id));
+    const [row] = await tdb.select().from(paymentReceipts).where(and(eq(paymentReceipts.id, id), eq(paymentReceipts.organizationId, orgId)));
     return row;
   }
   async getPaymentReceiptsByPolicy(policyId: string, orgId: string): Promise<PaymentReceipt[]> {
@@ -3528,12 +3535,12 @@ export class DatabaseStorage implements IStorage {
   }
   async updatePaymentReceipt(id: string, data: Partial<InsertPaymentReceipt>, orgId: string): Promise<PaymentReceipt | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(paymentReceipts).set(data).where(eq(paymentReceipts.id, id)).returning();
+    const [updated] = await tdb.update(paymentReceipts).set(stripImmutableKeys(data)).where(and(eq(paymentReceipts.id, id), eq(paymentReceipts.organizationId, orgId))).returning();
     return updated;
   }
   async updatePaymentTransaction(id: string, data: Partial<InsertPaymentTransaction>, orgId: string): Promise<PaymentTransaction | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(paymentTransactions).set(data).where(eq(paymentTransactions.id, id)).returning();
+    const [updated] = await tdb.update(paymentTransactions).set(stripImmutableKeys(data)).where(and(eq(paymentTransactions.id, id), eq(paymentTransactions.organizationId, orgId))).returning();
     return updated;
   }
   async deletePolicy(id: string, orgId: string): Promise<void> {
@@ -3550,11 +3557,11 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteReceipt(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(receipts).where(eq(receipts.id, id));
+    await tdb.delete(receipts).where(and(eq(receipts.id, id), eq(receipts.organizationId, orgId)));
   }
   async deletePaymentReceipt(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(paymentReceipts).where(eq(paymentReceipts.id, id));
+    await tdb.delete(paymentReceipts).where(and(eq(paymentReceipts.id, id), eq(paymentReceipts.organizationId, orgId)));
   }
 
   // ─── Claims ────────────────────────────────────────────────
@@ -3748,7 +3755,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getFuneralCase(id: string, orgId: string): Promise<FuneralCase | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [fc] = await tdb.select().from(funeralCases).where(eq(funeralCases.id, id));
+    const [fc] = await tdb.select().from(funeralCases).where(and(eq(funeralCases.id, id), eq(funeralCases.organizationId, orgId)));
     return fc;
   }
   async getFuneralCaseByCaseNumber(caseNumber: string, orgId: string): Promise<FuneralCase | undefined> {
@@ -3776,7 +3783,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateFuneralCase(id: string, data: Partial<InsertFuneralCase>, orgId: string): Promise<FuneralCase | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(funeralCases).set(data).where(eq(funeralCases.id, id)).returning();
+    const [updated] = await tdb.update(funeralCases).set(stripImmutableKeys(data)).where(and(eq(funeralCases.id, id), eq(funeralCases.organizationId, orgId))).returning();
     return updated;
   }
   async getFuneralTasks(caseId: string, orgId: string): Promise<FuneralTask[]> {
@@ -3798,7 +3805,13 @@ export class DatabaseStorage implements IStorage {
   }
   async updateFuneralTask(id: string, data: Partial<InsertFuneralTask>, orgId: string): Promise<FuneralTask | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(funeralTasks).set(data).where(eq(funeralTasks.id, id)).returning();
+    // funeral_tasks has no organization_id of its own — scope through the parent case, and never
+    // let a PATCH body re-parent the task onto another case.
+    const { funeralCaseId: _caseId, ...rest } = stripImmutableKeys(data as any);
+    const [updated] = await tdb.update(funeralTasks).set(rest).where(and(
+      eq(funeralTasks.id, id),
+      inArray(funeralTasks.funeralCaseId, tdb.select({ id: funeralCases.id }).from(funeralCases).where(eq(funeralCases.organizationId, orgId))),
+    )).returning();
     return updated;
   }
 
@@ -3819,7 +3832,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateFleetVehicle(id: string, data: Partial<InsertFleetVehicle>, orgId: string): Promise<FleetVehicle | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(fleetVehicles).set(data).where(eq(fleetVehicles.id, id)).returning();
+    const [updated] = await tdb.update(fleetVehicles).set(stripImmutableKeys(data)).where(and(eq(fleetVehicles.id, id), eq(fleetVehicles.organizationId, orgId))).returning();
     return updated;
   }
   async getFuelLogs(orgId: string, vehicleId?: string): Promise<any[]> {
@@ -4289,7 +4302,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getLead(id: string, orgId: string): Promise<Lead | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [lead] = await tdb.select().from(leads).where(eq(leads.id, id));
+    const [lead] = await tdb.select().from(leads).where(and(eq(leads.id, id), eq(leads.organizationId, orgId)));
     return lead;
   }
   async createLead(lead: InsertLead): Promise<Lead> {
@@ -4299,7 +4312,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateLead(id: string, data: Partial<InsertLead>, orgId: string): Promise<Lead | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(leads).set(data).where(eq(leads.id, id)).returning();
+    const [updated] = await tdb.update(leads).set(stripImmutableKeys(data)).where(and(eq(leads.id, id), eq(leads.organizationId, orgId))).returning();
     return updated;
   }
 
@@ -4514,7 +4527,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(approvalRequests).set(data).where(eq(approvalRequests.id, id)).returning();
+    const [updated] = await tdb.update(approvalRequests).set(stripImmutableKeys(data)).where(and(eq(approvalRequests.id, id), eq(approvalRequests.organizationId, orgId))).returning();
     return updated;
   }
 
@@ -4548,12 +4561,12 @@ export class DatabaseStorage implements IStorage {
   }
   async updateTerms(id: string, data: Partial<InsertTerms>, orgId: string): Promise<TermsAndConditions | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(termsAndConditions).set(data).where(eq(termsAndConditions.id, id)).returning();
+    const [updated] = await tdb.update(termsAndConditions).set(stripImmutableKeys(data)).where(and(eq(termsAndConditions.id, id), eq(termsAndConditions.organizationId, orgId))).returning();
     return updated;
   }
   async deleteTerms(id: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);
-    await tdb.delete(termsAndConditions).where(eq(termsAndConditions.id, id));
+    await tdb.delete(termsAndConditions).where(and(eq(termsAndConditions.id, id), eq(termsAndConditions.organizationId, orgId)));
   }
 
   // ─── Attendance ────────────────────────────────────────────
@@ -4918,7 +4931,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateCashup(id: string, data: Partial<InsertCashup>, orgId: string): Promise<Cashup | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(cashups).set(data).where(eq(cashups.id, id)).returning();
+    const [updated] = await tdb.update(cashups).set(stripImmutableKeys(data)).where(and(eq(cashups.id, id), eq(cashups.organizationId, orgId))).returning();
     return updated;
   }
   async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number; currency: string }> {
@@ -5197,7 +5210,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getGroup(id: string, orgId: string): Promise<Group | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [g] = await tdb.select().from(groups).where(eq(groups.id, id));
+    const [g] = await tdb.select().from(groups).where(and(eq(groups.id, id), eq(groups.organizationId, orgId)));
     return g;
   }
   async createGroup(group: InsertGroup): Promise<Group> {
@@ -5207,7 +5220,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateGroup(id: string, data: Partial<InsertGroup>, orgId: string): Promise<Group | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(groups).set(data).where(eq(groups.id, id)).returning();
+    const [updated] = await tdb.update(groups).set(stripImmutableKeys(data)).where(and(eq(groups.id, id), eq(groups.organizationId, orgId))).returning();
     return updated;
   }
 
@@ -5398,7 +5411,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getGroupPaymentIntentById(id: string, orgId: string): Promise<GroupPaymentIntent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [row] = await tdb.select().from(groupPaymentIntents).where(eq(groupPaymentIntents.id, id));
+    const [row] = await tdb.select().from(groupPaymentIntents).where(and(eq(groupPaymentIntents.id, id), eq(groupPaymentIntents.organizationId, orgId)));
     return row;
   }
   async getGroupPaymentIntentByOrgAndIdempotencyKey(orgId: string, key: string): Promise<GroupPaymentIntent | undefined> {
@@ -5409,7 +5422,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateGroupPaymentIntent(id: string, data: Partial<GroupPaymentIntent>, orgId: string): Promise<GroupPaymentIntent | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(groupPaymentIntents).set({ ...data, updatedAt: new Date() }).where(eq(groupPaymentIntents.id, id)).returning();
+    const [updated] = await tdb.update(groupPaymentIntents).set({ ...stripImmutableKeys(data as any), updatedAt: new Date() }).where(and(eq(groupPaymentIntents.id, id), eq(groupPaymentIntents.organizationId, orgId))).returning();
     return updated;
   }
   async getGroupPaymentAllocations(intentId: string, orgId: string): Promise<GroupPaymentAllocation[]> {
@@ -6571,7 +6584,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getMonthEndRunById(id: string, orgId: string): Promise<MonthEndRun | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [row] = await tdb.select().from(monthEndRuns).where(eq(monthEndRuns.id, id));
+    const [row] = await tdb.select().from(monthEndRuns).where(and(eq(monthEndRuns.id, id), eq(monthEndRuns.organizationId, orgId)));
     return row;
   }
   async getNextMonthEndRunNumber(orgId: string): Promise<string> {
@@ -6760,7 +6773,7 @@ export class DatabaseStorage implements IStorage {
   }
   async updateSettlement(id: string, data: Partial<InsertSettlement>, orgId: string): Promise<Settlement | undefined> {
     const tdb = await getDbForOrg(orgId);
-    const [updated] = await tdb.update(settlements).set(data).where(eq(settlements.id, id)).returning();
+    const [updated] = await tdb.update(settlements).set(stripImmutableKeys(data)).where(and(eq(settlements.id, id), eq(settlements.organizationId, orgId))).returning();
     return updated;
   }
 
@@ -6878,7 +6891,7 @@ export class DatabaseStorage implements IStorage {
   }
   async getCostSheet(id: string, orgId: string): Promise<any> {
     const tdb = await getDbForOrg(orgId);
-    const [cs] = await tdb.select().from(costSheets).where(eq(costSheets.id, id));
+    const [cs] = await tdb.select().from(costSheets).where(and(eq(costSheets.id, id), eq(costSheets.organizationId, orgId)));
     return cs;
   }
   async createCostSheet(data: any): Promise<any> {
