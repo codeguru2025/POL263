@@ -56,7 +56,7 @@ export default function JoinRegisterPage() {
   const [loading, setLoading] = useState(!!(refCode || orgCode));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
-  const [result, setResult] = useState<{ policyNumber: string; activationCode: string } | null>(null);
+  const [result, setResult] = useState<{ policyNumber: string; activationCode: string | null; message?: string } | null>(null);
 
   const [form, setForm] = useState({
     firstName: "",
@@ -256,7 +256,7 @@ export default function JoinRegisterPage() {
         toast({ title: "Registration failed", description: msg || "Please try again.", variant: "destructive" });
         return;
       }
-      setResult({ policyNumber: data.policyNumber, activationCode: data.activationCode });
+      setResult({ policyNumber: data.policyNumber, activationCode: data.activationCode ?? null, message: data.message });
       toast({ title: "Policy registered", description: "Use your policy number and activation code to claim your account." });
     } finally {
       setSubmitLoading(false);
@@ -330,11 +330,17 @@ export default function JoinRegisterPage() {
                 <p className="text-sm text-muted-foreground">Policy number</p>
                 <p className="font-mono font-semibold text-lg" data-testid="text-policy-number">{result.policyNumber}</p>
               </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Activation code</p>
-                <p className="font-mono font-semibold text-lg" data-testid="text-activation-code">{result.activationCode}</p>
-              </div>
+              {result.activationCode && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Activation code</p>
+                  <p className="font-mono font-semibold text-lg" data-testid="text-activation-code">{result.activationCode}</p>
+                </div>
+              )}
             </div>
+            {/* No code when the details matched an existing client — it goes to their contact details on file instead. */}
+            {!result.activationCode && result.message && (
+              <p className="text-sm text-muted-foreground text-center">{result.message}</p>
+            )}
             <p className="text-sm text-muted-foreground text-center">
               Go to client login, then use &quot;Claim Policy&quot; to set your password with this policy number and activation code. After that you can sign in anytime.
             </p>

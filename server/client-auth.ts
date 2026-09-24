@@ -1,4 +1,5 @@
 import type { Express, Request, Response, NextFunction } from "express";
+import crypto from "crypto";
 
 declare global {
   namespace Express {
@@ -190,8 +191,13 @@ export function setupClientAuth(app: Express) {
   });
 
   app.post("/api/client-auth/enroll", async (req: Request, res: Response) => {
-    const { clientId, password, securityQuestionId, securityAnswer, referralCode } = req.body;
-    if (!clientId || !password || !securityQuestionId || !securityAnswer) {
+    const { clientId, password, securityQuestionId, securityAnswer, referralCode, activationCode } = req.body;
+    const enrollPolicyNumber = normalizePolicyNumber(req.body.policyNumber);
+    // activationCode + policyNumber are re-verified here, not just at /claim: /claim hands back
+    // the clientId, but nothing binds that step to this one, so trusting clientId alone let anyone
+    // who learned an unenrolled client's id (it's returned by several public flows) set that
+    // client's password and take over their portal account.
+    if (!clientId || !password || !securityQuestionId || !securityAnswer || typeof activationCode !== "string" || !activationCode.trim() || !enrollPolicyNumber) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
@@ -208,10 +214,19 @@ export function setupClientAuth(app: Express) {
     try {
       const orgs = await getCachedOrgIds();
       const client = await findAcrossOrgs(orgs, (orgId) => storage.getClient(clientId, orgId), "client-enroll");
-      if (!client || client.isEnrolled) {
+      if (!client || client.isEnrolled || !client.activationCode) {
         return res.status(400).json({ message: "Invalid enrollment request" });
       }
       const orgId = client.organizationId;
+      const codeA = crypto.createHash("sha256").update(String(client.activationCode).trim().toUpperCase()).digest();
+      const codeB = crypto.createHash("sha256").update(activationCode.trim().toUpperCase()).digest();
+      if (!crypto.timingSafeEqual(codeA, codeB)) {
+        return res.status(400).json({ message: "Invalid enrollment request" });
+      }
+      const enrollPolicy = await storage.getPolicyByNumber(enrollPolicyNumber, orgId);
+      if (!enrollPolicy || enrollPolicy.clientId !== client.id) {
+        return res.status(400).json({ message: "Invalid enrollment request" });
+      }
 
       const validQuestions = await storage.getSecurityQuestions(orgId);
       const questionIds = new Set(validQuestions.map((q) => q.id));
