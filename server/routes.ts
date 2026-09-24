@@ -63,6 +63,9 @@ import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPay
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getOrgSmsConfig, upsertOrgSmsConfig } from "./sms-config";
+import { getSmsAllowance, listSmsAllowanceEvents } from "./sms-allocation";
+import { buildSmsReportCsv, streamSmsReportPdf, smsTypeLabel } from "./sms-report";
+import type { SmsMessageFilters } from "./storage";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
 import { isReservedTenantSlug } from "./tenant-slug-policy";
@@ -1128,6 +1131,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * selected at share time. Never lets a query param override a REAL agent's own organizationId —
    * only an org-less (platform-owner) account ever reads it.
    */
+  /** True when the request was authenticated with a tenant's public-API bearer secret (see the
+   *  CSRF middleware in server/index.ts) but targets a DIFFERENT tenant. A tenant's secret only
+   *  vouches for calls about that tenant. Browser calls (no bearer) are unaffected. */
+  function publicApiOrgMismatch(req: any, orgId: string): boolean {
+    const bearerOrgId = req.publicApiOrgId as string | undefined;
+    return !!bearerOrgId && bearerOrgId !== orgId;
+  }
+
   async function resolveVcardOrgId(agent: { organizationId: string | null }, queryOrg: unknown): Promise<string | null> {
     if (agent.organizationId) return agent.organizationId;
     if (typeof queryOrg === "string" && queryOrg.trim()) {
@@ -1228,6 +1239,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const lead = await storage.createLead({
       organizationId: orgId,
       agentId: agent.id,
@@ -1305,6 +1317,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // policy's add-ons (POST /api/funeral-cases/:id/service-charges-from-addon). Returns
   // { reference } as the DFS-side integration already expects, plus the full quotation if one
   // was created.
+  // Marks a quotation as created by the public form below. The public GET further down only ever
+  // returns quotations carrying it — without that check, anyone holding a tenant's (public)
+  // referral code could read ANY of that tenant's staff-created funeral quotations by id.
+  const PUBLIC_FUNERAL_REQUEST_NOTE = "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.";
+
   app.post("/api/public/funeral-request", async (req, res) => {
     const { refCode, firstName, lastName, phone, email, deceasedName, deceasedAge, deceasedSex, message, requestedAddOnIds } = req.body;
     if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
@@ -1318,6 +1335,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
 
     const lead = await storage.createLead({
       organizationId: orgId,
@@ -1350,7 +1368,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         quote = await storage.createStandaloneQuotation(orgId, {
           currency: quotationCurrency,
           status: "draft",
-          notes: "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.",
+          notes: PUBLIC_FUNERAL_REQUEST_NOTE,
           deceasedName: typeof deceasedName === "string" && deceasedName.trim() ? deceasedName.trim() : undefined,
           deceasedAge: typeof deceasedAge === "number" ? deceasedAge : undefined,
           deceasedSex: typeof deceasedSex === "string" ? deceasedSex : undefined,
@@ -1379,6 +1397,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
     const orgAddOns = requestedIds.length > 0 ? await storage.getAddOns(orgId) : [];
     const matchedAddOns = requestedIds
@@ -1402,8 +1421,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const quotation = await storage.getQuotationById(req.params.id as string, orgId);
-    if (!quotation) return res.status(404).json({ message: "Not found" });
+    if (!quotation || !String(quotation.notes ?? "").startsWith("Requested via public 'Arrange a Funeral Now' form")) return res.status(404).json({ message: "Not found" });
     return res.json(quotation);
   });
 
@@ -1510,6 +1530,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode.trim());
     const orgId = agent ? await resolveVcardOrgId(agent, bodyOrg ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
     const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
 
@@ -4148,21 +4169,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const m of dependentsToAdd) {
         if (m.dependentId && typeof (m as any).coverAmount === "number") requestedMemberCoverByDependentId.set(m.dependentId, (m as any).coverAmount);
       }
+      // cover_topup add-ons raise the member's sum assured (and so their premium) — the public
+      // registration route already did this; staff issuance used to attach the add-on but price
+      // and cover the member as if it weren't there. Only cover_topup is meaningful here.
+      const ageRatedOrgAddOns = resolvedMemberAddOns.length > 0 ? await storage.getAddOns(user.organizationId) : [];
+      const ageRatedAddOnById = new Map(ageRatedOrgAddOns.map((a: any) => [a.id, a]));
+      const topupByMemberRef = new Map<string, number>();
+      for (const ma of resolvedMemberAddOns) {
+        const addOn: any = ageRatedAddOnById.get(ma.addOnId);
+        if (!addOn || addOn.isActive === false) return res.status(400).json({ message: `Add-on ${ma.addOnId} is invalid or inactive.` });
+        if (addOn.pricingMode !== "cover_topup") {
+          return res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` });
+        }
+        topupByMemberRef.set(ma.memberRef, (topupByMemberRef.get(ma.memberRef) ?? 0) + (parseFloat(String(addOn.coverIncrementAmount ?? 0)) || 0));
+      }
       const dependentsForRating = memberRows.slice(1).map((mr) => ({
         dateOfBirth: authorizedDeps.find((d: any) => d.id === mr.dependentId)?.dateOfBirth ?? null,
         coverAmount: mr.dependentId ? requestedMemberCoverByDependentId.get(mr.dependentId) : undefined,
+        coverTopup: mr.dependentId ? topupByMemberRef.get(mr.dependentId) : undefined,
       }));
       const policyholderCoverInput = typeof req.body.coverAmount === "number" ? req.body.coverAmount : undefined;
+      const policyholderTopup = topupByMemberRef.get("holder") ?? 0;
       const defaultCover = issuedProduct.coverAmount != null ? parseFloat(String(issuedProduct.coverAmount)) : 0;
-      const effectivePolicyholderCover = policyholderCoverInput ?? defaultCover;
-      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount > effectivePolicyholderCover);
+      const effectivePolicyholderCover = (policyholderCoverInput ?? defaultCover) + policyholderTopup;
+      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount + (d.coverTopup ?? 0) > effectivePolicyholderCover);
       if (overCap) {
         return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount (${policyInsert.currency || "USD"} ${effectivePolicyholderCover}).` });
       }
       const breakdown = await computeIndividualAgeRatedPremium(
         user.organizationId, productVersion.id, issuedProduct, policyInsert.currency || "USD", policyInsert.paymentSchedule || "monthly",
         Number((productVersion as any).dependentMaxAge ?? 20),
-        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput },
+        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput, coverTopup: policyholderTopup || undefined },
         dependentsForRating,
       );
       policyInsert.premiumAmount = breakdown.total.toFixed(2);
@@ -6681,6 +6718,97 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ─── SMS allowance + usage report (tenant admins) ───────────────────────────
+  // The allowance itself is granted by the platform owner (control plane — see
+  // server/sms-allocation.ts and the SMS tab of the platform tenant console). Admins see what's
+  // left and a full, downloadable log of every text (server/sms-report.ts). Phone numbers and
+  // message text are client data, hence the notification/settings permission.
+  const SMS_REPORT_PERMS = ["manage:settings", "read:notification"] as const;
+  const SMS_REPORT_MAX_ROWS = 50_000;
+
+  async function parseSmsReportFilters(req: any, orgId: string) {
+    const tz = await getOrgTimezone(orgId);
+    const today = await todayForOrg(orgId);
+    const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const fromStr = isDate(req.query.from) ? req.query.from : `${today.slice(0, 7)}-01`;
+    const toStr = isDate(req.query.to) ? req.query.to : today;
+    const toNext = new Date(`${toStr}T00:00:00Z`);
+    toNext.setUTCDate(toNext.getUTCDate() + 1);
+    const filters: SmsMessageFilters = {
+      from: localToUtcDate(fromStr, "00:00", tz),
+      to: localToUtcDate(toNext.toISOString().slice(0, 10), "00:00", tz),
+      status: ["sent", "failed", "blocked"].includes(String(req.query.status)) ? String(req.query.status) : undefined,
+      source: ["notification", "test", "mfa", "broadcast", "other"].includes(String(req.query.source)) ? String(req.query.source) : undefined,
+      search: typeof req.query.search === "string" && req.query.search.trim() ? req.query.search.trim().slice(0, 100) : undefined,
+    };
+    return { filters, tz, fromStr, toStr };
+  }
+
+  app.get("/api/sms/usage", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const { filters, fromStr, toStr } = await parseSmsReportFilters({ query: {} }, user.organizationId);
+    const [allowance, month, grants] = await Promise.all([
+      getSmsAllowance(user.organizationId),
+      storage.getSmsMessageStats(user.organizationId, filters),
+      listSmsAllowanceEvents(user.organizationId, 20),
+    ]);
+    return res.json({
+      allowance,
+      thisMonth: { from: fromStr, to: toStr, ...month },
+      // Who at the platform made the change is platform-internal — tenants just see what changed.
+      history: grants.map((g) => ({ id: g.id, type: g.type, credits: g.credits, balanceAfter: g.balanceAfter, note: g.note, createdAt: g.createdAt })),
+    });
+  });
+
+  app.get("/api/sms/messages", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const { filters, fromStr, toStr } = await parseSmsReportFilters(req, user.organizationId);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const [{ rows, total }, stats] = await Promise.all([
+      storage.getSmsMessages(user.organizationId, filters, limit, offset),
+      storage.getSmsMessageStats(user.organizationId, filters),
+    ]);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter((x): x is string => !!x)));
+    const clients = clientIds.length ? await storage.getClientsByIds(clientIds, user.organizationId) : [];
+    const nameById = new Map(clients.map((c: any) => [c.id, `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim()]));
+    return res.json({
+      from: fromStr, to: toStr, total, stats,
+      rows: rows.map((r) => ({ ...r, clientName: r.clientId ? nameById.get(r.clientId) ?? null : null, typeLabel: smsTypeLabel(r) })),
+    });
+  });
+
+  app.get("/api/sms/messages/export", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const format = req.query.format === "pdf" ? "pdf" : "csv";
+    const { filters, tz, fromStr, toStr } = await parseSmsReportFilters(req, user.organizationId);
+    const [{ rows, total }, stats, allowance, org] = await Promise.all([
+      storage.getSmsMessages(user.organizationId, filters, SMS_REPORT_MAX_ROWS, 0),
+      storage.getSmsMessageStats(user.organizationId, filters),
+      getSmsAllowance(user.organizationId),
+      storage.getOrganization(user.organizationId),
+    ]);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter((x): x is string => !!x)));
+    const clients = clientIds.length ? await storage.getClientsByIds(clientIds, user.organizationId) : [];
+    const nameById = new Map(clients.map((c: any) => [c.id, `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim()]));
+    const reportRows = rows.map((r) => ({ ...r, clientName: r.clientId ? nameById.get(r.clientId) ?? null : null }));
+    const ctx = {
+      orgName: org?.name || "POL263",
+      timezone: tz,
+      periodLabel: `${fromStr} to ${toStr}${total > rows.length ? ` (first ${rows.length.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} messages)` : ""}`,
+      allowance,
+      stats,
+      generatedBy: user.displayName || user.email || "staff",
+    };
+    // Bulk export of client phone numbers + message text — always audit-logged.
+    await auditLog(req, "EXPORT_SMS_REPORT", "SmsMessage", undefined, null, { format, from: fromStr, to: toStr, rows: rows.length, filters: { status: filters.status, source: filters.source, search: filters.search } });
+    const filename = `sms-report-${fromStr}-to-${toStr}.${format}`;
+    if (format === "pdf") return streamSmsReportPdf(res, reportRows, ctx, filename);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(buildSmsReportCsv(reportRows, ctx));
+  });
+
   app.get("/api/sms-config", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const cfg = await getOrgSmsConfig(user.organizationId);
@@ -6740,6 +6868,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       message: `${org?.name || "POL263"}: this is a test message confirming SMS is working. No action needed.`,
       kind: "transactional",
       countryCode: cf.homeCountryCode,
+      meta: { source: "test", sentByUserId: user.id },
     });
     await auditLog(req, "SEND_TEST_SMS", "Organization", user.organizationId, null, {
       to: rawTo.replace(/\d(?=\d{3})/g, "•"), ok: result.ok,
@@ -11918,7 +12047,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (matchedExistingClient) {
       const priorPolicies = await storage.getPoliciesByClient(client.id, orgId);
       if (priorPolicies.find((p) => p.productVersionId === pv.id && p.status !== "cancelled")) {
-        res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
+        // Deliberately generic: this is an unauthenticated route, and "this client already has a
+        // policy" would confirm to anyone that a given ID number/email holds cover here.
+        res.status(400).json({ error: "Registration not completed", message: "We couldn't complete this registration online. Please contact our office and we'll help you finish it." });
         return;
       }
     }
@@ -12094,7 +12225,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
       if (existingForClient.find((p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled")) {
-        res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
+        res.status(400).json({ error: "Registration not completed", message: "We couldn't complete this registration online. Please contact our office and we'll help you finish it." });
         return;
       }
       const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
@@ -12222,6 +12353,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     return handlePublicPolicyRegistration(req, res, orgId, agent.id, req.body.branchId || agent.branchId || null, agent.email ? `${agent.email} (agent referral link)` : "Agent referral link");
   });
 
