@@ -10,6 +10,30 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-24 — Nightly Supabase backup copied 0 rows for weeks, recorded as "partial"
+
+**Symptom:** `backup_sync_runs` showed every nightly run since at least 2026-09-18 as
+`partial … rows 0 tables 0 errs 119–133`, every error `self-signed certificate in certificate chain`
+(and each night twice — see the two-instance entry below). Nobody noticed because "partial" read
+as mostly-fine.
+
+**Root cause:** `getBackupPool` passes `ssl: { rejectUnauthorized: false }`, but pg 8's
+connection-string parser treats `sslmode=require` as `verify-full` and lets it OVERRIDE the `ssl`
+option. Production's `SUPABASE_BACKUP_URL` carries `sslmode=require` (reproduced locally: the same
+URL with `?sslmode=require` fails with the identical error; without it, connects). The Supabase
+pooler presents a self-signed chain, so every upsert failed. `control-plane-db.ts` already strips
+sslmode for exactly this reason — the backup pool didn't.
+
+**Fix:** `server/backup-sync.ts` — `stripSslMode()` on the backup URL; a run with errors and 0 rows
+is now recorded `failed`, not `partial`. `script/full-sync-to-supabase.ts` rewritten into a parity
+tool (reuses `runBackupSync` + prunes backup rows deleted on DO, only for fully-read tables; old
+version had a stale hardcoded table list). **Verified:** `tests/unit/backup-sync-ssl.test.ts`; manual
+parity run from a workstation.
+
+**Lesson:** with pg ≥ 8.x, `ssl: {rejectUnauthorized:false}` is silently ignored if the URL has
+`sslmode=`. Any new pg.Pool against a self-signed endpoint must strip it. And a job status must
+never say "partial" when nothing succeeded — check `totalRows === 0`.
+
 ## 2026-09-24 — Every scheduled job ran twice (duplicate SMS); group-ledger policies put into grace
 
 **Symptom:** Falakhe clients got each pre-lapse SMS twice (same template, ~1s apart, from the
