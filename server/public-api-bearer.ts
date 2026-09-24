@@ -52,7 +52,21 @@ interface PublicApiConfigShape {
   secret?: string;
 }
 
+// This lookup runs in the CSRF middleware, i.e. BEFORE any rate limiter — so without a cache every
+// request carrying any "Authorization: Bearer <junk>" to these paths cost a control-plane query plus
+// an AES decrypt per tenant, unthrottled. A short TTL keeps rotation/revocation near-immediate
+// (and upsertPublicApiCredential clears it on this instance straight away).
+const INTEGRATIONS_CACHE_TTL_MS = 60_000;
+let integrationsCache: { at: number; rows: { tenantId: string; secret: string }[] } | null = null;
+
 async function loadActivePublicApiIntegrations(): Promise<{ tenantId: string; secret: string }[]> {
+  if (integrationsCache && Date.now() - integrationsCache.at < INTEGRATIONS_CACHE_TTL_MS) return integrationsCache.rows;
+  const rows = await fetchActivePublicApiIntegrations();
+  integrationsCache = { at: Date.now(), rows };
+  return rows;
+}
+
+async function fetchActivePublicApiIntegrations(): Promise<{ tenantId: string; secret: string }[]> {
   const rows = await cpDb
     .select()
     .from(tenantIntegrations)
@@ -76,6 +90,7 @@ export async function upsertPublicApiCredential(orgId: string, secret: string): 
     .where(and(eq(tenantIntegrations.tenantId, orgId), eq(tenantIntegrations.provider, PUBLIC_API_PROVIDER_KEY)))
     .limit(1);
   const config = encryptFields({ secret }, ["secret"]);
+  integrationsCache = null;
   if (existing) {
     await cpDb
       .update(tenantIntegrations)
@@ -125,4 +140,9 @@ export async function authenticatePublicApiBearerToken(authorizationHeader: stri
     }
   }
   return matched ? { orgId: matched } : null;
+}
+
+/** Test hook — drops the cached integration list between cases. */
+export function resetPublicApiBearerCache(): void {
+  integrationsCache = null;
 }

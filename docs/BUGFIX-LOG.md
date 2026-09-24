@@ -10,7 +10,120 @@ convention" note in `CLAUDE.md`.
 
 ---
 
-## 2026-09-23
+## 2026-09-24 — Full-codebase audit (security, tenant isolation, pricing, IFRS 17, NFR)
+
+Audit focused on the 36 commits since the 2026-09-01 audit (new public customer API, age-rated
+pricing engine, SMS/email), then swept the whole codebase for the bug classes found there.
+
+### CRITICAL — client portal account takeover via public registration + enroll
+
+**Symptom:** none observed in logs; found by code review.
+
+**Root cause:** two independent flaws that chained:
+1. `POST /api/client-auth/enroll` set a client's password given only `clientId`. `/claim`
+   verified the activation code + policy number, but nothing bound that step to `/enroll`, so the
+   verification was advisory.
+2. `handlePublicPolicyRegistration` (`/api/public/register-policy`, `/walkin-register`) matched an
+   EXISTING client by email or national ID, then (a) overwrote that client's phone/DOB/national
+   ID/branch with the unauthenticated request's values and (b) returned that client's real
+   `activationCode` and `clientId` in the 201 response.
+Knowing a client's email or national ID + any public referral code was enough to get their
+`clientId` and activation code, then enroll → full portal access to all their policies,
+dependents and beneficiaries (only unenrolled clients — most legacy-imported ones).
+
+**Fix:** `server/client-auth.ts` enroll now requires `activationCode` + `policyNumber` and
+re-verifies both (constant-time code compare; policy must belong to the client);
+`client/src/pages/client/claim.tsx` sends them. Registration now only fills BLANK fields on a
+matched existing client, never replaces their saved payment method, prices age-rated cover off
+the DOB on file, and withholds `activationCode`/`clientId` from the response (the activation
+notification still goes to the contact details on file); `client/src/pages/join/register.tsx`
+handles the withheld code.
+
+**Verified:** `tests/unit/client-enroll-proof.test.ts` — 3 attack cases FAIL against the old code
+(stash-tested), all 4 cases pass now.
+
+**Lesson:** a multi-step flow where step 1 verifies and step 2 acts must re-verify (or carry a
+signed proof) in step 2 — an id returned by step 1 is not a credential. And any public route that
+"finds or creates" a record must treat a FOUND record as someone else's: fill blanks, never
+overwrite, never echo its secrets.
+
+### HIGH — cross-tenant read/write through unscoped storage methods (shared DB)
+
+**Root cause:** 36 storage methods (`getProduct`, `getProductVersion`, `getFuneralCase`, `getLead`,
+`getGroup`, payment getters, and `update*`/`delete*` for clients, products, add-ons, benefit
+catalogue/bundles, age bands, age-band rate cards, policies, receipts, leads, terms, cashups,
+settlements, …) took `orgId` but used it only to pick the database — the `WHERE` was `id` alone.
+On the shared DB, isolation depended on every route remembering an ownership pre-check. Several
+didn't: PATCH `/api/add-ons/:id`, `/api/benefit-catalog/:id`, `/api/benefit-bundles/:id`,
+`/api/age-bands/:id`, `/api/funeral-tasks/:id`, `/api/terms/:id`, PATCH/DELETE
+`/api/age-band-rates/:id`. Worse, the new age-band rate-card POST validated the product version
+with the unscoped getter and `getAgeBandRateCards` read by `productVersionId` alone — tenant A
+could inject rate cards that PRICED tenant B's policies. Several PATCH routes also passed raw
+`req.body`, so `organizationId` could be mass-assigned to re-home a row.
+
+**Fix:** `server/storage.ts` — all 36 methods now filter `eq(table.organizationId, orgId)`;
+updates pass through a new `stripImmutableKeys()` (drops `id`/`organizationId`);
+`updateFuneralTask` scopes via the parent case (the table has no org column) and can't re-parent;
+`getAgeBandRateCards` scoped by org. `server/routes.ts` — age-band-rate PATCH whitelists fields,
+validates, and PATCH/DELETE record before-state.
+
+**Verified:** `tests/unit/storage-tenant-scoping.test.ts` (static guard, 59 cases); tsc; full suite.
+
+**Lesson:** tenant scoping belongs in the storage layer, not in each route. When adding a storage
+method that takes `orgId`, the `WHERE` must use it — "orgId selects the DB" is not scoping on the
+shared DB. Grep signal: `.where(eq(<table>.id, id))` inside a method whose params include `orgId`.
+
+### HIGH — age-rated (Diaspora) policies silently repriced on every view
+
+**Root cause:** `recalculatePolicyPremiumIfNeeded` / `batchRecalculatePolicyPremiums` (drift check
+run on policy list/detail views) call `computePolicyPremium` without the age-rated inputs, so an
+`individual_age_rated` policy was re-priced with no policyholder DOB (→ 21–65 band), default cover,
+no cover top-ups — and the "drift" was written back as the new premium. Product conversion and the
+premium-change preview had the same gap for an age-rated target.
+
+**Fix:** `server/routes.ts` — drift recalculation skips `individual_age_rated` products (premium is
+fixed at issuance, stored per member); conversion/preview pass the policyholder DOB via new
+`ageRatedInputForPolicy()`.
+
+**Lesson:** when a pricing model gains inputs that live outside `(productVersion, dependentDobs,
+addOns)`, grep EVERY `computePolicyPremium(` caller — the background/drift ones are the dangerous
+ones because they write silently.
+
+### HIGH — age-rated pricing failed OPEN ($0) on a missing rate card
+
+**Root cause:** `computeIndividualAgeRatedPremium` priced any member whose age band had no rate card
+at $0 (with only a warn log) — a real policy could be issued with free cover for that life, and with
+every band missing the premium was $0 so no payment link was even created.
+
+**Fix:** `server/route-helpers.ts` — throws `PricingConfigError` (status 422, `expose`), which the
+global handler (`server/index.ts`) now returns with its message for exposed 4xx errors; the quote
+engine skips just that product; public registration dry-runs pricing BEFORE writing anything.
+Existing test that asserted the $0 behaviour rewritten to assert the 422.
+
+**Lesson:** same as "fail-open defaults" in the debugging-patterns memory — a missing price is an
+error, never zero.
+
+### MEDIUM — fixed in the same pass
+
+- **RBAC gaps:** `GET /api/groups/:id/policies` returned client national IDs/phones to any staff
+  user (now `read:policy`); six `/api/dashboard/*` chart routes exposed org-wide revenue to any
+  staff (now the same `read:finance|read:policy|read:client` guard as `/stats`); `/api/diagnostics`
+  (now `read:audit_log`, like its siblings).
+- **IFRS 17 LIC (`server/insurance-revenue.ts`):** the liability for incurred claims wasn't filtered
+  to PAA contracts (revenue/LRC were) and used each claim's CURRENT status with no date bound, so a
+  back-dated report was wrong both ways. Now PAA-only, reported on/before `asOf`, and status
+  reconstructed as of `asOf` from `claim_status_history`. Ran read-only against Falakhe's DB:
+  executes; Falakhe has 542 active policies, all on UNCLASSIFIED product versions, so the report
+  shows nothing for them until an auditor classifies the versions.
+- **Public-API bearer lookup ran before every rate limiter** (it sits in the CSRF middleware): any
+  `Authorization: Bearer junk` request cost a control-plane query + a decrypt per tenant,
+  unthrottled. 60s in-process cache, cleared on rotation (`server/public-api-bearer.ts`).
+- **Public registration left orphan client/dependent rows** when add-on/cover/pricing validation
+  rejected the request after the inserts, and every retry for an existing client duplicated its
+  dependents. Those checks + the duplicate-policy check now run before any write.
+- **Dependencies:** `multer` 2.2.0→2.4.0 (DoS / size-limit bypass), `nodemailer` 9.0.5→9.1.1
+  (recipient-domain bypass, address-parser DoS — public routes email visitor-supplied addresses).
+- `require("./notifications")` in two routes (500 under `tsx`/ESM in dev) → static import.
 
 ### Flaky test: "valid secret + tampered token → 401" sometimes got 200 (blocked a push)
 

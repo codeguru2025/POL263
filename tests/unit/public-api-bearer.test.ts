@@ -25,7 +25,7 @@ vi.mock("../../server/control-plane-db", () => {
 
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 
-import { isPublicApiBearerPath, authenticatePublicApiBearerToken } from "../../server/public-api-bearer";
+import { isPublicApiBearerPath, authenticatePublicApiBearerToken, resetPublicApiBearerCache } from "../../server/public-api-bearer";
 
 const ORG_A = "11111111-1111-1111-1111-111111111111";
 const ORG_B = "22222222-2222-2222-2222-222222222222";
@@ -37,6 +37,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  resetPublicApiBearerCache();
   h.rows = [
     { id: "int-1", tenantId: ORG_A, provider: "public_api", isActive: true, config: { secret: SECRET_A } },
     { id: "int-2", tenantId: ORG_B, provider: "public_api", isActive: true, config: { secret: SECRET_B } },
@@ -97,5 +98,14 @@ describe("authenticatePublicApiBearerToken", () => {
   it("is null when no tenant has a credential row at all", async () => {
     h.rows = [];
     expect(await authenticatePublicApiBearerToken(`Bearer ${SECRET_A}`)).toBeNull();
+  });
+});
+
+describe("integration lookup cache", () => {
+  it("serves repeated lookups from cache instead of re-querying the control plane", async () => {
+    expect(await authenticatePublicApiBearerToken(`Bearer ${SECRET_A}`)).toEqual({ orgId: ORG_A });
+    h.rows = []; // a fresh DB read would now find nothing
+    expect(await authenticatePublicApiBearerToken("Bearer junk")).toBeNull();
+    expect(await authenticatePublicApiBearerToken(`Bearer ${SECRET_A}`)).toEqual({ orgId: ORG_A });
   });
 });
