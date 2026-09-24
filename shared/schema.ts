@@ -2889,6 +2889,9 @@ export const notificationLogs = pgTable(
     failureReason: text("failure_reason"),
     readAt: timestamp("read_at"),
     sentAt: timestamp("sent_at"),
+    /** SMS only: when a retryable failure (provider down, paused, allowance used up) is due to be
+     *  retried by the SMS retry sweep. null = no retry pending. */
+    nextRetryAt: timestamp("next_retry_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -2898,6 +2901,44 @@ export const notificationLogs = pgTable(
     index("notification_logs_recipient_read_idx").on(t.recipientId, t.readAt),
   ]
 );
+
+/**
+ * Every SMS the platform tried to send for this org — the source for the tenant's SMS usage
+ * report. One row per send attempt (a notification retried later gets a new row per attempt).
+ * creditsCharged is what was deducted from the platform-granted allowance (0 when not metered,
+ * refunded to 0 when the provider rejected it).
+ */
+export const smsMessages = pgTable(
+  "sms_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    recipient: text("recipient").notNull(),
+    /** No FK on purpose — a log row must never fail to write because a referenced row moved. */
+    clientId: uuid("client_id"),
+    message: text("message").notNull(),
+    segments: integer("segments").default(1).notNull(),
+    creditsCharged: integer("credits_charged").default(0).notNull(),
+    /** transactional | promotional | otp */
+    kind: text("kind").default("transactional").notNull(),
+    /** notification | test | mfa | broadcast | other — what triggered the send. */
+    source: text("source").default("other").notNull(),
+    /** Notification event type (payment_receipt, pre_lapse_warning…) when source = notification. */
+    eventType: text("event_type"),
+    /** sent | failed | blocked (allowance used up / SMS paused) */
+    status: text("status").notNull(),
+    failureReason: text("failure_reason"),
+    providerMessageId: text("provider_message_id"),
+    notificationLogId: uuid("notification_log_id"),
+    sentByUserId: uuid("sent_by_user_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("sms_messages_org_created_idx").on(t.organizationId, t.createdAt)]
+);
+export type SmsMessage = typeof smsMessages.$inferSelect;
+export type InsertSmsMessage = typeof smsMessages.$inferInsert;
 
 /**
  * Inbound email inbox — mail received at a tenant's provisioned address

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or, ilike, isNull, exists, getTableColumns, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or, ilike, isNull, isNotNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
@@ -33,7 +33,7 @@ import {
   commissionPlans, commissionLedgerEntries, platformReceivables, settlements, platformFeeCredits,
   payrollEmployees, payrollRuns, payslips, attendanceLogs, attendanceQrCodes, attendanceScans,
   vehicleLocationPings, vehicleAlerts,
-  notificationTemplates, notificationLogs, inboundEmails, leads, expenditures,
+  notificationTemplates, notificationLogs, smsMessages, inboundEmails, leads, expenditures,
   approvalRequests, dependentChangeRequests, securityQuestions,
   productBenefitBundleLinks, groups, groupMembers, groupContributions, groupPoolPayouts, groupLedgerEntries, settlementAllocations, termsAndConditions,
   accumulationAccounts, accumulationContributions, accumulationWithdrawals,
@@ -122,6 +122,7 @@ import {
   type CommissionLedgerEntry, type InsertCommissionLedgerEntry,
   type NotificationTemplate, type InsertNotificationTemplate,
   type NotificationLog,
+  type SmsMessage, type InsertSmsMessage,
   type InboundEmail,
   type Lead, type InsertLead,
   type Expenditure, type InsertExpenditure,
@@ -574,6 +575,12 @@ export interface IStorage {
   createNotificationTemplate(tmpl: InsertNotificationTemplate): Promise<NotificationTemplate>;
   createNotificationLog(orgId: string, data: { recipientType: string; recipientId: string | null; channel: string; subject?: string | null; body?: string | null; templateId?: string | null; policyId?: string | null; status?: string }): Promise<NotificationLog>;
   updateNotificationLogStatus(orgId: string, id: string, status: string, failureReason?: string): Promise<void>;
+  updateNotificationLogDelivery(orgId: string, id: string, patch: { status: string; failureReason?: string | null; nextRetryAt: Date | null; attempts?: number; sentAt?: Date | null }): Promise<void>;
+  getDueSmsNotificationRetries(orgId: string, now: Date, notBefore: Date, limit: number): Promise<NotificationLog[]>;
+  expireStaleSmsNotificationRetries(orgId: string, notBefore: Date): Promise<number>;
+  createSmsMessage(orgId: string, data: Omit<InsertSmsMessage, "organizationId">): Promise<void>;
+  getSmsMessages(orgId: string, filters: SmsMessageFilters, limit: number, offset: number): Promise<{ rows: SmsMessage[]; total: number }>;
+  getSmsMessageStats(orgId: string, filters: SmsMessageFilters): Promise<SmsMessageStats>;
   getLeadsByOrg(orgId: string, limit?: number, offset?: number): Promise<Lead[]>;
   getLeadsByAgent(agentId: string, orgId: string): Promise<Lead[]>;
   getLead(id: string, orgId: string): Promise<Lead | undefined>;
@@ -852,6 +859,30 @@ let auditSavepointSeq = 0;
 function stripImmutableKeys<T extends Record<string, any>>(data: T): T {
   const { id: _id, organizationId: _org, ...rest } = data as any;
   return rest as T;
+}
+
+export interface SmsMessageFilters {
+  from?: Date;
+  /** exclusive */
+  to?: Date;
+  status?: string;
+  source?: string;
+  /** matches the recipient number or the message text */
+  search?: string;
+}
+export interface SmsMessageStats { sent: number; failed: number; blocked: number; creditsCharged: number; segmentsSent: number }
+
+function smsMessageConditions(orgId: string, f: SmsMessageFilters): SQL[] {
+  const conds: SQL[] = [eq(smsMessages.organizationId, orgId)];
+  if (f.from) conds.push(gte(smsMessages.createdAt, f.from));
+  if (f.to) conds.push(lt(smsMessages.createdAt, f.to));
+  if (f.status) conds.push(eq(smsMessages.status, f.status));
+  if (f.source) conds.push(eq(smsMessages.source, f.source));
+  if (f.search?.trim()) {
+    const q = `%${f.search.trim().replace(/[%_\\]/g, (c) => "\\" + c)}%`;
+    conds.push(or(ilike(smsMessages.recipient, q), ilike(smsMessages.message, q))!);
+  }
+  return conds;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -4200,6 +4231,63 @@ export class DatabaseStorage implements IStorage {
       sentAt: new Date(),
     }).returning();
     return created;
+  }
+  async updateNotificationLogDelivery(orgId: string, id: string, patch: { status: string; failureReason?: string | null; nextRetryAt: Date | null; attempts?: number; sentAt?: Date | null }): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    const set: Record<string, unknown> = { status: patch.status, failureReason: patch.failureReason ?? null, nextRetryAt: patch.nextRetryAt };
+    if (patch.attempts !== undefined) set.attempts = patch.attempts;
+    if (patch.sentAt !== undefined) set.sentAt = patch.sentAt;
+    await tdb.update(notificationLogs).set(set).where(and(eq(notificationLogs.id, id), eq(notificationLogs.organizationId, orgId)));
+  }
+  async getDueSmsNotificationRetries(orgId: string, now: Date, notBefore: Date, limit: number): Promise<NotificationLog[]> {
+    const tdb = await getDbForOrg(orgId);
+    return tdb.select().from(notificationLogs).where(and(
+      eq(notificationLogs.organizationId, orgId),
+      eq(notificationLogs.channel, "sms"),
+      eq(notificationLogs.status, "failed"),
+      lte(notificationLogs.nextRetryAt, now),
+      gte(notificationLogs.createdAt, notBefore),
+    )).orderBy(asc(notificationLogs.nextRetryAt)).limit(limit);
+  }
+  async expireStaleSmsNotificationRetries(orgId: string, notBefore: Date): Promise<number> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.update(notificationLogs).set({
+      nextRetryAt: null,
+      failureReason: sql`COALESCE(${notificationLogs.failureReason}, '') || ' (not retried — older than 24 hours)'`,
+    }).where(and(
+      eq(notificationLogs.organizationId, orgId),
+      eq(notificationLogs.channel, "sms"),
+      isNotNull(notificationLogs.nextRetryAt),
+      lt(notificationLogs.createdAt, notBefore),
+    )).returning({ id: notificationLogs.id });
+    return rows.length;
+  }
+  async createSmsMessage(orgId: string, data: Omit<InsertSmsMessage, "organizationId">): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.insert(smsMessages).values({ ...data, organizationId: orgId });
+  }
+  async getSmsMessages(orgId: string, filters: SmsMessageFilters, limit: number, offset: number): Promise<{ rows: SmsMessage[]; total: number }> {
+    const tdb = await getDbForOrg(orgId);
+    const where = and(...smsMessageConditions(orgId, filters));
+    const [rows, [{ n }]] = await Promise.all([
+      tdb.select().from(smsMessages).where(where).orderBy(desc(smsMessages.createdAt)).limit(limit).offset(offset),
+      tdb.select({ n: count() }).from(smsMessages).where(where),
+    ]);
+    return { rows, total: Number(n) };
+  }
+  async getSmsMessageStats(orgId: string, filters: SmsMessageFilters): Promise<SmsMessageStats> {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select({
+      sent: sql<string>`COUNT(*) FILTER (WHERE ${smsMessages.status} = 'sent')`,
+      failed: sql<string>`COUNT(*) FILTER (WHERE ${smsMessages.status} = 'failed')`,
+      blocked: sql<string>`COUNT(*) FILTER (WHERE ${smsMessages.status} = 'blocked')`,
+      creditsCharged: sql<string>`COALESCE(SUM(${smsMessages.creditsCharged}), 0)`,
+      segmentsSent: sql<string>`COALESCE(SUM(${smsMessages.segments}) FILTER (WHERE ${smsMessages.status} = 'sent'), 0)`,
+    }).from(smsMessages).where(and(...smsMessageConditions(orgId, filters)));
+    return {
+      sent: Number(row?.sent ?? 0), failed: Number(row?.failed ?? 0), blocked: Number(row?.blocked ?? 0),
+      creditsCharged: Number(row?.creditsCharged ?? 0), segmentsSent: Number(row?.segmentsSent ?? 0),
+    };
   }
   async updateNotificationLogStatus(orgId: string, id: string, status: string, failureReason?: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);

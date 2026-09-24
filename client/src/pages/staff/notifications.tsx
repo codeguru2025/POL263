@@ -15,6 +15,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Bell, Plus, Loader2, Pencil, Trash2, Send, Tag } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { SmsEventToggles } from "@/components/sms-event-toggles";
+import { SmsUsagePanel } from "@/components/sms-usage-panel";
+import { useAuth } from "@/hooks/use-auth";
 
 interface MergeTag { tag: string; description: string; example: string }
 interface EventType { value: string; label: string }
@@ -57,6 +59,9 @@ function MergeTagPicker({ tags, onInsert }: { tags: MergeTag[]; onInsert: (tag: 
 
 export default function StaffNotifications() {
   const { toast } = useToast();
+  const { permissions, isPlatformOwner } = useAuth();
+  // Same permissions the /api/sms/* report endpoints accept.
+  const canSeeSmsUsage = isPlatformOwner || permissions.includes("manage:settings") || permissions.includes("read:notification");
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -483,6 +488,8 @@ export default function StaffNotifications() {
         {eventTypes.length > 0 && (
           <SmsEventToggles templates={templates} eventTypes={eventTypes} onSetup={openSmsSetup} />
         )}
+
+        {canSeeSmsUsage && <SmsUsagePanel />}
 
         <CardSection title="Message Templates" description="Each template triggers automatically when its event occurs. Dynamic tags are replaced with real policy data." icon={Bell}>
           {isLoading ? (

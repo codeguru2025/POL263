@@ -10,6 +10,35 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-24 (later) — Audit follow-ups: the items deferred earlier the same day
+
+- **SMS dropped during outages/pauses:** a notification SMS that failed for a temporary reason
+  (circuit breaker open, provider 5xx/network, account issue) was marked failed and never retried.
+  `SmsSendResult.retryable` now classifies failures; `dispatchNotification` sets
+  `notification_logs.next_retry_at`, and `server/sms-retry-sweep.ts` (every 5 min, advisory lock
+  9_002_630_006) retries with 5m→15m→30m→1h→2h→4h backoff inside a 24h window, then marks it final.
+  **Lesson:** "never throws, returns ok:false" send helpers need a durable retry path, or every
+  transient outage silently loses messages.
+- **OTP codes would have been persisted** by the new SMS log — `redactOtp()` masks digit runs for
+  `kind: "otp"` before the row is written. **Lesson:** any new message log must treat OTP bodies as
+  credentials.
+- **`GET /api/public/funeral-request/:id`** returned any of a tenant's quotations to anyone holding
+  its public referral code; now only quotations created by the public form (note marker).
+- **Public-API bearer secret wasn't bound to its tenant:** the CSRF middleware now records the
+  secret's org on `req.publicApiOrgId`; bearer-eligible routes 403 a call aimed at another tenant.
+- **Staff issuance of `individual_age_rated` ignored cover top-up add-ons** (attached them but
+  priced/covered as if absent) — now summed per member exactly like public registration.
+- **Duplicate-policy response on public registration** confirmed that an ID/email already held
+  cover — now a generic "couldn't complete online, contact the office".
+- **Dependencies:** overrides pin `csurf`→`cookie@0.7.2`, `exceljs`→`uuid@11.1.1`,
+  `@esbuild-kit/core-utils`→`esbuild@0.25`; `vite` 5→8, `vitest` 2→5, `@vitejs/plugin-react` 4→6,
+  `esbuild` 0.28, `@types/node` 22 (matches `engines`), `image-size` 2.0.4 (upload DoS). `npm audit`:
+  0 vulnerabilities (prod and dev). Verified: tsc, 733 tests, production build, built client boots
+  in Chrome, `drizzle-kit check`, exceljs workbook generation.
+- Feature shipped alongside (not a bug): platform-granted SMS allowance + downloadable SMS report —
+  see `server/sms-allocation.ts`. Its atomic deduction was verified against a real (throwaway)
+  Postgres: 20 concurrent sends on 10 credits → exactly 10 sent, 10 held back.
+
 ## 2026-09-24 — Full-codebase audit (security, tenant isolation, pricing, IFRS 17, NFR)
 
 Audit focused on the 36 commits since the 2026-09-01 audit (new public customer API, age-rated

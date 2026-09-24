@@ -10,6 +10,14 @@ const { mockGetOrgSmsConfig, mockNotify } = vi.hoisted(() => ({
 vi.mock("../../server/sms-config", () => ({ getOrgSmsConfig: mockGetOrgSmsConfig, platformConfig: vi.fn() }));
 vi.mock("../../server/user-notifications", () => ({ notifyUsersWithPermission: (...a: any[]) => mockNotify(...a) }));
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
+// sendSms now meters against the platform SMS allowance (control plane) and logs every send to
+// the tenant DB — both stubbed here: this file tests provider behaviour, not metering.
+vi.mock("../../server/sms-allocation", () => ({
+  countSmsSegments: () => 1,
+  reserveSmsCredits: async () => ({ ok: true, metered: false, charged: 0 }),
+  refundSmsCredits: async () => undefined,
+}));
+vi.mock("../../server/storage", () => ({ storage: { createSmsMessage: async () => undefined } }));
 
 import { sendSms, resetSmsHealthState } from "../../server/sms-service";
 

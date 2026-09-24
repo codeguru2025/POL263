@@ -10,6 +10,7 @@ const { mockStorage, mockSendEmail, mockPushToClient, mockHasModule, mockSendSms
     getClient: vi.fn(),
     createNotificationLog: vi.fn(),
     updateNotificationLogStatus: vi.fn(),
+    updateNotificationLogDelivery: vi.fn(),
     getCountryFlagSettings: vi.fn(),
     getPolicy: vi.fn(),
   },
@@ -39,7 +40,7 @@ vi.mock("../../server/sms-service", () => ({
 
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 
-import { dispatchNotification, unfilledMergeTags } from "../../server/notifications";
+import { dispatchNotification, unfilledMergeTags, nextSmsRetryAt } from "../../server/notifications";
 
 /**
  * Previously only "activation", "claim_status_change", and "kyc_status_change" emailed by
@@ -226,7 +227,40 @@ describe("dispatchNotification — SMS edge cases", () => {
     mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
     mockSendSms.mockResolvedValue({ ok: false, message: "Africala SMS failed: Ip Address Not Allowed" });
     await dispatchNotification("org1", "policy_capture", "c1", {});
-    expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "failed", expect.stringContaining("Ip Address"));
+    // A per-recipient rejection is final — no retry scheduled.
+    expect(mockStorage.updateNotificationLogDelivery).toHaveBeenCalledWith("org1", "log1", expect.objectContaining({
+      status: "failed", failureReason: expect.stringContaining("Ip Address"), nextRetryAt: null,
+    }));
+  });
+
+  it("queues a retry (instead of dropping the text) when the failure is temporary", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    mockSendSms.mockResolvedValue({ ok: false, message: "SMS is paused for about a minute", retryable: true });
+    const before = Date.now();
+    await dispatchNotification("org1", "policy_capture", "c1", {});
+    const patch = mockStorage.updateNotificationLogDelivery.mock.calls.at(-1)[2];
+    expect(patch).toMatchObject({ status: "failed", attempts: 1 });
+    expect(patch.nextRetryAt.getTime()).toBeGreaterThanOrEqual(before + 5 * 60_000 - 1000);
+  });
+
+  it("tags the send so it shows up correctly in the SMS usage report", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
+    await dispatchNotification("org1", "policy_capture", "c1", {});
+    expect(mockSendSms).toHaveBeenCalledWith("org1", expect.objectContaining({
+      meta: { source: "notification", eventType: "policy_capture", clientId: "c1", notificationLogId: "log1" },
+    }));
+  });
+});
+
+describe("nextSmsRetryAt", () => {
+  it("backs off 5m, 15m, 30m, 1h, 2h, 4h, then gives up", () => {
+    const t0 = new Date("2026-09-24T10:00:00Z");
+    const mins = [1, 2, 3, 4, 5, 6].map((n) => (nextSmsRetryAt(n, t0)!.getTime() - t0.getTime()) / 60_000);
+    expect(mins).toEqual([5, 15, 30, 60, 120, 240]);
+    expect(nextSmsRetryAt(7, t0)).toBeNull();
   });
 });
 

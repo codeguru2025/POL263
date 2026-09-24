@@ -17,6 +17,8 @@ import { structuredLog } from "./logger";
 import { ipv4Dispatcher, normalizeMsisdn } from "./phone";
 import { getOrgSmsConfig, platformConfig } from "./sms-config";
 import { notifyUsersWithPermission } from "./user-notifications";
+import { countSmsSegments, reserveSmsCredits, refundSmsCredits } from "./sms-allocation";
+import { storage } from "./storage";
 
 export interface SendSmsOptions {
   to: string;
@@ -29,6 +31,14 @@ export interface SendSmsOptions {
    *  the caller from the recipient's country (org home vs. cross-border — see
    *  country_flag_settings). Falls back to SMS_DEFAULT_COUNTRY_CODE / "263" when omitted. */
   countryCode?: string;
+  /** Recorded on the sms_messages log row (the tenant's SMS usage report). */
+  meta?: {
+    source?: "notification" | "test" | "mfa" | "broadcast" | "other";
+    eventType?: string | null;
+    clientId?: string | null;
+    notificationLogId?: string | null;
+    sentByUserId?: string | null;
+  };
 }
 
 /** Credentials resolved for a specific org — never read from process.env inside a provider. */
@@ -45,6 +55,11 @@ export interface SmsSendResult {
   message: string;
   providerMessageId?: string;
   accountIssue?: SmsAccountIssue;
+  /** A temporary condition (provider down, sending paused, allowance used up) — worth retrying
+   *  later. false/undefined for a per-recipient rejection that will fail the same way again. */
+  retryable?: boolean;
+  /** Refused before reaching the provider (allowance used up / couldn't be checked). */
+  blocked?: boolean;
 }
 
 export interface SmsProvider {
@@ -162,7 +177,7 @@ class AfricalaProvider implements SmsProvider {
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);
 
     if (circuitIsOpen(apiToken)) {
-      return { ok: false, message: "SMS is paused for about a minute after repeated provider errors — it will retry automatically." };
+      return { ok: false, message: "SMS is paused for about a minute after repeated provider errors — it will retry automatically.", retryable: true };
     }
 
     try {
@@ -189,7 +204,7 @@ class AfricalaProvider implements SmsProvider {
       if (!res.ok || !first) {
         structuredLog("error", "Africala SMS send failed — bad response", { status: res.status, body });
         circuitFailure(apiToken);
-        return { ok: false, message: `Africala SMS failed: HTTP ${res.status}` };
+        return { ok: false, message: `Africala SMS failed: HTTP ${res.status}`, retryable: true };
       }
       // OperationCode 0 = success per Africala's docs; anything else (or a non-"Success" Status)
       // is a per-recipient failure that still comes back as HTTP 200, so status must be checked
@@ -199,7 +214,7 @@ class AfricalaProvider implements SmsProvider {
         const accountIssue = AFRICALA_ACCOUNT_CODES[first.OperationCode as number];
         if (accountIssue) circuitFailure(apiToken);
         else circuitOk(apiToken); // reachable and authenticated — this was just a bad recipient/message
-        return { ok: false, message: `Africala SMS failed: ${first.Remarks || first.Status || "unknown error"}`, accountIssue };
+        return { ok: false, message: `Africala SMS failed: ${first.Remarks || first.Status || "unknown error"}`, accountIssue, retryable: !!accountIssue };
       }
 
       circuitOk(apiToken);
@@ -208,7 +223,7 @@ class AfricalaProvider implements SmsProvider {
     } catch (err: any) {
       structuredLog("error", "Africala SMS send threw", { error: err?.message, to: destinationAddress });
       circuitFailure(apiToken);
-      return { ok: false, message: `Africala SMS failed: ${err?.message || "network error"}` };
+      return { ok: false, message: `Africala SMS failed: ${err?.message || "network error"}`, retryable: true };
     }
   }
 }
@@ -249,9 +264,69 @@ export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<SmsS
   if (!provider.isConfigured(creds)) {
     return { ok: false, message: `SMS is not configured for provider "${provider.name}" for this organization. Set an API token and Sender ID in Settings.` };
   }
+
+  // Deduct from the platform-granted allowance BEFORE sending (atomic — see sms-allocation.ts),
+  // refund if the provider then rejects it. One-time login codes may overdraw rather than lock a
+  // user out. If the allowance can't be checked at all, fail closed for everything except OTPs.
+  const segments = countSmsSegments(opts.message);
+  let reservation: Awaited<ReturnType<typeof reserveSmsCredits>>;
+  try {
+    reservation = await reserveSmsCredits(orgId, segments, { allowOverdraft: opts.kind === "otp" });
+  } catch (err: any) {
+    structuredLog("error", "SMS allowance check failed", { orgId, error: err?.message });
+    reservation = opts.kind === "otp"
+      ? { ok: true, metered: false, charged: 0 }
+      : { ok: false, metered: true, charged: 0, reason: "Not sent — the SMS allowance couldn't be checked just now. It will be retried automatically." };
+  }
+  const recipient = normalizePhoneForSms(opts.to, opts.countryCode);
+
+  if (!reservation.ok) {
+    const blocked: SmsSendResult = { ok: false, message: reservation.reason || "Not sent — SMS allowance used up.", retryable: true, blocked: true };
+    await recordSmsMessage(orgId, opts, recipient, segments, 0, "blocked", blocked.message);
+    return blocked;
+  }
+
   const result = await provider.send(creds, opts);
   if (result.accountIssue) alertAccountIssue(orgId, result.accountIssue);
+  if (!result.ok && reservation.charged > 0) {
+    await refundSmsCredits(orgId, reservation.charged).catch((err) =>
+      structuredLog("error", "SMS credit refund failed", { orgId, credits: reservation.charged, error: err?.message }));
+  }
+  await recordSmsMessage(orgId, opts, recipient, segments, result.ok ? reservation.charged : 0,
+    result.ok ? "sent" : "failed", result.ok ? null : result.message, result.providerMessageId);
   return result;
+}
+
+/** Masks every run of 4+ digits (the code) in a one-time-code message. */
+export function redactOtp(message: string): string {
+  return String(message ?? "").replace(/\d{4,}/g, (m) => "•".repeat(m.length));
+}
+
+/** Best-effort write to the tenant's sms_messages log — a logging failure never fails a send. */
+async function recordSmsMessage(
+  orgId: string, opts: SendSmsOptions, recipient: string, segments: number, creditsCharged: number,
+  status: "sent" | "failed" | "blocked", failureReason: string | null, providerMessageId?: string,
+): Promise<void> {
+  try {
+    await storage.createSmsMessage(orgId, {
+      recipient,
+      clientId: opts.meta?.clientId ?? null,
+      // One-time codes are credentials: never persist them in a log admins can read/download.
+      message: opts.kind === "otp" ? redactOtp(opts.message) : opts.message,
+      segments,
+      creditsCharged,
+      kind: opts.kind ?? "transactional",
+      source: opts.meta?.source ?? "other",
+      eventType: opts.meta?.eventType ?? null,
+      status,
+      failureReason,
+      providerMessageId: providerMessageId ?? null,
+      notificationLogId: opts.meta?.notificationLogId ?? null,
+      sentByUserId: opts.meta?.sentByUserId ?? null,
+    });
+  } catch (err: any) {
+    structuredLog("error", "Failed to record SMS message log row", { orgId, error: err?.message });
+  }
 }
 
 /**

@@ -198,6 +198,27 @@ export interface NotificationContext {
   documentLabel?: string;
 }
 
+/** Backoff for retrying a notification SMS after a temporary failure: 5m, 15m, 30m, 1h, 2h, 4h.
+ *  Returns null once `attempts` is used up — the failure is then final. */
+const SMS_RETRY_BACKOFF_MIN = [5, 15, 30, 60, 120, 240];
+export const SMS_MAX_ATTEMPTS = SMS_RETRY_BACKOFF_MIN.length + 1;
+export function nextSmsRetryAt(attempts: number, now: Date = new Date()): Date | null {
+  const mins = SMS_RETRY_BACKOFF_MIN[attempts - 1];
+  return mins == null ? null : new Date(now.getTime() + mins * 60_000);
+}
+
+/** Dial code for a client's local-format number: the cross-border code when the notification is
+ *  about a flagged policy, the org's home code otherwise. */
+export async function resolveSmsCountryCode(orgId: string, policyId?: string | null): Promise<string | undefined> {
+  const cf = await storage.getCountryFlagSettings(orgId);
+  let crossBorder = false;
+  if (cf.isEnabled && policyId) {
+    const pol = await storage.getPolicy(policyId, orgId);
+    crossBorder = !!pol?.isSouthAfrica;
+  }
+  return crossBorder ? cf.flagCountryCode : cf.homeCountryCode;
+}
+
 /** Merge tags still present after rendering — i.e. tags whose value was missing. */
 export function unfilledMergeTags(rendered: string): string[] {
   return Array.from(new Set(rendered.match(/\{[a-z_]+\}/g) ?? []));
@@ -368,13 +389,7 @@ export async function dispatchNotification(
             }
             if (clientPhone && !smsCountryCodeResolved) {
               smsCountryCodeResolved = true;
-              const cf = await storage.getCountryFlagSettings(orgId);
-              let crossBorder = false;
-              if (cf.isEnabled && ctx.policyId) {
-                const pol = await storage.getPolicy(ctx.policyId, orgId);
-                crossBorder = !!pol?.isSouthAfrica;
-              }
-              smsCountryCode = crossBorder ? cf.flagCountryCode : cf.homeCountryCode;
+              smsCountryCode = await resolveSmsCountryCode(orgId, ctx.policyId);
             }
             // A merge tag with no value (e.g. {activation_code} for a client with no code, or
             // {grace_end} for a policy with no grace date) is left in the text as-is by
@@ -388,9 +403,19 @@ export async function dispatchNotification(
               // email branch above: the optimistic "sent" log written before this call needs
               // correcting on a real failure, or a message that never arrived stays recorded
               // as delivered with no way for staff/the client to ever discover it.
-              const result = await sendSms(orgId, { to: clientPhone, message: renderedBody, kind: "transactional", countryCode: smsCountryCode });
+              const result = await sendSms(orgId, {
+                to: clientPhone, message: renderedBody, kind: "transactional", countryCode: smsCountryCode,
+                meta: { source: "notification", eventType, clientId, notificationLogId: log.id },
+              });
               if (!result.ok) {
-                await storage.updateNotificationLogStatus(orgId, log.id, "failed", result.message);
+                // A temporary failure (provider down, sending paused, allowance used up) is queued
+                // for the SMS retry sweep (server/sms-retry-sweep.ts) instead of being dropped.
+                await storage.updateNotificationLogDelivery(orgId, log.id, {
+                  status: "failed",
+                  failureReason: result.message,
+                  attempts: 1,
+                  nextRetryAt: result.retryable ? nextSmsRetryAt(1) : null,
+                });
               }
             } else {
               structuredLog("warn", "Notification SMS skipped — client has no phone number on file", { orgId, clientId, eventType });

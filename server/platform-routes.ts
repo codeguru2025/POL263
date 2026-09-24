@@ -32,6 +32,7 @@ import { invalidateTenantModuleCache } from "./module-gate";
 import { provisionTenantEmailDomain } from "./email-domain-provisioning";
 import { commissionTenantDomainOnDO } from "./do-app-domains";
 import { auditLog } from "./route-helpers";
+import { getSmsAllowance, grantSmsCredits, updateSmsAllowanceSettings, listSmsAllowanceEvents } from "./sms-allocation";
 import { ORG_TYPES, PRODUCT_TYPES, DISTRIBUTION_CHANNELS } from "@shared/org-profile";
 import { upsertTenantDatabaseRouting } from "./tenant-data-migration";
 import { commissionDedicatedTenantDatabase } from "./tenant-db-commissioning";
@@ -352,6 +353,58 @@ export function registerPlatformRoutes(app: Express): void {
   });
 
   // ── Feature flags ────────────────────────────────────────────────
+  // ── SMS allowance ────────────────────────────────────────────────
+  // Platform owner grants each tenant SMS credits; every text the tenant sends deducts from them
+  // (server/sms-allocation.ts). No allowance row = not metered.
+  app.get("/api/platform/tenants/:id/sms-allowance", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const [allowance, events, monthStats] = await Promise.all([
+      getSmsAllowance(id),
+      listSmsAllowanceEvents(id, 50),
+      // The tenant's own DB may be unreachable — the allowance screen must still load.
+      storage.getSmsMessageStats(id, { from: monthStart }).catch(() => null),
+    ]);
+    return res.json({ allowance, events, thisMonth: monthStats });
+  });
+
+  app.post("/api/platform/tenants/:id/sms-allowance/grant", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const credits = Number(req.body?.credits);
+    if (!Number.isInteger(credits) || credits === 0 || Math.abs(credits) > 1_000_000) {
+      return res.status(400).json({ message: "credits must be a whole number between -1,000,000 and 1,000,000 (not 0). Use a negative number to correct an over-grant." });
+    }
+    const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
+    const before = await getSmsAllowance(id);
+    const after = await grantSmsCredits(id, credits, { note, actorEmail: (req.user as any)?.email ?? null });
+    await auditLog(req, credits > 0 ? "GRANT_SMS_CREDITS" : "CORRECT_SMS_CREDITS", "TenantSmsAllowance", id, before, { ...after, credits, note }, id);
+    return res.json(after);
+  });
+
+  app.patch("/api/platform/tenants/:id/sms-allowance", requireAuth, requirePlatformOwner, async (req, res) => {
+    const id = req.params.id as string;
+    if (!(await requireTenant(id, res))) return;
+    const patch: { lowBalanceThreshold?: number; enforced?: boolean } = {};
+    if (req.body?.lowBalanceThreshold !== undefined) {
+      const t = Number(req.body.lowBalanceThreshold);
+      if (!Number.isInteger(t) || t < 0 || t > 1_000_000) return res.status(400).json({ message: "lowBalanceThreshold must be a whole number ≥ 0" });
+      patch.lowBalanceThreshold = t;
+    }
+    if (req.body?.enforced !== undefined) {
+      if (typeof req.body.enforced !== "boolean") return res.status(400).json({ message: "enforced must be true or false" });
+      patch.enforced = req.body.enforced;
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "Nothing to update" });
+    const before = await getSmsAllowance(id);
+    const after = await updateSmsAllowanceSettings(id, patch, (req.user as any)?.email ?? null);
+    if (!after) return res.status(404).json({ message: "This tenant has no SMS allowance yet — grant credits first." });
+    await auditLog(req, "UPDATE_SMS_ALLOWANCE_SETTINGS", "TenantSmsAllowance", id, before, after, id);
+    return res.json(after);
+  });
+
   app.get("/api/platform/tenants/:id/feature-flags", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;
     const flags = await cpDb.select().from(tenantFeatureFlags).where(eq(tenantFeatureFlags.tenantId, id));
