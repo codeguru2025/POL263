@@ -15,7 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -87,7 +87,7 @@ import {
   insertMortuaryServiceRateSchema, insertCaseServiceChargeSchema,
   insertCemeterySchema, insertEquipmentItemSchema, insertPitchingAssignmentSchema,
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
-  insertAgeBandRateCardSchema, AGE_BANDS,
+  insertAgeBandRateCardSchema, AGE_BANDS, ageBandRateCards,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
@@ -109,7 +109,7 @@ import {
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
 import { pool, db } from "./db";
-import { notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
+import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -189,6 +189,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     message: { ok: false, message: "Too many test messages — wait a few minutes and try again." },
   });
 
+  /** The policyholder's DOB, for pricing an existing policy against an individual_age_rated
+   *  product (conversion / premium-change preview). Without it the holder is priced as a 21–65. */
+  async function ageRatedInputForPolicy(policy: any, orgId: string) {
+    const client = policy.clientId ? await storage.getClient(policy.clientId, orgId) : undefined;
+    return { policyholderDateOfBirth: client?.dateOfBirth ?? null };
+  }
+
   async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
     if (!policy?.id || !policy?.clientId) return [];
     const members = await storage.getPolicyMembers(policy.id, orgId);
@@ -222,6 +229,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // same case (below).
     const pv = await storage.getProductVersion(policy.productVersionId, orgId);
     if (!pv) return policy;
+    // individual_age_rated premiums are priced once at issuance from each member's own DOB and
+    // cover amount (incl. cover top-ups), stored per member on policy_members. This drift check
+    // has none of those inputs, so it would reprice every such policy as a 21–65 at default cover
+    // on every view — silently rewriting the real premium. Leave them alone.
+    const pvProduct = await storage.getProduct(pv.productId, orgId);
+    if (pvProduct?.pricingModel === "individual_age_rated") return policy;
     const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
     const rawAddOns = await storage.getPolicyAddOns(policy.id, orgId);
     const memberAddOns = rawAddOns
@@ -236,7 +249,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberAddOns.length > 0 ? memberAddOns : undefined,
       undefined,
       dependentDateOfBirths,
-      { productVersion: pv },
+      { productVersion: pv, product: pvProduct ?? null },
     );
 
     const current = parseFloat(String(policy.premiumAmount ?? "0"));
@@ -287,6 +300,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const pv = productVersionById.get(policy.productVersionId);
       if (!pv) return; // matches computePolicyPremium's own "no such version -> 0" guard being moot here — leave untouched rather than zero a real policy out from bad data
       const product = pv.productId ? productById.get(pv.productId) : undefined;
+      // See recalculatePolicyPremiumIfNeeded — age-rated premiums are fixed at issuance.
+      if (product?.pricingModel === "individual_age_rated") return;
 
       const members = membersByPolicy[policy.id] || [];
       const activeDependentIds = members.filter((m: any) => m?.isActive !== false && !!m?.dependentId).map((m: any) => String(m.dependentId));
@@ -3390,28 +3405,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!AGE_BANDS.includes(req.body.ageBand)) {
       return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
     }
-    const parsed = insertAgeBandRateCardSchema.parse({
-      ...req.body,
-      productVersionId: req.params.id as string,
-      organizationId: user.organizationId,
-    });
+    let parsed;
+    try {
+      parsed = insertAgeBandRateCardSchema.parse({
+        ...req.body,
+        productVersionId: req.params.id as string,
+        organizationId: user.organizationId,
+      });
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      throw err;
+    }
     const card = await storage.createAgeBandRateCard(parsed);
     await auditLog(req, "CREATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", card.id, null, card);
     return res.status(201).json(card);
   });
 
+  // Only these fields are editable — never productVersionId/organizationId (a rate card must not
+  // be re-homed onto another version or tenant's pricing).
+  const findOrgAgeBandRateCard = async (id: string, orgId: string) => {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(ageBandRateCards).where(and(eq(ageBandRateCards.id, id), eq(ageBandRateCards.organizationId, orgId)));
+    return row;
+  };
+
   app.patch("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateAgeBandRateCard(req.params.id as string, req.body, user.organizationId);
+    const before = await findOrgAgeBandRateCard(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Rate card not found" });
+    const patch: Record<string, unknown> = {};
+    if (req.body.ageBand !== undefined) {
+      if (!AGE_BANDS.includes(req.body.ageBand)) return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
+      patch.ageBand = req.body.ageBand;
+    }
+    if (req.body.currency !== undefined) patch.currency = String(req.body.currency).toUpperCase();
+    if (req.body.ratePerThousand !== undefined) {
+      const rate = parseFloat(String(req.body.ratePerThousand));
+      if (!Number.isFinite(rate) || rate < 0) return res.status(400).json({ message: "ratePerThousand must be a non-negative number" });
+      patch.ratePerThousand = String(rate);
+    }
+    if (req.body.isActive !== undefined) patch.isActive = !!req.body.isActive;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No editable fields supplied" });
+    const updated = await storage.updateAgeBandRateCard(req.params.id as string, patch as any, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Rate card not found" });
-    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, updated);
+    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, before, updated);
     return res.json(updated);
   });
 
   app.delete("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
+    const before = await findOrgAgeBandRateCard(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Rate card not found" });
     await storage.deleteAgeBandRateCard(req.params.id as string, user.organizationId);
-    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, null);
+    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, before, null);
     return res.status(204).end();
   });
 
@@ -4551,6 +4597,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         undefined,
         undefined,
         dependentDateOfBirths,
+        undefined,
+        undefined,
+        await ageRatedInputForPolicy(policy, user.organizationId),
       );
 
       // "Effective from" date drives arrears/credit reconciliation — it does NOT
@@ -5029,7 +5078,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const dependentDobs = await getActivePolicyDependentDobList(policy, user.organizationId);
       const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
       newPremium = parseFloat(String(await computePolicyPremium(
-        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs,
+        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs, undefined, undefined, await ageRatedInputForPolicy(policy, user.organizationId),
       )));
     }
 
@@ -8829,7 +8878,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/notification-merge-tags", requireAuth, requireTenantScope, requirePermission("read:notification"), (_req, res) => {
-    const { MERGE_TAGS, EVENT_TYPES } = require("./notifications");
     return res.json({ mergeTags: MERGE_TAGS, eventTypes: EVENT_TYPES });
   });
 
@@ -8837,7 +8885,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { subject, body } = req.body;
     if (!subject || !body) return res.status(400).json({ message: "Subject and body are required" });
-    const { broadcastNotification } = require("./notifications");
     const sent = await broadcastNotification(user.organizationId, subject, body);
     await auditLog(req, "BROADCAST_NOTIFICATION", "Notification", undefined, null, { subject, sent });
     return res.json({ sent });
@@ -11776,18 +11823,70 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const product = await storage.getProduct(pv.productId, orgId);
     if (!product) { res.status(400).json({ message: "Product not found" }); return; }
 
+    // Pre-flight: every add-on/pricing rejection that can be decided from the request alone runs
+    // here, BEFORE the client and dependents are written — rejecting after those inserts left
+    // orphan client/dependent rows behind on every failed attempt (and duplicated dependents on retry).
+    {
+      const preDeps = Array.isArray(rawDeps) ? rawDeps : [];
+      const preAddOns = requestedAddOnIds.length + requestedMemberAddOns.length > 0 ? await storage.getAddOns(orgId) : [];
+      const preById = new Map(preAddOns.map((a: any) => [a.id, a]));
+      let holderTopup = 0;
+      const depTopups = new Map<number, number>();
+      for (const entry of [...requestedAddOnIds.map((addOnId) => ({ memberRef: "holder", addOnId })), ...requestedMemberAddOns]) {
+        const addOn = preById.get(entry?.addOnId);
+        if (!addOn || addOn.isActive === false) { res.status(400).json({ message: `Add-on ${entry?.addOnId} is invalid or inactive.` }); return; }
+        if (product.pricingModel === "individual_age_rated" && addOn.pricingMode !== "cover_topup") {
+          res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` }); return;
+        }
+        const inc = parseFloat(String(addOn.coverIncrementAmount ?? 0)) || 0;
+        const ref = String(entry?.memberRef ?? "");
+        if (ref === "holder") holderTopup += inc;
+        else if (/^dependent:\d+$/.test(ref) && Number(ref.slice(10)) < preDeps.length) {
+          const idx = Number(ref.slice(10));
+          depTopups.set(idx, (depTopups.get(idx) ?? 0) + inc);
+        } else {
+          res.status(400).json({ message: `Unrecognized memberRef "${ref}" — use "holder" or "dependent:<index>" for a dependent in this request.` }); return;
+        }
+      }
+      if (product.pricingModel === "individual_age_rated") {
+        const defaultCover = product.coverAmount != null ? parseFloat(String(product.coverAmount)) : 0;
+        const holderCover = (typeof policyholderCoverInput === "number" ? policyholderCoverInput : defaultCover) + holderTopup;
+        for (let i = 0; i < preDeps.length; i++) {
+          const dc = typeof preDeps[i]?.coverAmount === "number" ? preDeps[i].coverAmount : undefined;
+          if (dc != null && dc + (depTopups.get(i) ?? 0) > holderCover) {
+            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount (${currency || "USD"} ${holderCover}).` }); return;
+          }
+        }
+        try {
+          // Dry run — surfaces a missing rate card (PricingConfigError) before anything is written.
+          await computeIndividualAgeRatedPremium(orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
+            Number(pv.dependentMaxAge ?? 20), { dateOfBirth }, preDeps.map((d: any) => ({ dateOfBirth: d?.dateOfBirth ?? null })));
+        } catch (err: any) {
+          if (err instanceof PricingConfigError) { res.status(422).json({ message: err.message }); return; }
+          throw err;
+        }
+      }
+    }
+
     let client: Awaited<ReturnType<typeof storage.createClient>>;
     const emailTrim = email ? String(email).trim() : "";
     const nationalIdTrim = nationalIdNorm;
     let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
     if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
+    // True when this unauthenticated request matched a client that already existed (by email or
+    // national ID). Such a caller has proven nothing about owning that record, so it may only
+    // FILL BLANK fields — never overwrite the phone/DOB/ID/branch on file (the phone is where SMS
+    // and activation codes go) — and the response must not hand back that client's activation
+    // code or id (together with the new policy number, those were enough to claim the client's
+    // portal account).
+    const matchedExistingClient = !!existing;
     if (existing) {
       client = existing;
       const updates: Record<string, unknown> = {};
-      if (effectiveBranchId !== undefined) updates.branchId = effectiveBranchId;
-      if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
-      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
-      if (nationalIdTrim) updates.nationalId = nationalIdTrim;
+      if (!client.branchId && effectiveBranchId) updates.branchId = effectiveBranchId;
+      if (!client.phone && phone) updates.phone = String(phone).trim();
+      if (!client.dateOfBirth && dateOfBirth) updates.dateOfBirth = dateOfBirth;
+      if (!client.nationalId && nationalIdTrim) updates.nationalId = nationalIdTrim;
       if (!(client as any).consentedAt && consentedAtDate) updates.consentedAt = consentedAtDate;
       if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       if (agentId && !(client as any).agentId) updates.agentId = agentId;
@@ -11812,6 +11911,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         agentId: agentId || null,
         consentedAt: consentedAtDate,
       }));
+    }
+
+    // Duplicate check before any dependents are written — checking only after (below) meant every
+    // retried registration for an existing client added another copy of each dependent.
+    if (matchedExistingClient) {
+      const priorPolicies = await storage.getPoliciesByClient(client.id, orgId);
+      if (priorPolicies.find((p) => p.productVersionId === pv.id && p.status !== "cancelled")) {
+        res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
+        return;
+      }
     }
 
     try {
@@ -11935,7 +12044,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
           Number(pv.dependentMaxAge ?? 20),
           {
-            dateOfBirth,
+            // The DOB on file wins for a matched existing client (the request's value is only
+            // used to fill a blank one above) — never price off an unverified public input.
+            dateOfBirth: client.dateOfBirth || dateOfBirth,
             coverAmount: typeof policyholderCoverInput === "number" ? policyholderCoverInput : undefined,
             coverTopup: policyholderCoverTopup || undefined,
           },
@@ -12012,7 +12123,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         requestId: (req as any).requestId,
         ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
       } as any);
-      if (normalizedPaymentMethod) {
+      // An existing client's saved default payment method is theirs — an unauthenticated
+      // registration must not replace it (same reasoning as matchedExistingClient above).
+      if (normalizedPaymentMethod && !matchedExistingClient) {
         await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
           organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
         } as any);
@@ -12067,12 +12180,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       res.status(201).json({
-        policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
+        policyNumber: policy.policyNumber,
+        // Withheld for a matched existing client — see matchedExistingClient above. The activation
+        // notification dispatched above still reaches them via the contact details on file.
+        activationCode: matchedExistingClient ? null : client.activationCode,
+        clientId: matchedExistingClient ? null : client.id,
         paymentLink,
         warnings,
-        message: agentId
-          ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
-          : "Policy registered. Use your policy number and activation code to claim your account.",
+        message: matchedExistingClient
+          ? "Policy registered. Your account details have been sent to the contact details we already have on file for you."
+          : agentId
+            ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
+            : "Policy registered. Use your policy number and activation code to claim your account.",
       });
     } catch (e) {
       if (e instanceof z.ZodError) { res.status(400).json({ message: "Validation failed", details: e.errors }); return; }
@@ -12266,7 +12385,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     const group = await storage.getGroup(groupId, user.organizationId);
@@ -13227,7 +13346,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Diagnostics ────────────────────────────────────────
 
-  app.get("/api/diagnostics", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/diagnostics", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -13246,7 +13365,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Enhanced Dashboard Stats ───────────────────────────
 
-  app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13277,7 +13396,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(trend);
   });
 
-  app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13298,7 +13417,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(breakdown);
   });
 
-  app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -13312,7 +13431,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(stages);
   });
 
-  app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13330,7 +13449,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
-  app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13378,7 +13497,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(performance);
   });
 
-  app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);

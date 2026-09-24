@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { storage } from "./storage";
-import { computePolicyPremium, resolveChargeableMembers } from "./route-helpers";
+import { computePolicyPremium, resolveChargeableMembers, PricingConfigError } from "./route-helpers";
 import type { Product, ProductVersion } from "@shared/schema";
 
 const QUOTE_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours — long enough to cover a wizard session
@@ -122,19 +122,26 @@ export async function recommendProducts(orgId: string, input: HouseholdInput): P
   for (const product of activeProducts) {
     const pv = latestVersionByProduct.get(product.id);
     if (!pv) continue;
-    const premium = await computePolicyPremium(
-      orgId,
-      pv.id,
-      currency,
-      paymentSchedule,
-      [],
-      undefined,
-      dependentDobs.length + 1,
-      dependentDobs,
-      { productVersion: pv, product, orgAddOns },
-      undefined,
-      product.pricingModel === "individual_age_rated" ? { policyholderDateOfBirth: input.policyholderDateOfBirth } : undefined,
-    );
+    let premium: string;
+    try {
+      premium = await computePolicyPremium(
+        orgId,
+        pv.id,
+        currency,
+        paymentSchedule,
+        [],
+        undefined,
+        dependentDobs.length + 1,
+        dependentDobs,
+        { productVersion: pv, product, orgAddOns },
+        undefined,
+        product.pricingModel === "individual_age_rated" ? { policyholderDateOfBirth: input.policyholderDateOfBirth } : undefined,
+      );
+    } catch (err) {
+      // One product with an incomplete rate table must not break the whole recommendation.
+      if (err instanceof PricingConfigError) continue;
+      throw err;
+    }
     const outsideEligibleAge = policyholderAge !== null
       && (policyholderAge < Number(pv.eligibilityMinAge ?? 18) || policyholderAge > Number(pv.eligibilityMaxAge ?? 70));
     candidates.push({

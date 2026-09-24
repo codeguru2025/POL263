@@ -419,6 +419,9 @@ if (enableCsrf) {
     let message: string;
     if (err.code === "EBADCSRFTOKEN") {
       message = "Session expired. Please reload the page and try again.";
+    } else if (err.expose === true && status < 500) {
+      // Deliberately user-facing 4xx errors (e.g. PricingConfigError) — safe to show as-is.
+      message = err.message;
     } else if (process.env.NODE_ENV === "production") {
       message = "Internal Server Error";
     } else {
