@@ -22,6 +22,9 @@ import { runBackupSync, discoverSyncTables, getBackupPool } from "../server/back
 import { getDbForOrg } from "../server/tenant-db";
 
 const PRUNE = process.argv.includes("--prune");
+// Skip step 1 (e.g. to prune first: stale backup rows can block the upsert on a secondary unique
+// key such as users.email — prune, then run again without this flag).
+const SKIP_SYNC = process.argv.includes("--skip-sync");
 const DELETE_BATCH = 500;
 
 type Source = { label: string; db: any };
@@ -31,8 +34,10 @@ function rowsOf(r: any): any[] {
 }
 
 async function main() {
-  console.log("Step 1 — full upsert sync (same code path as the nightly backup)…");
-  await runBackupSync("manual");
+  if (!SKIP_SYNC) {
+    console.log("Step 1 — full upsert sync (same code path as the nightly backup)…");
+    await runBackupSync("manual");
+  }
 
   const { cpDb } = await import("../server/control-plane-db");
   const { db: registryDb } = await import("../server/db");
@@ -107,4 +112,4 @@ async function main() {
   console.log(`\n${PRUNE ? "Deleted" : "Would delete"} ${totalStale} stale backup row(s).${PRUNE ? "" : " Re-run with --prune to apply."}`);
 }
 
-main().then(() => process.exit(0)).catch((err) => { console.error("FAILED:", err?.message ?? err); process.exit(1); });
+main().then(() => process.exit(0)).catch((err) => { console.error("FAILED:", err?.message ?? err, "| cause:", err?.cause?.message ?? err?.cause ?? "-"); process.exit(1); });
