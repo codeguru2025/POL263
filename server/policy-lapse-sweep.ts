@@ -12,7 +12,7 @@
  * Same self-rescheduling daily-at-fixed-UTC-hour shape as server/tenant-billing-sweep.ts, staggered
  * from it (06:00 UTC) and the backup scheduler (22:00 UTC).
  */
-import { and, eq, isNotNull, lt } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { policies, policyStatusHistory, productVersions } from "@shared/schema";
@@ -89,6 +89,10 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
         eq(policies.status, "active"),
         isNotNull(policies.currentCycleEnd),
         lt(policies.currentCycleEnd, today),
+        // Group-scheme policies are paid on the group's ledger (lump sums credited to the group,
+        // not to each policy), so their own cycle dates never advance — judging them per policy
+        // put paid-up burial-society members into grace. Group arrears are the group's matter.
+        isNull(policies.groupId),
       ));
 
       for (const policy of overdueActive) {
@@ -101,7 +105,11 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
           }
           const graceEndDate = addDays(dueDate, gracePeriodDays);
 
-          await tdb.update(policies).set({ status: "grace", graceEndDate }).where(eq(policies.id, policy.id));
+          // Conditional on the status we read: if another run already moved it, do nothing (no
+          // second history row, no second notice).
+          const [movedToGrace] = await tdb.update(policies).set({ status: "grace", graceEndDate })
+            .where(and(eq(policies.id, policy.id), eq(policies.status, "active"))).returning({ id: policies.id });
+          if (!movedToGrace) continue;
           await tdb.insert(policyStatusHistory).values({
             policyId: policy.id, fromStatus: "active", toStatus: "grace",
             reason: `Grace period started — no payment received by due date ${dueDate}`,
@@ -115,7 +123,9 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
           // isn't a valid direct transition (VALID_POLICY_TRANSITIONS), so this always goes
           // through grace first, immediately, rather than skipping it.
           if (today > graceEndDate) {
-            await tdb.update(policies).set({ status: "lapsed" }).where(eq(policies.id, policy.id));
+            const [lapsedNow] = await tdb.update(policies).set({ status: "lapsed" })
+              .where(and(eq(policies.id, policy.id), eq(policies.status, "grace"))).returning({ id: policies.id });
+            if (!lapsedNow) continue;
             await tdb.insert(policyStatusHistory).values({
               policyId: policy.id, fromStatus: "grace", toStatus: "lapsed",
               reason: `Policy lapsed — grace period expired ${graceEndDate} with no payment`,
@@ -138,11 +148,14 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
         eq(policies.status, "grace"),
         isNotNull(policies.graceEndDate),
         lt(policies.graceEndDate, today),
+        isNull(policies.groupId),
       ));
 
       for (const policy of overdueGrace) {
         try {
-          await tdb.update(policies).set({ status: "lapsed" }).where(eq(policies.id, policy.id));
+          const [lapsed] = await tdb.update(policies).set({ status: "lapsed" })
+            .where(and(eq(policies.id, policy.id), eq(policies.status, "grace"))).returning({ id: policies.id });
+          if (!lapsed) continue;
           await tdb.insert(policyStatusHistory).values({
             policyId: policy.id, fromStatus: "grace", toStatus: "lapsed",
             reason: `Policy lapsed — grace period expired ${policy.graceEndDate} with no payment`,

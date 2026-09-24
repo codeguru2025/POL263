@@ -304,9 +304,11 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
   // out a single dedicated client and holding it for the lock's entire lifetime (release in
   // `finally`) is the only way to guarantee acquire and release happen on the same session.
   const { pool: mainPool } = await import("./db");
+  // Transaction-level lock — a session lock doesn't hold through PgBouncer's transaction
+  // pooling (see server/advisory-lock.ts), which let both production instances run the backup.
+  const { tryXactLock, endXactLock } = await import("./advisory-lock");
   const lockClient = await mainPool.connect();
-  const lockResult = await lockClient.query("SELECT pg_try_advisory_lock(987654321) as acquired");
-  if (!lockResult.rows[0]?.acquired) {
+  if (!(await tryXactLock(lockClient, [987654321]))) {
     lockClient.release();
     structuredLog("info", "Backup sync skipped — another instance holds the advisory lock");
     return;
@@ -465,7 +467,7 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
     }
   } finally {
     if (backupPool) await backupPool.end().catch(() => {});
-    await lockClient.query("SELECT pg_advisory_unlock(987654321)").catch(() => {});
+    await endXactLock(lockClient);
     lockClient.release();
   }
 }

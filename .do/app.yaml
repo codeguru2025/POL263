@@ -32,7 +32,9 @@ services:
     environment_slug: node-js
     http_port: 5000
     source_dir: /
-    instance_count: 1
+    # Live app runs 2 (scaled 2026-09-20). Every scheduler must be safe with >1 instance:
+    # withAdvisoryLock (transaction-level) + scheduler_run_claims — see server/advisory-lock.ts.
+    instance_count: 2
     instance_size_slug: apps-s-1vcpu-1gb
     github:
       repo: codeguru2025/POL263

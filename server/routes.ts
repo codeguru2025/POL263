@@ -20,7 +20,7 @@ import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
-import { withAdvisoryLock } from "./advisory-lock";
+import { withAdvisoryLock, tryXactLock, endXactLock } from "./advisory-lock";
 import { todayForOrg, localToUtcDate, getOrgTimezone } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
 import { buildInsuranceContractSummary } from "./insurance-revenue";
@@ -6014,7 +6014,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
     const orgPool = await getPoolForOrg(user.organizationId);
     const lockClient = await orgPool.connect();
-    const lockAcquired = (await lockClient.query("SELECT pg_try_advisory_lock($1::bigint) as acquired", [MONTH_END_LOCK_KEY])).rows[0]?.acquired;
+    // Transaction-level lock — session locks don't hold through PgBouncer transaction pooling (server/advisory-lock.ts).
+    const lockAcquired = await tryXactLock(lockClient, [MONTH_END_LOCK_KEY]);
     if (!lockAcquired) {
       lockClient.release();
       return res.status(409).json({ message: "A month-end run is already in progress for this organisation. Please wait and try again." });
@@ -6156,7 +6157,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await auditLog(req, "MONTH_END_RUN", "MonthEndRun", run.id, null, { runId: run.id, runNumber, receiptedCount: receipted, creditNoteCount: creditNotes, totalRows: rows.length, fileName: run.fileName });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
     } finally {
-      await lockClient.query("SELECT pg_advisory_unlock($1::bigint)", [MONTH_END_LOCK_KEY]).catch(() => {});
+      await endXactLock(lockClient);
       lockClient.release();
     }
   });

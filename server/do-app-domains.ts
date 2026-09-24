@@ -241,8 +241,9 @@ async function commissionSubdomains(subdomains: string[]): Promise<Map<string, C
   const { pool: mainPool } = await import("./db");
   const lockClient = await mainPool.connect();
   try {
-    const lockResult = await lockClient.query("SELECT pg_try_advisory_lock($1) as acquired", [LOCK_KEY]);
-    if (!lockResult.rows[0]?.acquired) {
+    // Transaction-level lock — session locks don't hold through PgBouncer transaction pooling (server/advisory-lock.ts).
+    const { tryXactLock } = await import("./advisory-lock");
+    if (!(await tryXactLock(lockClient, [LOCK_KEY]))) {
       const err = { ok: false, error: "Another instance is already commissioning domains — will be retried" } as const;
       for (const s of subdomains) results.set(s, err);
       return results;
@@ -297,7 +298,7 @@ async function commissionSubdomains(subdomains: string[]): Promise<Map<string, C
 
     return results;
   } finally {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [LOCK_KEY]).catch(() => {});
+    await (await import("./advisory-lock")).endXactLock(lockClient);
     lockClient.release();
   }
 }

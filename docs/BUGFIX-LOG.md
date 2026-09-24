@@ -10,6 +10,45 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-24 — Every scheduled job ran twice (duplicate SMS); group-ledger policies put into grace
+
+**Symptom:** Falakhe clients got each pre-lapse SMS twice (same template, ~1s apart, from the
+05:00 UTC sweep). Burial-society (group-ledger) policies FLK00616, FLK00393, FLK00394 were moved to
+**grace** by the 04:00 lapse sweep — each with TWO identical status-history rows 40ms apart — and
+their clients got in-app "Grace Period Notice"s. Reported as "group schemes received lapse
+messages". (Today's lapse-type SMS themselves all went to individual policies — correct recipients,
+just doubled.)
+
+**Root cause (two bugs):**
+1. Production was scaled to **2 instances** on 2026-09-20 (repo `.do/app.yaml` still said 1). Every
+   scheduler runs on each instance and relies on `withAdvisoryLock` for exclusivity — but that took a
+   SESSION advisory lock through `DATABASE_URL`, which is DigitalOcean's PgBouncer pool in
+   TRANSACTION mode. PgBouncer doesn't pin a server connection to a client between transactions, and
+   advisory locks are re-entrant within one server session, so both instances "won" the lock. Same
+   flaw in the hand-rolled locks in backup-sync, month-end run and DO domain commissioning. The
+   notification sweep's "already ran today" guard was an in-memory Map — per instance.
+2. `policy-lapse-sweep` and the notification sweep judged group-scheme policies by their own
+   `current_cycle_end`/`grace_end_date`. Group schemes pay on the group's ledger (lump sums credited
+   to the group), so those per-policy dates never advance and paid-up members look overdue.
+
+**Fix:** `server/advisory-lock.ts` — BEGIN + `pg_try_advisory_xact_lock`, held for the duration of
+`fn`, COMMIT in `finally` (PgBouncer pins a server connection for a whole transaction; the lock can't
+leak); `tryXactLock`/`endXactLock` reused by backup-sync, month-end and do-app-domains. New
+`scheduler_run_claims` table (migration 0128) + `server/scheduler-claims.ts`: the notification sweep
+claims `<orgId>:<date>` once, durably, across instances. Lapse sweep: excludes `group_id IS NOT NULL`
+and every transition is a conditional `UPDATE … WHERE status = <expected> RETURNING` — no row, no
+history/notice. Notification sweep: no premium-due / pre-lapse to group policies. `.do/app.yaml`
+instance_count → 2.
+
+**Verified:** real Postgres (throwaway cluster): 3 concurrent lock callers → body runs once; released
+after finish and after a throw; no transactions left open; 3 concurrent claims → exactly 1 wins.
+`tests/unit/advisory-lock.test.ts` guards the BEGIN/xact-lock/COMMIT sequence. 736 tests, build.
+
+**Lesson:** on this stack a SESSION-level advisory lock is a no-op — any new lock must use
+`withAdvisoryLock`/`tryXactLock`. Grep signal: `pg_try_advisory_lock(` or `pg_advisory_unlock` anywhere.
+And any "once per day" guard must be durable (DB), never an in-memory Map, because instances
+multiply. When a duplicate appears ~1s apart and interleaved (A,B,A,B), suspect two instances first.
+
 ## 2026-09-24 (later) — Audit follow-ups: the items deferred earlier the same day
 
 - **SMS dropped during outages/pauses:** a notification SMS that failed for a temporary reason

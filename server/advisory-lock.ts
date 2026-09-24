@@ -1,10 +1,21 @@
+import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { structuredLog } from "./logger";
 
 /**
- * Acquires a session-level PostgreSQL advisory lock for the duration of `fn`.
- * If the lock is already held by another session, returns immediately without calling `fn`.
- * Uses the two-argument form so callers can combine a namespace class with a per-entity key.
+ * Runs `fn` only if this process wins a PostgreSQL advisory lock; if another process holds it,
+ * returns immediately without calling `fn`. Uses the two-argument form when given a namespace
+ * class plus a per-entity key.
+ *
+ * TRANSACTION-level lock (pg_try_advisory_xact_lock inside an open transaction), not session-
+ * level. DATABASE_URL points at DigitalOcean's PgBouncer pool in *transaction* mode: a session
+ * lock taken there isn't pinned to this client — PgBouncer hands the underlying server connection
+ * to other clients between statements, and advisory locks are re-entrant within a server session,
+ * so a second app instance could "acquire" the very same lock. With two instances running (the
+ * production app scaled to 2 on 2026-09-20), every scheduled sweep ran twice: duplicate SMS,
+ * duplicate status-history rows. PgBouncer pins one server connection for a whole transaction,
+ * so a transaction-level lock held for the duration of `fn` is exclusive, and it is released
+ * automatically (COMMIT/ROLLBACK, or the connection dropping) — it can never leak.
  */
 export async function withAdvisoryLock(
   lockKey: number,
@@ -20,39 +31,38 @@ export async function withAdvisoryLock(
   lockKeyOrFn: number | (() => Promise<void>),
   maybeFn?: () => Promise<void>,
 ): Promise<void> {
-  const isTwoArg = typeof lockKeyOrFn === "function";
-  const fn = isTwoArg ? (lockKeyOrFn as () => Promise<void>) : maybeFn!;
+  const singleKey = typeof lockKeyOrFn === "function";
+  const fn = singleKey ? (lockKeyOrFn as () => Promise<void>) : maybeFn!;
+  const keys = singleKey ? [lockClassOrKey] : [lockClassOrKey, lockKeyOrFn as number];
   const lockClient = await pool.connect();
-  let lockAcquired = false;
   try {
-    let rows: { ok: boolean }[];
-    if (isTwoArg) {
-      ({ rows } = await lockClient.query(
-        "SELECT pg_try_advisory_lock($1) AS ok",
-        [lockClassOrKey],
-      ) as any);
-    } else {
-      ({ rows } = await lockClient.query(
-        "SELECT pg_try_advisory_lock($1, $2) AS ok",
-        [lockClassOrKey, lockKeyOrFn as number],
-      ) as any);
+    const acquired = await tryXactLock(lockClient, keys);
+    if (!acquired) return;
+    try {
+      await fn();
+    } catch (err: any) {
+      structuredLog("error", "withAdvisoryLock: fn threw", { error: err?.message });
+      throw err;
     }
-    lockAcquired = rows[0]?.ok === true;
-    if (!lockAcquired) return;
-    await fn();
-  } catch (err: any) {
-    structuredLog("error", "withAdvisoryLock: fn threw", { error: err?.message });
-    throw err;
   } finally {
-    if (lockAcquired) {
-      try {
-        if (isTwoArg) {
-          await lockClient.query("SELECT pg_advisory_unlock($1)", [lockClassOrKey]);
-        } else {
-          await lockClient.query("SELECT pg_advisory_unlock($1, $2)", [lockClassOrKey, lockKeyOrFn as number]);
-        }
-      } catch {}
-    }
+    await endXactLock(lockClient);
     lockClient.release();
   }
+}
+
+/** BEGIN + pg_try_advisory_xact_lock on `client`. On false the transaction is already closed. */
+export async function tryXactLock(client: PoolClient, keys: number[]): Promise<boolean> {
+  await client.query("BEGIN");
+  const sqlText = keys.length === 1
+    ? "SELECT pg_try_advisory_xact_lock($1::bigint) AS ok"
+    : "SELECT pg_try_advisory_xact_lock($1::int, $2::int) AS ok";
+  const { rows } = await client.query(sqlText, keys);
+  if (rows[0]?.ok === true) return true;
+  await client.query("ROLLBACK").catch(() => {});
+  return false;
+}
+
+/** Ends the lock-holding transaction (releases the lock). Safe to call when none is open. */
+export async function endXactLock(client: PoolClient): Promise<void> {
+  await client.query("COMMIT").catch(() => {});
 }
