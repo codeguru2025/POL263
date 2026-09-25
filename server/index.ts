@@ -473,6 +473,8 @@ if (enableCsrf) {
       // premium-due/pre-lapse warnings) — previously only reachable via a manual admin
       // endpoint that nothing ever called automatically.
       import("./client-notification-sweep").then(({ startClientNotificationSweepScheduler }) => startClientNotificationSweepScheduler()).catch(() => {});
+      // Emails the platform owner a detailed report of everything that happened yesterday.
+      import("./platform-daily-digest").then(({ startPlatformDailyDigestScheduler }) => startPlatformDailyDigestScheduler()).catch(() => {});
       // Retries notification SMS that failed for a temporary reason (provider down, allowance used up).
       import("./sms-retry-sweep").then(({ startSmsRetryScheduler }) => startSmsRetryScheduler()).catch(() => {});
 

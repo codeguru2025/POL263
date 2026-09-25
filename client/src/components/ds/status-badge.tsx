@@ -22,6 +22,7 @@ const POLICY: Record<string, { label: string; className: string; Icon: LucideIco
   cancelled: { label: "Cancelled", className: "bg-slate-500/12 text-slate-800 border-slate-200/70 dark:text-slate-200", Icon: Ban },
   archived: { label: "Archived", className: "bg-zinc-500/12 text-zinc-700 border-zinc-200/70 dark:text-zinc-300", Icon: Archive },
   removed: { label: "Removed", className: "bg-slate-500/12 text-slate-700 border-slate-200/70 dark:text-slate-300", Icon: Ban },
+  former_holder: { label: "Former policyholder", className: "bg-slate-500/12 text-slate-700 border-slate-200/70 dark:text-slate-300", Icon: Archive },
   deceased: { label: "Deceased — claimed", className: "bg-zinc-500/15 text-zinc-800 border-zinc-300/80 dark:text-zinc-200", Icon: Archive },
 };
 

@@ -1057,6 +1057,9 @@ export const policies = pgTable(
     clientId: uuid("client_id")
       .notNull()
       .references(() => clients.id),
+    /** The first-ever policyholder — set once, on the first change of policyholder
+     *  (policy_holder_changes). Null means clientId has always been the policyholder. */
+    originalClientId: uuid("original_client_id").references(() => clients.id),
     productVersionId: uuid("product_version_id")
       .notNull()
       .references(() => productVersions.id),
@@ -1796,6 +1799,28 @@ export const claimStatusHistory = pgTable(
   },
   (t) => [index("csh_claim_idx").on(t.claimId)]
 );
+
+/** Every change of policyholder on a policy (e.g. after the policyholder's death). The original
+ *  holder is never removed — see policies.originalClientId and the former_policy_holder member. */
+export const policyHolderChanges = pgTable(
+  "policy_holder_changes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id),
+    policyId: uuid("policy_id").notNull().references(() => policies.id, { onDelete: "cascade" }),
+    fromClientId: uuid("from_client_id").references(() => clients.id),
+    toClientId: uuid("to_client_id").notNull().references(() => clients.id),
+    fromMemberId: uuid("from_member_id").references(() => policyMembers.id),
+    toMemberId: uuid("to_member_id").references(() => policyMembers.id),
+    promotedDependentId: uuid("promoted_dependent_id").references(() => dependents.id),
+    reason: text("reason").notNull(),
+    claimId: uuid("claim_id").references(() => claims.id),
+    changedBy: uuid("changed_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("phc_policy_idx").on(t.policyId), index("phc_org_idx").on(t.organizationId)]
+);
+export type PolicyHolderChange = typeof policyHolderChanges.$inferSelect;
 
 // ─── FUNERAL OPERATIONS ─────────────────────────────────────
 
