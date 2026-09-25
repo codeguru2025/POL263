@@ -126,6 +126,22 @@ export async function submitClientClaim(
   // claim_status_change template) and tell staff there's a claim to deal with — a client-submitted
   // claim has no staff "initiator", so it never gets an Approvals-queue entry of its own.
   const submitted = created;
+  // Audit trail — the actor is the client, not a staff user, so there's no actor_id; the email
+  // column says who and through which channel.
+  try {
+    await storage.createAuditLog({
+      organizationId: orgId,
+      actorId: null,
+      actorEmail: `client:${clientId} (via ${source})`,
+      action: "CREATE_CLAIM",
+      entityType: "Claim",
+      entityId: submitted.id,
+      before: null,
+      after: submitted as any,
+    } as any);
+  } catch {
+    /* best effort — the claim itself is already committed */
+  }
   import("./claim-workflow")
     .then((m) => m.notifyClientOfClaim(orgId, submitted, "submitted"))
     .catch(() => {});

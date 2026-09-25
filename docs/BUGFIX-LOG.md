@@ -10,6 +10,34 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-25 — Removed members still showed as claimable; client claims left no audit trail
+
+**Symptom:** (1) On a policy's Members tab, a member who had been removed (`is_active = false`)
+still showed "Claimable: Yes". (2) Claims submitted through the client portal or the
+customer-service API wrote no audit-log entry at all. Staff-created claims did.
+
+**Root cause:** (1) `GET /api/policies/:id/members` computed `claimable` only from the policy
+status and the waiting period. It never looked at the member's own `is_active`. (2)
+`submitClientClaim` (server/customer-self-service.ts) inserted the claim and its status history
+but, unlike `POST /api/claims`, never called the audit log. There's no staff `req.user` there, so
+the usual `auditLog(req, …)` helper didn't fit and nothing was written.
+
+**Fix:** (1) `claimable` now also requires the member to still be covered, with the reason "Removed
+from this policy" or "Former policyholder". (2) `submitClientClaim` writes a `CREATE_CLAIM` audit
+entry via `storage.createAuditLog`, with the actor recorded as `client:<id> (via <channel>)`.
+Same change set: the approved-claim path now ends a deceased dependant's cover
+(`endDeceasedMemberCover`, audited `END_MEMBER_COVER_DECEASED`); a new change-of-policyholder flow
+keeps the original holder (`former_policy_holder` member row, `policies.original_client_id`,
+`policy_holder_changes`, audited `CHANGE_POLICYHOLDER`); `/api/clients`, `/api/policies`,
+`/api/leads` and the dashboard endpoints are `private, no-cache` instead of a 30–60s max-age.
+**Verified:** production audit log confirmed CREATE_CLAIM / TRANSITION_CLAIM /
+UPDATE_MEMBER_CLAIM_STATUS / SYNC_CLAIM_APPROVAL_REQUEST for CLM-000003; migration 0130 dry-run
+in a rolled-back transaction on both DBs; 762/762 tests, `tsc` clean.
+
+**Lesson:** every entry point that creates a business record needs its own audit call, including
+the non-staff ones (client portal, public API, webhooks). grep for `insert(<table>)` outside
+routes.ts when checking audit coverage, not just for `auditLog(`.
+
 ## 2026-09-25 — Approving a claim in the Approvals queue never approved the claim
 
 **Symptom:** A claim approved or declined from Staff → Approvals stayed "submitted"/"verified" on the

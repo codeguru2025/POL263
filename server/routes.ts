@@ -109,7 +109,7 @@ import {
   type InsertGroupPoolPayout,
   type InsertAccumulationWithdrawal,
   paymentDisbursements, requisitions, expenditures, outboxMessages,
-  policyMembers, funeralQuotations, funeralCases, approvalRequests,
+  policyMembers, funeralQuotations, funeralCases, approvalRequests, policyHolderChanges,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
 import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
@@ -264,6 +264,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return updated || { ...policy, premiumAmount: recomputedPremium };
     }
     return policy;
+  }
+
+  /**
+   * An approved death claim ends that covered life's cover: the dependant is taken off the policy
+   * (same path as "Remove member" — premium recalculated, the difference reconciled from today,
+   * audit-logged). The policyholder is never removed here; a deceased policyholder is replaced
+   * through POST /api/policies/:id/change-policyholder, which keeps the original on record.
+   * Best effort — the claim decision has already committed; a failure is logged, not thrown.
+   */
+  async function endDeceasedMemberCover(req: any, claim: any): Promise<{ ended: boolean; oldPremium?: string; newPremium?: string } | null> {
+    try {
+      if (claim?.status !== "approved" || !claim.policyMemberId) return null;
+      if (!["death", "accidental_death", "group_service", "cash_in_lieu"].includes(claim.claimType)) return null;
+      const orgId = claim.organizationId;
+      const policy = await storage.getPolicy(claim.policyId, orgId);
+      if (!policy) return null;
+      const members = await storage.getPolicyMembers(policy.id, orgId);
+      const target = members.find((m: any) => m.id === claim.policyMemberId);
+      if (!target || target.isActive === false || target.role !== "dependent") return { ended: false };
+      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const removed = await storage.deactivatePolicyMember(target.id, policy.id, orgId);
+      const recalced = await recalculatePolicyPremiumIfNeeded(policy, orgId);
+      const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+      let reconciliation: any = null;
+      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+        reconciliation = await reconcilePremiumChange({
+          orgId, policy: recalced, oldPremium, newPremium,
+          effectiveDate: await todayForOrg(orgId),
+          changeType: "member_remove",
+          reason: `Member deceased — claim ${claim.claimNumber} approved`,
+          actorId: req.user?.id,
+        });
+      }
+      await auditLog(req, "END_MEMBER_COVER_DECEASED", "PolicyMember", target.id, target,
+        { ...removed, claimId: claim.id, claimNumber: claim.claimNumber, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), reconciliation }, orgId);
+      return { ended: true, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2) };
+    } catch (err: any) {
+      structuredLog("error", "Ending deceased member's cover failed", { claimId: claim?.id, error: err?.message });
+      return null;
+    }
   }
 
   /**
@@ -2713,7 +2753,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Dashboard Stats ───────────────────────────────────────
 
   app.get("/api/dashboard/stats", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const filters: { dateFrom?: string; dateTo?: string; status?: string; branchId?: string } = {};
     if (req.query.dateFrom) filters.dateFrom = String(req.query.dateFrom);
@@ -2785,7 +2825,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Clients ────────────────────────────────────────────────
 
   app.get("/api/clients", requireAuth, requireTenantScope, requirePermission("read:client"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -3740,7 +3780,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     schedulePolicyPremiumBackfill(user.organizationId);
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
@@ -4911,7 +4951,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const client = await storage.getClient(m.clientId, user.organizationId);
         if (client) {
           memberName = `${client.firstName} ${client.lastName}`;
-          relationship = "Policy Holder";
+          relationship = m.role === "former_policy_holder" ? "Former policyholder" : "Policy Holder";
           dateOfBirth = client.dateOfBirth || "";
           gender = client.gender || "";
           nationalId = client.nationalId || "";
@@ -4945,13 +4985,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const memberWaitingOver = !coverDate || coverDate <= today;
       const memberClaim = claimByMember.get(m.id);
       const alreadyClaimed = !!memberClaim && memberClaim.status !== "rejected";
-      const memberClaimable = policyStatusOk && memberWaitingOver && !alreadyClaimed;
+      const stillCovered = m.isActive !== false;
+      const memberClaimable = policyStatusOk && memberWaitingOver && !alreadyClaimed && stillCovered;
 
       let claimableReason = "";
       if (alreadyClaimed) {
         claimableReason = memberClaim.status === "approved" || ["scheduled", "payable", "completed", "paid", "closed"].includes(memberClaim.status)
           ? `Already claimed — claim ${memberClaim.claimNumber} was approved.`
           : `Claim ${memberClaim.claimNumber} is ${memberClaim.status.replace(/_/g, " ")}.`;
+      } else if (!stillCovered) {
+        claimableReason = m.role === "former_policy_holder" ? "Former policyholder — no longer covered on this policy." : "Removed from this policy — no longer covered.";
       } else if (!policyStatusOk) {
         claimableReason = `Policy status is "${policy.status}"; must be active or in grace period.`;
       } else if (!memberWaitingOver) {
@@ -4965,6 +5008,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let effectiveStatus: string;
       if (m.claimStatus === "claimed") {
         effectiveStatus = "deceased";
+      } else if (m.role === "former_policy_holder") {
+        effectiveStatus = "former_holder";
       } else if (!m.isActive) {
         effectiveStatus = "removed";
       } else {
@@ -5154,6 +5199,254 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       reconciliation: reconciliation.toFixed(2),
       direction,
     });
+  });
+
+  /** Everyone who has ever held this policy, oldest first — the original holder is always first. */
+  app.get("/api/policies/:id/holder-history", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, user.organizationId));
+    if (!accessCheck.hasAccess) return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    const policy = accessCheck.policy;
+    const tdb = await getDbForOrg(user.organizationId);
+    const changes = await tdb.select().from(policyHolderChanges)
+      .where(and(eq(policyHolderChanges.organizationId, user.organizationId), eq(policyHolderChanges.policyId, policy.id)))
+      .orderBy(asc(policyHolderChanges.createdAt));
+    const clientIds = Array.from(new Set([policy.originalClientId, policy.clientId, ...changes.flatMap((c) => [c.fromClientId, c.toClientId])].filter(Boolean) as string[]));
+    const clientRows = clientIds.length ? await tdb.select({ id: clients.id, firstName: clients.firstName, lastName: clients.lastName, phone: clients.phone })
+      .from(clients).where(inArray(clients.id, clientIds)) : [];
+    const name = (id: string | null) => {
+      const c = clientRows.find((r) => r.id === id);
+      return c ? `${c.firstName} ${c.lastName}` : null;
+    };
+    const userIds = changes.map((c) => c.changedBy).filter(Boolean) as string[];
+    const userRows = userIds.length ? await tdb.select({ id: users.id, displayName: users.displayName, email: users.email }).from(users).where(inArray(users.id, userIds)) : [];
+    const originalId = policy.originalClientId ?? changes[0]?.fromClientId ?? policy.clientId;
+    return res.json({
+      original: { clientId: originalId, name: name(originalId) },
+      current: { clientId: policy.clientId, name: name(policy.clientId) },
+      changes: changes.map((c) => ({
+        ...c,
+        fromName: name(c.fromClientId),
+        toName: name(c.toClientId),
+        changedByName: (() => { const u = userRows.find((r) => r.id === c.changedBy); return u ? (u.displayName || u.email) : null; })(),
+      })),
+    });
+  });
+
+  /**
+   * Change of policyholder — typically because the policyholder has died. The new holder is an
+   * eligible dependant on the policy (adult, not deceased), an existing client, or a new person.
+   * The original holder is never removed: their member row is kept as former_policy_holder,
+   * policies.originalClientId records the first-ever holder, and policy_holder_changes plus the
+   * audit log record who changed it, when, why and from which claim.
+   */
+  app.post("/api/policies/:id/change-policyholder", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const accessCheck = await enforceAgentPolicyAccess(req, await storage.getPolicy(req.params.id as string, orgId));
+    if (!accessCheck.hasAccess) return res.status(accessCheck.errorResponse.status).json(accessCheck.errorResponse.json);
+    const policy = accessCheck.policy;
+    const mode = req.body?.mode as string;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (!["dependent", "existing_client", "new_person"].includes(mode)) {
+      return res.status(400).json({ message: "Choose who becomes the new policyholder." });
+    }
+    if (!reason) return res.status(400).json({ message: "Give the reason for changing the policyholder." });
+
+    try {
+      await ensureRegistryUserMirroredToOrgDataDb(orgId, user.id);
+      const effectiveUserId = await resolveOrSyncTenantUserId(orgId, user.id);
+      const members = await storage.getPolicyMembers(policy.id, orgId);
+      const oldHolderMember = members.find((m: any) => m.role === "policy_holder" && m.clientId === policy.clientId)
+        ?? members.find((m: any) => m.role === "policy_holder");
+      const oldClient = await storage.getClient(policy.clientId, orgId);
+
+      // A claim that made this necessary, if any (for the record).
+      let claimId: string | null = null;
+      if (req.body.claimId) {
+        const c = await storage.getClaim(String(req.body.claimId), orgId);
+        if (!c || c.policyId !== policy.id) return res.status(400).json({ message: "That claim isn't on this policy." });
+        claimId = c.id;
+      }
+
+      // Person details for a new client record (new person, or a promoted dependant).
+      const personInput = (req.body.person || {}) as Record<string, any>;
+      const buildClientFrom = async (base: { firstName?: string | null; lastName?: string | null; nationalId?: string | null; dateOfBirth?: string | null; gender?: string | null }) => {
+        const firstName = toUpperTrim(personInput.firstName ?? base.firstName, false);
+        const lastName = toUpperTrim(personInput.lastName ?? base.lastName, false);
+        const phone = toUpperTrim(personInput.phone, false);
+        const rawNationalId = personInput.nationalId ?? base.nationalId;
+        const nationalId = normalizeNationalId(rawNationalId);
+        const dateOfBirth = (personInput.dateOfBirth ?? base.dateOfBirth) ? String(personInput.dateOfBirth ?? base.dateOfBirth).trim() : null;
+        const gender = (personInput.gender ?? base.gender) ? toUpperTrim(personInput.gender ?? base.gender, false) : null;
+        if (!firstName || !lastName) throw Object.assign(new Error("The new policyholder's first and last name are required."), { status: 400 });
+        if (!phone) throw Object.assign(new Error("The new policyholder's phone number is required — they will receive the policy SMSes."), { status: 400 });
+        const fmt = await resolveOrgNationalIdFormat(orgId);
+        if (!policy.isLegacy) {
+          if (!nationalId) throw Object.assign(new Error("The new policyholder's national ID is required."), { status: 400 });
+          if (!dateOfBirth) throw Object.assign(new Error("The new policyholder's date of birth is required."), { status: 400 });
+          if (!gender) throw Object.assign(new Error("The new policyholder's gender is required."), { status: 400 });
+        }
+        if (nationalId && !isValidNationalId(rawNationalId, fmt)) {
+          throw Object.assign(new Error(`National ID ${nationalIdFormatHint(fmt)}.`), { status: 400 });
+        }
+        if (nationalId) {
+          const existing = await storage.getClientByNationalId(orgId, nationalId);
+          if (existing) return { client: existing, created: false };
+        }
+        const parsed = insertClientSchema.parse({
+          organizationId: orgId,
+          branchId: policy.branchId || oldClient?.branchId || user.branchId || undefined,
+          firstName, lastName,
+          nationalId: nationalId || undefined,
+          phone,
+          email: personInput.email ? String(personInput.email).trim() : undefined,
+          dateOfBirth: dateOfBirth || undefined,
+          gender: gender || undefined,
+          address: oldClient?.address || undefined,
+          activationCode: `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`,
+        });
+        const created = await storage.createClient(parsed);
+        await auditLog(req, "CREATE_CLIENT", "Client", created.id, null, { ...created, reason: `New policyholder for ${policy.policyNumber}` });
+        return { client: created, created: true };
+      };
+
+      let newClient: any;
+      let newClientCreated = false;
+      let promotedMember: any = null;
+      let promotedDependent: any = null;
+      if (mode === "dependent") {
+        promotedMember = members.find((m: any) => m.id === req.body.policyMemberId);
+        if (!promotedMember || promotedMember.role !== "dependent" || !promotedMember.dependentId) {
+          return res.status(400).json({ message: "Pick a dependant who is on this policy." });
+        }
+        if (promotedMember.isActive === false || promotedMember.claimStatus === "claimed") {
+          return res.status(400).json({ message: "That dependant is no longer covered on this policy." });
+        }
+        promotedDependent = await storage.getDependent(promotedMember.dependentId, orgId);
+        if (!promotedDependent) return res.status(400).json({ message: "That dependant's record could not be found." });
+        const dob = personInput.dateOfBirth ?? promotedDependent.dateOfBirth;
+        if (dob) {
+          const d = new Date(dob);
+          const now = new Date();
+          let age = now.getFullYear() - d.getFullYear();
+          if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) age--;
+          if (age < 18) return res.status(400).json({ message: "A policyholder must be at least 18. Pick an adult dependant or add a new person." });
+        }
+        ({ client: newClient, created: newClientCreated } = await buildClientFrom(promotedDependent));
+      } else if (mode === "existing_client") {
+        newClient = await storage.getClient(String(req.body.clientId || ""), orgId);
+        if (!newClient) return res.status(404).json({ message: "Client not found." });
+      } else {
+        ({ client: newClient, created: newClientCreated } = await buildClientFrom({}));
+      }
+      if (newClient.id === policy.clientId) {
+        return res.status(400).json({ message: "That person is already the policyholder." });
+      }
+
+      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const result = await withOrgTransaction(orgId, async (tx) => {
+        await tx.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
+        // The original holder stays on the policy, marked former (not covered as holder any more).
+        if (oldHolderMember) {
+          await tx.update(policyMembers).set({ role: "former_policy_holder", isActive: false })
+            .where(eq(policyMembers.id, oldHolderMember.id));
+        }
+        let toMemberId: string;
+        if (promotedMember) {
+          // Same member row (keeps its add-ons and history) — now the holder, as a client.
+          await tx.update(policyMembers).set({ role: "policy_holder", clientId: newClient.id, dependentId: null, isActive: true })
+            .where(eq(policyMembers.id, promotedMember.id));
+          toMemberId = promotedMember.id;
+        } else {
+          const existingRow = members.find((m: any) => m.clientId === newClient.id);
+          if (existingRow) {
+            await tx.update(policyMembers).set({ role: "policy_holder", isActive: true }).where(eq(policyMembers.id, existingRow.id));
+            toMemberId = existingRow.id;
+          } else {
+            const [row] = await tx.insert(policyMembers).values({
+              organizationId: orgId, policyId: policy.id, clientId: newClient.id, role: "policy_holder",
+            }).returning();
+            toMemberId = row.id;
+          }
+        }
+        // Dependants on this policy follow the policy to its new holder — only ones that aren't
+        // also on another of the old holder's policies (those stay with the old record).
+        const moved = await tx.execute(sql`
+          UPDATE dependents d SET client_id = ${newClient.id}
+          WHERE d.organization_id = ${orgId}
+            AND d.client_id = ${policy.clientId}
+            AND d.id IN (SELECT dependent_id FROM policy_members WHERE policy_id = ${policy.id} AND dependent_id IS NOT NULL)
+            AND NOT EXISTS (
+              SELECT 1 FROM policy_members pm2 JOIN policies p2 ON p2.id = pm2.policy_id
+              WHERE pm2.dependent_id = d.id AND p2.id <> ${policy.id}
+            )
+          RETURNING d.id
+        `);
+        const policyPatch: Record<string, unknown> = {
+          clientId: newClient.id,
+          originalClientId: policy.originalClientId ?? policy.clientId,
+        };
+        // The new holder can't also be their own beneficiary.
+        if (promotedDependent && policy.beneficiaryDependentId === promotedDependent.id) {
+          Object.assign(policyPatch, {
+            beneficiaryDependentId: null, beneficiaryFirstName: null, beneficiaryLastName: null,
+            beneficiaryRelationship: null, beneficiaryNationalId: null, beneficiaryPhone: null,
+          });
+        }
+        const [updatedPolicy] = await tx.update(policies).set(policyPatch as any)
+          .where(and(eq(policies.id, policy.id), eq(policies.organizationId, orgId))).returning();
+        const [change] = await tx.insert(policyHolderChanges).values({
+          organizationId: orgId, policyId: policy.id,
+          fromClientId: policy.clientId, toClientId: newClient.id,
+          fromMemberId: oldHolderMember?.id ?? null, toMemberId,
+          promotedDependentId: promotedDependent?.id ?? null,
+          reason, claimId, changedBy: effectiveUserId,
+        }).returning();
+        await auditLog(req, "CHANGE_POLICYHOLDER", "Policy", policy.id,
+          { clientId: policy.clientId, policyholder: oldClient ? `${oldClient.firstName} ${oldClient.lastName}` : null },
+          {
+            clientId: newClient.id, policyholder: `${newClient.firstName} ${newClient.lastName}`,
+            originalClientId: updatedPolicy.originalClientId, reason, claimId, mode,
+            promotedDependentId: promotedDependent?.id ?? null,
+            dependantsMoved: (((moved as any).rows ?? moved) as unknown[]).length,
+            changeId: change.id,
+          }, undefined, tx);
+        return { updatedPolicy, change };
+      });
+
+      // A promoted dependant is no longer priced as a dependant — recalculate like a member change.
+      const recalced = await recalculatePolicyPremiumIfNeeded(result.updatedPolicy, orgId);
+      const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+      let reconciliation: any = null;
+      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+        reconciliation = await reconcilePremiumChange({
+          orgId, policy: recalced, oldPremium, newPremium,
+          effectiveDate: await todayForOrg(orgId),
+          changeType: "member_remove",
+          reason: `Policyholder changed (${reason})`,
+          actorId: user.id,
+        });
+        await auditLog(req, "POLICYHOLDER_CHANGE_PREMIUM", "Policy", policy.id, { premiumAmount: oldPremium.toFixed(2) }, { premiumAmount: newPremium.toFixed(2), reconciliation });
+      }
+
+      // Tell the new holder.
+      enqueueJob("notify:policyholder_changed", { policyId: policy.id }, async () => {
+        const ctx = await buildPolicyContext(recalced ?? result.updatedPolicy, orgId);
+        await dispatchNotification(orgId, "policy_update", newClient.id, ctx);
+        // A brand-new client record gets its portal activation code, same as any new client.
+        if (newClientCreated && newClient.activationCode) {
+          await dispatchNotification(orgId, "activation", newClient.id, { ...ctx, activationCode: newClient.activationCode });
+        }
+      });
+
+      return res.json({ policy: recalced ?? result.updatedPolicy, change: result.change, newClient: { id: newClient.id, firstName: newClient.firstName, lastName: newClient.lastName }, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2) });
+    } catch (err: any) {
+      if (err?.status === 400) return res.status(400).json({ message: err.message });
+      if (handleZodError(err, res)) return;
+      structuredLog("error", "POST /api/policies/:id/change-policyholder failed", { policyId: policy.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
   });
 
   app.post("/api/policies/:id/sync-members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
@@ -7123,7 +7416,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             if (dep) { memberName = `${dep.firstName} ${dep.lastName}`; relationship = dep.relationship; dateOfBirth = dep.dateOfBirth; }
           } else if (m.clientId) {
             const c = await storage.getClient(m.clientId, orgId);
-            if (c) { memberName = `${c.firstName} ${c.lastName}`; relationship = "Policy Holder"; dateOfBirth = c.dateOfBirth; }
+            if (c) { memberName = `${c.firstName} ${c.lastName}`; relationship = m.role === "former_policy_holder" ? "Former policyholder" : "Policy Holder"; dateOfBirth = c.dateOfBirth; }
           }
           member = { ...m, memberName, relationship, dateOfBirth };
         }
@@ -7486,7 +7779,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         investigationFindings: req.body.investigationFindings,
         source: "claims",
       });
-      return res.json({ ...result.claim, ledger: result.ledger });
+      const coverEnded = await endDeceasedMemberCover(req, result.claim);
+      return res.json({ ...result.claim, ledger: result.ledger, coverEnded });
     } catch (err: any) {
       if (err instanceof ClaimWorkflowError) {
         return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
@@ -8995,7 +9289,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Leads / Pipeline ──────────────────────────────────────
 
   app.get("/api/leads", requireAuth, requireTenantScope, requirePermission("read:lead"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -11236,7 +11530,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: "approvals",
         });
         const [after] = (await storage.getApprovalRequests(user.organizationId)).filter((a) => a.id === approval.id);
-        return res.json({ ...(after ?? approval), claim: result.claim, ledger: result.ledger });
+        const coverEnded = await endDeceasedMemberCover(req, result.claim);
+        return res.json({ ...(after ?? approval), claim: result.claim, ledger: result.ledger, coverEnded });
       } catch (err: any) {
         if (err instanceof ClaimWorkflowError) {
           return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
@@ -13706,7 +14001,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Enhanced Dashboard Stats ───────────────────────────
 
   app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -13737,7 +14032,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
+    res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);

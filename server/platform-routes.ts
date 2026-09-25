@@ -105,6 +105,33 @@ async function requireTenant(id: string, res: any): Promise<boolean> {
 }
 
 export function registerPlatformRoutes(app: Express): void {
+  // ─── Platform daily digest (server/platform-daily-digest.ts) ─────────────
+  // Preview the daily report in the browser, or send it now (e.g. to re-send a day).
+  const digestDate = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+  app.get("/api/platform/daily-digest/preview", requireAuth, requirePlatformOwner, async (req, res) => {
+    try {
+      const { buildPlatformDigest, yesterdayIn } = await import("./platform-daily-digest");
+      const date = digestDate(req.query.date) ?? yesterdayIn(process.env.DAILY_DIGEST_TIMEZONE || "Africa/Harare");
+      const { html } = await buildPlatformDigest(date);
+      res.set("Content-Type", "text/html; charset=utf-8");
+      res.set("Cache-Control", "private, no-store");
+      return res.send(html);
+    } catch (err: any) {
+      structuredLog("error", "Daily digest preview failed", { error: err?.message });
+      return res.status(500).json({ message: "Could not build the daily report." });
+    }
+  });
+  app.post("/api/platform/daily-digest/send", requireAuth, requirePlatformOwner, async (req, res) => {
+    try {
+      const { runPlatformDailyDigest } = await import("./platform-daily-digest");
+      const result = await runPlatformDailyDigest("manual", digestDate(req.body?.date));
+      return res.status(result.sent ? 200 : 502).json(result);
+    } catch (err: any) {
+      structuredLog("error", "Daily digest send failed", { error: err?.message });
+      return res.status(500).json({ message: "Could not send the daily report." });
+    }
+  });
+
   // ── Full config bundle ──────────────────────────────────────────
   app.get("/api/platform/tenants/:id/config", requireAuth, requirePlatformOwner, async (req, res) => {
     const id = req.params.id as string;

@@ -188,6 +188,7 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/claims"] });
     queryClient.invalidateQueries({ queryKey: ["/api/approvals"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
   };
 
   const transition = useMutation({
@@ -207,12 +208,11 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
       invalidate();
       setMode(null);
       const ledger = row?.ledger;
-      toast({
-        title: `Claim ${statusLabel(row.status).toLowerCase()}`,
-        description: ledger
-          ? `${formatAmountWithCode(ledger.amount, ledger.currency)} deducted from ${ledger.groupName}'s ledger. New balance: ${formatAmountWithCode(ledger.balanceAfter, ledger.currency)}.`
-          : row.status === "verified" && row.investigationFindings ? "Sent back to the approvers." : undefined,
-      });
+      const parts: string[] = [];
+      if (ledger) parts.push(`${formatAmountWithCode(ledger.amount, ledger.currency)} deducted from ${ledger.groupName}'s ledger. New balance: ${formatAmountWithCode(ledger.balanceAfter, ledger.currency)}.`);
+      if (row?.coverEnded?.ended) parts.push(`The member's cover has ended${row.coverEnded.oldPremium !== row.coverEnded.newPremium ? `; premium ${row.coverEnded.oldPremium} → ${row.coverEnded.newPremium}` : ""}.`);
+      if (row.status === "verified" && row.investigationFindings) parts.push("Sent back to the approvers.");
+      toast({ title: `Claim ${statusLabel(row.status).toLowerCase()}`, description: parts.join(" ") || undefined });
     },
     onError: (err: any) => {
       if (err?.code === "waiting_period_violation") setNeedsWaitingOverride(true);
@@ -261,6 +261,8 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
   const c = d.claim;
   const undecided = UNDECIDED.includes(c.status);
   const next = nextStep(d);
+  // The deceased was the policyholder: someone has to take the policy over.
+  const holderSuccessionNeeded = d.member?.role === "policy_holder" && d.member?.claimStatus === "claimed" && !!d.policy;
   const { assessment, recommendation } = parseApprovalNotes(c.approvalNotes);
   const name = (id: string | null | undefined) => (id ? d.userNames[id] || "Staff member" : "—");
   const settlementTransitions = (CLAIM_TRANSITIONS[c.status] || []).filter((s) => !["approved", "rejected", "under_investigation", "verified"].includes(s));
@@ -396,6 +398,16 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
       <div className={`rounded-xl border p-4 ${toneClass}`} data-testid="claim-next-step">
         <p className="text-sm font-semibold mb-1">{next.title}</p>
         <div className="text-sm">{next.body}</div>
+        {holderSuccessionNeeded && (
+          <p className="text-sm mt-2 flex items-start gap-1.5 text-amber-800" data-testid="claim-holder-succession">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>
+              The deceased was the policyholder. Choose who takes over policy{" "}
+              <Link href={`/staff/policies?policyId=${d.policy!.id}`} className="underline font-medium">{d.policy!.policyNumber}</Link>
+              {" "}— open it, go to Members, and click "Choose new policyholder".
+            </span>
+          </p>
+        )}
         {d.group?.debitBlocker && undecided && (
           <p className="text-sm text-rose-700 mt-2 flex items-start gap-1.5"><AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" /> {d.group.debitBlocker}</p>
         )}

@@ -169,6 +169,7 @@ export function buildTenantCopyPlan(tenantId: string): Array<{ table: string; wh
     { table: "claims", where: orgFilter },
     { table: "claim_documents", where: `claim_id IN (SELECT id FROM claims WHERE ${orgFilter}) AND (verified_by IS NULL OR verified_by IN (SELECT id FROM users WHERE ${usersFilter}))` },
     { table: "claim_status_history", where: `claim_id IN (SELECT id FROM claims WHERE ${orgFilter}) AND (changed_by IS NULL OR changed_by IN (SELECT id FROM users WHERE ${usersFilter}))` },
+    { table: "policy_holder_changes", where: `${orgFilter} AND (changed_by IS NULL OR changed_by IN (SELECT id FROM users WHERE ${usersFilter}))` },
 
     // Layer 7: funerals, mortuary + fleet
     { table: "funeral_cases", where: orgFilter },

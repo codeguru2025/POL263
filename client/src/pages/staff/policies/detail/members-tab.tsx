@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { StatusBadge, CardSection } from "@/components/ds";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
-import { Users, UserPlus, Pencil, Loader2 } from "lucide-react";
+import { Users, UserPlus, UserCog, Pencil, Loader2 } from "lucide-react";
+import { ChangePolicyholderDialog, DeceasedHolderBanner, PolicyholderHistoryCard } from "./change-policyholder";
 import { Link } from "wouter";
 import { MemberClaimBadge } from "@/components/member-claim-badge";
 
@@ -195,8 +196,13 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
     editMemberMutation.mutate({ policyId: selectedPolicy.id, memberId: editingMember.id, data });
   };
 
+  const [changeHolderOpen, setChangeHolderOpen] = useState(false);
+  // The current policyholder has died (their claim was approved) and nobody has taken over yet.
+  const deceasedHolder = (policyMembers ?? []).find((m: any) => m.role === "policy_holder" && m.claimStatus === "claimed");
+
   return (
     <>
+      {deceasedHolder && <DeceasedHolderBanner holder={deceasedHolder} onChange={() => setChangeHolderOpen(true)} />}
       <CardSection
         title="Policy members"
         description="All lives covered (policy holder + dependants). Filter by age band."
@@ -255,6 +261,9 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
                 }}
               >
                 <UserPlus className="h-3.5 w-3.5" /> Add Dependent
+              </Button>
+              <Button size="sm" variant="outline" className="gap-1" onClick={() => setChangeHolderOpen(true)} data-testid="button-change-policyholder">
+                <UserCog className="h-3.5 w-3.5" /> Change Policyholder
               </Button>
           </>
           );
@@ -424,6 +433,17 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
           );
           })()}
       </CardSection>
+
+      <PolicyholderHistoryCard policyId={selectedPolicy.id} />
+      <ChangePolicyholderDialog
+        key={changeHolderOpen ? "open" : "closed"}
+        open={changeHolderOpen}
+        onOpenChange={setChangeHolderOpen}
+        policy={selectedPolicy}
+        members={policyMembers ?? []}
+        defaultReason={deceasedHolder ? `Policyholder ${deceasedHolder.memberName} passed away${deceasedHolder.claimNumber ? ` (claim ${deceasedHolder.claimNumber})` : ""}` : ""}
+        claimId={deceasedHolder?.claimId ?? null}
+      />
 
       {/* Edit add-ons dialog */}
       <Dialog open={editAddOnsOpen} onOpenChange={setEditAddOnsOpen}>
