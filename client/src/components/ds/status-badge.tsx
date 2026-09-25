@@ -22,6 +22,7 @@ const POLICY: Record<string, { label: string; className: string; Icon: LucideIco
   cancelled: { label: "Cancelled", className: "bg-slate-500/12 text-slate-800 border-slate-200/70 dark:text-slate-200", Icon: Ban },
   archived: { label: "Archived", className: "bg-zinc-500/12 text-zinc-700 border-zinc-200/70 dark:text-zinc-300", Icon: Archive },
   removed: { label: "Removed", className: "bg-slate-500/12 text-slate-700 border-slate-200/70 dark:text-slate-300", Icon: Ban },
+  deceased: { label: "Deceased — claimed", className: "bg-zinc-500/15 text-zinc-800 border-zinc-300/80 dark:text-zinc-200", Icon: Archive },
 };
 
 const PAYMENT: Record<string, { label: string; className: string; Icon: LucideIcon }> = {
@@ -40,13 +41,14 @@ const RECEIPT: Record<string, { label: string; className: string; Icon: LucideIc
 const CLAIM: Record<string, { label: string; className: string; Icon: LucideIcon }> = {
   submitted: { label: "Submitted", className: "bg-sky-500/12 text-sky-900 border-sky-200/80 dark:text-sky-100", Icon: CircleDot },
   verified: { label: "Verified", className: "bg-amber-500/12 text-amber-900 border-amber-200/80 dark:text-amber-100", Icon: Clock },
+  under_investigation: { label: "Under Investigation", className: "bg-violet-500/12 text-violet-900 border-violet-200/80 dark:text-violet-100", Icon: AlertTriangle },
   approved: { label: "Approved", className: "bg-emerald-500/12 text-emerald-800 border-emerald-200/80 dark:text-emerald-100", Icon: CheckCircle2 },
   scheduled: { label: "Scheduled", className: "bg-amber-500/12 text-amber-900 border-amber-200/80", Icon: Clock },
   payable: { label: "Payable", className: "bg-amber-500/12 text-amber-900 border-amber-200/80", Icon: Wallet },
   completed: { label: "Completed", className: "bg-amber-500/12 text-amber-900 border-amber-200/80", Icon: CheckCircle2 },
   paid: { label: "Paid", className: "bg-emerald-500/12 text-emerald-800 border-emerald-200/80", Icon: CheckCircle2 },
   closed: { label: "Closed", className: "bg-emerald-500/12 text-emerald-800 border-emerald-200/80", Icon: CheckCircle2 },
-  rejected: { label: "Rejected", className: "bg-rose-500/12 text-rose-900 border-rose-200/80", Icon: XCircle },
+  rejected: { label: "Declined", className: "bg-rose-500/12 text-rose-900 border-rose-200/80", Icon: XCircle },
 };
 
 export type StatusBadgeVariant = "policy" | "payment" | "receipt" | "claim";

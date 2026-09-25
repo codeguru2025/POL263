@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { CheckCircle2, XCircle, Clock, Loader2, Eye, ShieldCheck, ArrowRight, Inbox } from "lucide-react";
+import { CheckCircle2, XCircle, Clock, Loader2, Eye, ShieldCheck, ArrowRight, Inbox, ShieldQuestion, PauseCircle } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -20,8 +20,11 @@ export default function StaffApprovals() {
   const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedApproval, setSelectedApproval] = useState<any>(null);
-  const [resolveAction, setResolveAction] = useState<"approve" | "reject" | null>(null);
+  const [resolveAction, setResolveAction] = useState<"approve" | "reject" | "investigate" | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
+  // Claim reviews only — "send for further investigation" needs what + next steps.
+  const [investigationReason, setInvestigationReason] = useState("");
+  const [investigationNextSteps, setInvestigationNextSteps] = useState("");
   const [waiverRejectionReason, setWaiverRejectionReason] = useState("");
   const [resolvingWaiverId, setResolvingWaiverId] = useState<string | null>(null);
   const [waiverAction, setWaiverAction] = useState<"approve" | "reject" | null>(null);
@@ -45,16 +48,28 @@ export default function StaffApprovals() {
   });
 
   const resolveMutation = useMutation({
-    mutationFn: async ({ id, action, rejectionReason }: { id: string; action: string; rejectionReason?: string }) => {
-      const res = await apiRequest("POST", `/api/approvals/${id}/resolve`, { action, rejectionReason });
+    mutationFn: async (body: { id: string; action: string; rejectionReason?: string; investigationReason?: string; investigationNextSteps?: string }) => {
+      const { id, ...rest } = body;
+      const res = await apiRequest("POST", `/api/approvals/${id}/resolve`, rest);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (result: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/approvals"] });
-      toast({ title: "Success", description: `Request ${resolveAction === "approve" ? "approved" : "rejected"} successfully.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/approvals/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/claims"] });
+      const ledger = result?.ledger;
+      const verb = resolveAction === "approve" ? "approved" : resolveAction === "investigate" ? "sent for investigation" : "rejected";
+      toast({
+        title: result?.claim ? `Claim ${result.claim.claimNumber} ${verb}` : "Success",
+        description: ledger
+          ? `${ledger.currency} ${Number(ledger.amount).toFixed(2)} deducted from ${ledger.groupName}'s ledger. New balance: ${ledger.currency} ${Number(ledger.balanceAfter).toFixed(2)}.`
+          : result?.claim ? "The claim and the member on the policy have been updated." : `Request ${verb} successfully.`,
+      });
       setResolveAction(null);
       setSelectedApproval(null);
       setRejectionReason("");
+      setInvestigationReason("");
+      setInvestigationNextSteps("");
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -72,6 +87,8 @@ export default function StaffApprovals() {
       id: selectedApproval.id,
       action: resolveAction,
       rejectionReason: resolveAction === "reject" ? rejectionReason : undefined,
+      investigationReason: resolveAction === "investigate" ? investigationReason : undefined,
+      investigationNextSteps: resolveAction === "investigate" ? investigationNextSteps : undefined,
     });
   };
 
@@ -99,7 +116,9 @@ export default function StaffApprovals() {
       accessor: (a) => `${a.entityType ?? ""} ${(a.requestData as any)?.policyNumber ?? (a.requestData as any)?.receiptNumber ?? (a.requestData as any)?.quotationNumber ?? (a.requestData as any)?.requisitionNumber ?? a.entityId ?? ""}`,
       cell: (a) => {
         const d = a.requestData as any;
-        const label = d?.policyNumber ?? d?.receiptNumber ?? d?.quotationNumber ?? d?.requisitionNumber ?? null;
+        const label = d?.claimNumber
+          ? `${d.claimNumber}${d.deceasedName ? ` · ${d.deceasedName}` : ""}`
+          : d?.policyNumber ?? d?.receiptNumber ?? d?.quotationNumber ?? d?.requisitionNumber ?? null;
         return (
           <div>
             <span className="text-xs text-muted-foreground">{a.entityType}</span>
@@ -116,6 +135,12 @@ export default function StaffApprovals() {
               </>
             )}
             {d?.reason && <><br /><span className="text-xs text-muted-foreground italic">{d.reason}</span></>}
+            {a.requestType === "CLAIM_REVIEW" && d?.investigationFindings && (
+              <><br /><span className="text-xs">Investigation findings: <strong>{d.investigationFindings}</strong></span></>
+            )}
+            {a.requestType === "CLAIM_REVIEW" && a.status === "on_hold" && d?.investigationReason && (
+              <><br /><span className="text-xs text-violet-700">Investigating: {d.investigationReason}</span></>
+            )}
           </div>
         );
       },
@@ -143,11 +168,28 @@ export default function StaffApprovals() {
       exportable: false,
       cell: (approval) => (
         <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setSelectedApproval(approval)} data-testid={`btn-view-${approval.id}`}>
-            <Eye className="h-4 w-4 mr-1" /> View
-          </Button>
+          {approval.requestType === "CLAIM_REVIEW" ? (
+            <Button variant="ghost" size="sm" onClick={() => navigate(`/staff/claims?openClaim=${approval.entityId}`)} data-testid={`btn-open-claim-${approval.id}`}>
+              <Eye className="h-4 w-4 mr-1" /> Open claim
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={() => setSelectedApproval(approval)} data-testid={`btn-view-${approval.id}`}>
+              <Eye className="h-4 w-4 mr-1" /> View
+            </Button>
+          )}
           {approval.status === "pending" && (
             <>
+              {approval.requestType === "CLAIM_REVIEW" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-violet-700 border-violet-200 hover:bg-violet-50"
+                  onClick={() => { setSelectedApproval(approval); setResolveAction("investigate"); }}
+                  data-testid={`btn-investigate-${approval.id}`}
+                >
+                  <ShieldQuestion className="h-4 w-4 mr-1" /> Investigate
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -228,6 +270,8 @@ export default function StaffApprovals() {
         return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200" data-testid={`badge-status-${status}`}><CheckCircle2 className="h-3 w-3 mr-1" />Approved</Badge>;
       case "rejected":
         return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200" data-testid={`badge-status-${status}`}><XCircle className="h-3 w-3 mr-1" />Rejected</Badge>;
+      case "on_hold":
+        return <Badge variant="outline" className="bg-violet-50 text-violet-700 border-violet-200" data-testid={`badge-status-${status}`}><PauseCircle className="h-3 w-3 mr-1" />On hold — investigating</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -421,13 +465,37 @@ export default function StaffApprovals() {
       <Dialog open={!!resolveAction} onOpenChange={(open) => { if (!open) { setResolveAction(null); setRejectionReason(""); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{resolveAction === "approve" ? "Approve Request" : "Reject Request"}</DialogTitle>
+            <DialogTitle>
+              {selectedApproval?.requestType === "CLAIM_REVIEW"
+                ? (resolveAction === "approve" ? "Approve Claim" : resolveAction === "investigate" ? "Send Claim for Investigation" : "Decline Claim")
+                : (resolveAction === "approve" ? "Approve Request" : "Reject Request")}
+            </DialogTitle>
             <DialogDescription>
-              {resolveAction === "approve"
-                ? "Are you sure you want to approve this request?"
-                : "Please provide a reason for rejecting this request."}
+              {selectedApproval?.requestType === "CLAIM_REVIEW"
+                ? (resolveAction === "approve"
+                    ? `Claim ${selectedApproval?.requestData?.claimNumber ?? ""} will be approved and the member marked as claimed on the policy. For a legacy group or burial society, the amount is deducted from the group's ledger.`
+                    : resolveAction === "investigate"
+                      ? "The claim goes on hold while it's investigated, and comes back here once the findings are recorded."
+                      : "The claim will be declined and the member marked as claim declined on the policy, with your reason.")
+                : resolveAction === "approve"
+                  ? "Are you sure you want to approve this request?"
+                  : "Please provide a reason for rejecting this request."}
             </DialogDescription>
           </DialogHeader>
+          {resolveAction === "investigate" && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="investigationReason">What needs investigating?</Label>
+                <Textarea id="investigationReason" value={investigationReason} onChange={(e) => setInvestigationReason(e.target.value)}
+                  placeholder="e.g. The death certificate and the burial order give different dates" data-testid="input-investigation-reason" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="investigationNextSteps">Next steps</Label>
+                <Textarea id="investigationNextSteps" value={investigationNextSteps} onChange={(e) => setInvestigationNextSteps(e.target.value)}
+                  placeholder="e.g. Visit the family and get a certified copy from the registrar" data-testid="input-investigation-next-steps" />
+              </div>
+            </div>
+          )}
           {resolveAction === "reject" && (
             <div className="space-y-2">
               <Label htmlFor="rejectionReason">Rejection Reason</Label>
@@ -446,18 +514,20 @@ export default function StaffApprovals() {
             </Button>
             <Button
               onClick={handleResolve}
-              disabled={resolveMutation.isPending || (resolveAction === "reject" && !rejectionReason.trim())}
-              className={resolveAction === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}
+              disabled={resolveMutation.isPending || (resolveAction === "reject" && !rejectionReason.trim()) || (resolveAction === "investigate" && (!investigationReason.trim() || !investigationNextSteps.trim()))}
+              className={resolveAction === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : resolveAction === "investigate" ? "bg-violet-600 hover:bg-violet-700" : "bg-red-600 hover:bg-red-700"}
               data-testid="btn-confirm-resolve"
             >
               {resolveMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
               ) : resolveAction === "approve" ? (
                 <CheckCircle2 className="h-4 w-4 mr-1" />
+              ) : resolveAction === "investigate" ? (
+                <ShieldQuestion className="h-4 w-4 mr-1" />
               ) : (
                 <XCircle className="h-4 w-4 mr-1" />
               )}
-              {resolveAction === "approve" ? "Confirm Approval" : "Confirm Rejection"}
+              {resolveAction === "approve" ? "Confirm Approval" : resolveAction === "investigate" ? "Send for Investigation" : "Confirm Rejection"}
             </Button>
           </DialogFooter>
         </DialogContent>

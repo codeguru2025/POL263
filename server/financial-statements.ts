@@ -778,6 +778,9 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
       eq(claims.organizationId, orgId),
       eq(claims.status, "approved"),
       sql`${claims.cashInLieuAmount} IS NOT NULL`,
+      // Ledger-group claims are settled from the group's own ledger on approval — not a
+      // payable out of the company's cash.
+      sql`${claims.groupId} IS NULL`,
     ))
     .groupBy(claims.currency);
   const claimsPayable: AmountMap = {};

@@ -10,6 +10,42 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-25 — Approving a claim in the Approvals queue never approved the claim
+
+**Symptom:** A claim approved or declined from Staff → Approvals stayed "submitted"/"verified" on the
+Claims page forever. Nothing reached the policy, the member, or a burial society's ledger. The one
+live Falakhe claim was stuck at "verified". Reported as "claim status doesn't update once approved".
+
+**Root cause:** `POST /api/claims` creates a `CLAIM_REVIEW` approval request, but
+`POST /api/approvals/:id/resolve` only had side effects for `delete_policy`, `delete_receipt`,
+`delete_quote` and the two requisition corrections. A `CLAIM_REVIEW` approval flipped the approval
+row and nothing else. The claim's own transition route was a completely separate path, and the two
+never talked to each other. That transition route also passed the raw registry `user.id` as
+`group_ledger_entries.created_by` (same FK bomb as 2026-09-08), and so did the backdated
+group-receipt ledger credit in `POST /api/payment-receipts/:id/approve`.
+
+**Fix:** New `server/claim-workflow.ts` `transitionClaim()` is now the only place a claim changes
+status. Both the Claims page transition route and the Approvals resolve route (for `CLAIM_REVIEW`,
+plus a new `investigate` action) call it. In one transaction it moves the claim and records the
+decision (`decision_reason/decided_by/decided_at`). It writes the verdict onto the claimed covered
+life (`claims.policy_member_id` → `policy_members.claim_status/claim_verdict_note/date_of_death`).
+For a ledger group it debits the group ledger, reporting the balance before and after; a burial
+society must have a cash-service quote, and the quote total is what's deducted. It also keeps the
+approval request in step (approved / rejected / `on_hold` while investigated / back to `pending`
+once findings are recorded). New status `under_investigation` requires what + next steps going in
+and findings coming out. `created_by` now resolved via `resolveOrSyncTenantUserId`. Ledger-funded
+claims (`group_id` set) are excluded from claims-payable and the IFRS 17 claims liability, since
+they're paid from the group's own money. Migration `0129_claims_workflow_ledger_groups.sql` also
+adds `groups.has_ledger`, backfilled for every legacy group / burial society / group with ledger
+entries. **Verified:** `tests/unit/claim-workflow.test.ts` (13 tests: transition rules, guard rails,
+Approvals-queue permission, ledger-debit amount rules); full suite 750/750, `tsc` clean. Not yet
+clicked through against real data — needs the deploy (migration runs automatically on deploy).
+
+**Lesson:** when a feature creates an approval request, grep the resolve route for that
+`requestType`. An approval type with no branch in the side-effect `if/else` is a silent no-op that
+looks successful to the approver. More generally, any entity with two ways to change its status
+needs one shared function, not two routes that each think they own it.
+
 ## 2026-09-24 — Nightly Supabase backup copied 0 rows for weeks, recorded as "partial"
 
 **Symptom:** `backup_sync_runs` showed every nightly run since at least 2026-09-18 as

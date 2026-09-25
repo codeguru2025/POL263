@@ -579,6 +579,7 @@ function QuotationDetailPanel({
     const params = new URLSearchParams({
       create: "1",
       quotationId: quote.id,
+      quotationNumber: quote.quotationNumber || "",
       groupId: quote.groupId,
       cashInLieuAmount: String(quote.grandTotal ?? quote.total ?? 0),
       currency,

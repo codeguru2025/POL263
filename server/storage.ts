@@ -5121,7 +5121,7 @@ export class DatabaseStorage implements IStorage {
       if (ids.length > 0) {
         const [cRow] = await tdb.select({ cnt: count() }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids)));
         claimCount = Number(cRow?.cnt ?? 0);
-        const [oRow] = await tdb.select({ cnt: count() }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids), inArray(claims.status, ["submitted", "verified"])));
+        const [oRow] = await tdb.select({ cnt: count() }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids), inArray(claims.status, ["submitted", "verified", "under_investigation"])));
         openClaimsCount = Number(oRow?.cnt ?? 0);
         const agentClaimRows = await tdb.select({ id: claims.id }).from(claims).where(and(eq(claims.organizationId, orgId), inArray(claims.policyId, ids)));
         const agentClaimIds = agentClaimRows.map((r) => r.id);
@@ -5171,7 +5171,7 @@ export class DatabaseStorage implements IStorage {
     if (filters?.dateTo) clConds.push(lte(claims.createdAt, new Date(filters.dateTo + "T23:59:59")));
     const [claimCount] = await tdb.select({ cnt: count() }).from(claims).where(and(...clConds));
     const [openClaims] = await tdb.select({ cnt: count() }).from(claims)
-      .where(and(...clConds, inArray(claims.status, ["submitted", "verified"])));
+      .where(and(...clConds, inArray(claims.status, ["submitted", "verified", "under_investigation"])));
 
     const fConds: any[] = [eq(funeralCases.organizationId, orgId)];
     if (filters?.dateFrom) fConds.push(gte(funeralCases.createdAt, new Date(filters.dateFrom)));

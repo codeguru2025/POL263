@@ -140,6 +140,8 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
     reportedByAsOf,
     openAtAsOf,
     sql`${claims.cashInLieuAmount} IS NOT NULL`,
+    // Ledger-group claims are funded from the group's own ledger, not the insurer's funds.
+    sql`${claims.groupId} IS NULL`,
   ];
   if (branchId) claimConds.push(eq(claims.branchId, branchId));
   const claimRows = await tdb
@@ -170,6 +172,7 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
     reportedByAsOf,
     openAtAsOf,
     sql`${claims.cashInLieuAmount} IS NULL`,
+    sql`${claims.groupId} IS NULL`,
   ];
   if (branchId) inKindConds.push(eq(claims.branchId, branchId));
   const inKindRows = await tdb

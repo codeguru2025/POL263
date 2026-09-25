@@ -1,24 +1,25 @@
 import { useState, useEffect } from "react";
-import { useSearch, Link } from "wouter";
+import { useSearch, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import StaffLayout from "@/components/layout/staff-layout";
 import { Button } from "@/components/ui/button";
-import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, type EdtColumn } from "@/components/ds";
+import { PageHeader, PageShell, CardSection, FilterBar, EmptyState, StatusBadge, EnhancedDataTable, KpiStatCard, type EdtColumn } from "@/components/ds";
 import { AiInsightsPanel } from "@/components/ai-insights-panel";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { PolicySearchInput } from "@/components/policy-search-input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Filter, MoreHorizontal, FileWarning, Loader2, ArrowRightLeft, Eye, FileDown, AlertTriangle } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+import { Plus, Search, Filter, FileWarning, Loader2, FileDown, AlertTriangle, ShieldQuestion, Clock, CheckCircle2, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { formatAmountWithCode } from "@shared/validation";
 import type { Claim } from "@shared/schema";
+import { ClaimDetailView } from "./claim-detail-view";
+import { MemberClaimBadge } from "@/components/member-claim-badge";
 
 /** The claims list is left-joined server-side with any linked funeral case — see
  *  storage.getClaimsByOrg — so the Claims<->Funerals cross-link needs no extra fetch. */
@@ -32,16 +33,6 @@ type ClaimWithFuneralCase = Claim & {
 /** Must match server/claims-sla.ts's CLAIM_SLA_DAYS — display-only here, the server already
  *  computes isOverdue itself, this is just for the tooltip copy. */
 const CLAIM_SLA_DAYS = 5;
-
-const CLAIM_TRANSITIONS: Record<string, string[]> = {
-  submitted: ["verified", "rejected"],
-  verified: ["approved", "rejected"],
-  approved: ["scheduled", "payable"],
-  scheduled: ["completed"],
-  payable: ["paid"],
-  completed: ["closed"],
-  paid: ["closed"],
-};
 
 const CLAIM_TYPES = ["death", "accidental_death", "disability", "repatriation", "cash_in_lieu", "group_service"];
 
@@ -57,6 +48,8 @@ const BLANK_CLAIM = {
   currency: "USD",
   assessmentNotes: "",
   recommendation: "",
+  investigationReason: "",
+  investigationNextSteps: "",
   // Set when arriving from a group-service quotation's "Submit as Group Claim" button
   // (quotations.tsx) — see the deep-link useEffect below.
   quotationId: "",
@@ -66,14 +59,25 @@ const BLANK_CLAIM = {
 export default function StaffClaims() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { permissions, isPlatformOwner } = useAuth();
+  const canApprove = isPlatformOwner || permissions.includes("approve:claim");
+  const canWrite = isPlatformOwner || permissions.includes("write:claim");
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCreateDialog, setShowCreateDialog] = useState(
     () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("create") === "1",
   );
-  const createSearch = useSearch();
+  const urlSearch = useSearch();
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(
+    () => (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("openClaim") : null),
+  );
   useEffect(() => {
-    const params = new URLSearchParams(createSearch);
+    const params = new URLSearchParams(urlSearch);
+    // Deep-link support for the Funerals<->Claims cross-link (funerals.tsx links here via
+    // ?openClaim=), matching the ?openCase= / ?policyId= pattern on the other detail pages.
+    const openClaim = params.get("openClaim");
+    if (openClaim) setSelectedClaimId(openClaim);
     if (params.get("create") !== "1") return;
     setShowCreateDialog(true);
     // Arrived from a group-service quotation's "Submit as Group Claim" button
@@ -91,16 +95,9 @@ export default function StaffClaims() {
         cashInLieuAmount: params.get("cashInLieuAmount") || p.cashInLieuAmount,
         currency: params.get("currency") || p.currency,
       }));
+      setQuoteLabel(params.get("quotationNumber") || "the linked quote");
     }
-  }, [createSearch]);
-  const [showTransitionDialog, setShowTransitionDialog] = useState(false);
-  const [showDetailDialog, setShowDetailDialog] = useState(false);
-  const [selectedClaim, setSelectedClaim] = useState<ClaimWithFuneralCase | null>(null);
-  const [transitionTarget, setTransitionTarget] = useState("");
-  const [transitionReason, setTransitionReason] = useState("");
-  const [waitingPeriodOverrideReason, setWaitingPeriodOverrideReason] = useState("");
-  const [isExGratia, setIsExGratia] = useState(false);
-  const [exGratiaReason, setExGratiaReason] = useState("");
+  }, [urlSearch]);
 
   const [newClaim, setNewClaim] = useState({ ...BLANK_CLAIM });
 
@@ -113,6 +110,13 @@ export default function StaffClaims() {
   // staff can still freely overwrite the suggested amount.
   const [selectedProductVersion, setSelectedProductVersion] = useState<any>(null);
   const [cashInLieuTouched, setCashInLieuTouched] = useState(false);
+  // The policy's group, if it's a ledger group (legacy group / burial society) — the claim is
+  // then paid from that group's ledger, and a burial society needs a cash-service quote.
+  const [policyGroup, setPolicyGroup] = useState<any>(null);
+  const [quoteSearch, setQuoteSearch] = useState("");
+  const [quoteResults, setQuoteResults] = useState<any[] | null>(null);
+  const [quoteSearching, setQuoteSearching] = useState(false);
+  const [quoteLabel, setQuoteLabel] = useState("");
 
   // Optional funeral-case link — if a case already exists for the same death, blank-fill
   // deceased details from it instead of asking again (mirrors funerals.tsx's quotation lookup).
@@ -149,6 +153,18 @@ export default function StaffClaims() {
     }
   };
 
+  const searchQuotes = async () => {
+    if (!quoteSearch.trim()) return;
+    setQuoteSearching(true);
+    try {
+      const res = await fetch(getApiBase() + `/api/quotations?q=${encodeURIComponent(quoteSearch.trim())}&limit=10`, { credentials: "include" });
+      const rows = res.ok ? await res.json() : [];
+      setQuoteResults(Array.isArray(rows) ? rows : []);
+    } finally {
+      setQuoteSearching(false);
+    }
+  };
+
   const handlePolicySelect = (id: string, policy: any) => {
     setNewClaim((p) => ({ ...p, policyId: id, clientId: policy?.clientId || "" }));
     setSelectedPolicy(policy || null);
@@ -156,6 +172,7 @@ export default function StaffClaims() {
     setPolicyMembers([]);
     setSelectedProductVersion(null);
     setCashInLieuTouched(false);
+    setPolicyGroup(null);
     if (id) {
       setLoadingMembers(true);
       fetch(getApiBase() + `/api/policies/${id}/members`, { credentials: "include" })
@@ -163,6 +180,15 @@ export default function StaffClaims() {
         .then((data) => setPolicyMembers(Array.isArray(data) ? data : []))
         .catch(() => setPolicyMembers([]))
         .finally(() => setLoadingMembers(false));
+    }
+    if (policy?.groupId) {
+      fetch(getApiBase() + "/api/groups", { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((groups) => {
+          const g = Array.isArray(groups) ? groups.find((x: any) => x.id === policy.groupId) : null;
+          setPolicyGroup(g?.hasLedger ? g : null);
+        })
+        .catch(() => setPolicyGroup(null));
     }
     // Best-effort cash-in-lieu suggestion — silently no-ops if the caller's role lacks
     // read:product or the policy has no product version; staff can always enter it manually.
@@ -187,6 +213,10 @@ export default function StaffClaims() {
     setSelectedMemberId("");
     setSelectedProductVersion(null);
     setCashInLieuTouched(false);
+    setPolicyGroup(null);
+    setQuoteSearch("");
+    setQuoteResults(null);
+    setQuoteLabel("");
     setCaseSearch("");
     setFoundCase(null);
     setCaseLookupError("");
@@ -196,90 +226,71 @@ export default function StaffClaims() {
     queryKey: ["/api/claims"],
   });
   const overdueCount = claims.filter((c) => c.isOverdue).length;
-
-  // Deep-link support for the Funerals<->Claims cross-link (funerals.tsx links here via
-  // ?openClaim=), matching the ?openPolicy= pattern already used on the Policies page.
-  useEffect(() => {
-    const id = new URLSearchParams(createSearch).get("openClaim");
-    if (!id || claims.length === 0) return;
-    const claim = claims.find((c) => c.id === id);
-    if (claim) {
-      setSelectedClaim(claim);
-      setShowDetailDialog(true);
-    }
-  }, [createSearch, claims]);
+  const awaitingDecision = claims.filter((c) => c.status === "submitted" || c.status === "verified").length;
+  const investigating = claims.filter((c) => c.status === "under_investigation").length;
+  const approvedCount = claims.filter((c) => ["approved", "scheduled", "payable", "completed", "paid", "closed"].includes(c.status)).length;
 
   const createMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
       const res = await apiRequest("POST", "/api/claims", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (created: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/claims"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/approvals"] });
       setShowCreateDialog(false);
       resetCreateForm();
-      toast({ title: "Claim submitted", description: "Claim has been submitted to the approvals queue." });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
-  });
-
-  const transitionMutation = useMutation({
-    mutationFn: async ({ id, toStatus, reason, waitingPeriodOverrideReason, isExGratia, exGratiaReason }: { id: string; toStatus: string; reason: string; waitingPeriodOverrideReason?: string; isExGratia?: boolean; exGratiaReason?: string }) => {
-      const res = await apiRequest("POST", `/api/claims/${id}/transition`, {
-        toStatus, reason,
-        waitingPeriodOverrideReason: waitingPeriodOverrideReason || undefined,
-        isExGratia: isExGratia || undefined,
-        exGratiaReason: exGratiaReason || undefined,
+      toast({
+        title: "Claim logged",
+        description: created?.status === "under_investigation"
+          ? "It's under investigation — it goes to the approvers once the findings are recorded."
+          : "It's in the Approvals queue waiting for a decision.",
       });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/claims"] });
-      setShowTransitionDialog(false);
-      setSelectedClaim(null);
-      setTransitionTarget("");
-      setTransitionReason("");
-      setWaitingPeriodOverrideReason("");
-      setIsExGratia(false);
-      setExGratiaReason("");
-      toast({ title: "Status updated", description: "Claim status has been transitioned." });
+      if (created?.id) setSelectedClaimId(created.id);
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Couldn't log the claim", description: err.message, variant: "destructive" });
     },
   });
 
   const filteredClaims = claims.filter((claim) => {
+    const q = search.toLowerCase();
     const matchesSearch =
       !search ||
-      claim.claimNumber?.toLowerCase().includes(search.toLowerCase()) ||
-      claim.deceasedName?.toLowerCase().includes(search.toLowerCase()) ||
-      claim.claimType?.toLowerCase().includes(search.toLowerCase());
+      claim.claimNumber?.toLowerCase().includes(q) ||
+      claim.deceasedName?.toLowerCase().includes(q) ||
+      claim.claimType?.toLowerCase().includes(q);
     const matchesStatus = statusFilter === "all" || claim.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const openTransition = (claim: ClaimWithFuneralCase) => {
-    setSelectedClaim(claim);
-    const nextStates = CLAIM_TRANSITIONS[claim.status] || [];
-    setTransitionTarget(nextStates[0] || "");
-    setTransitionReason("");
-    setWaitingPeriodOverrideReason("");
-    setIsExGratia(false);
-    setExGratiaReason("");
-    setShowTransitionDialog(true);
+  const openDetail = (claim: ClaimWithFuneralCase) => {
+    setSelectedClaimId(claim.id);
+    window.scrollTo({ top: 0 });
+  };
+  const closeDetail = () => {
+    setSelectedClaimId(null);
+    if (new URLSearchParams(urlSearch).get("openClaim")) setLocation("/staff/claims");
   };
 
-  const openDetail = (claim: ClaimWithFuneralCase) => {
-    setSelectedClaim(claim);
-    setShowDetailDialog(true);
-  };
+  const isBurialSociety = policyGroup?.type === "burial_society";
+  const hasQuote = !!newClaim.quotationId;
 
   const handleCreate = () => {
     if (!newClaim.policyId || !newClaim.claimType) {
-      toast({ title: "Validation", description: "Policy and claim type are required.", variant: "destructive" });
+      toast({ title: "Missing details", description: "Pick the policy and the claim type.", variant: "destructive" });
+      return;
+    }
+    if (policyMembers.length > 0 && !selectedMemberId) {
+      toast({ title: "Missing details", description: "Pick which covered member this claim is for — the verdict is recorded against them.", variant: "destructive" });
+      return;
+    }
+    if (isBurialSociety && !hasQuote) {
+      toast({ title: "Quote required", description: `${policyGroup.name} is a burial society — attach the cash-service quote. That's the amount deducted from their ledger.`, variant: "destructive" });
+      return;
+    }
+    if (newClaim.recommendation === "investigate" && (!newClaim.investigationReason.trim() || !newClaim.investigationNextSteps.trim())) {
+      toast({ title: "Missing details", description: "Say what needs investigating and what the next steps are.", variant: "destructive" });
       return;
     }
     const approvalNotes = [
@@ -290,6 +301,7 @@ export default function StaffClaims() {
     createMutation.mutate({
       policyId: newClaim.policyId,
       clientId: newClaim.clientId || undefined,
+      policyMemberId: selectedMemberId || undefined,
       funeralCaseId: foundCase?.id || undefined,
       quotationId: newClaim.quotationId || undefined,
       groupId: newClaim.groupId || undefined,
@@ -301,33 +313,15 @@ export default function StaffClaims() {
       cashInLieuAmount: newClaim.cashInLieuAmount || undefined,
       currency: newClaim.currency,
       approvalNotes,
+      recommendation: newClaim.recommendation || undefined,
+      investigationReason: newClaim.recommendation === "investigate" ? newClaim.investigationReason : undefined,
+      investigationNextSteps: newClaim.recommendation === "investigate" ? newClaim.investigationNextSteps : undefined,
     });
-  };
-
-  const handleTransition = () => {
-    if (!selectedClaim || !transitionTarget) return;
-    if (isExGratia && !exGratiaReason.trim()) {
-      toast({ title: "Validation", description: "A reason is required to approve as ex gratia.", variant: "destructive" });
-      return;
-    }
-    transitionMutation.mutate({ id: selectedClaim.id, toStatus: transitionTarget, reason: transitionReason, waitingPeriodOverrideReason, isExGratia, exGratiaReason });
   };
 
   const formatDate = (d: string | null | undefined) => {
     if (!d) return "—";
     return new Date(d).toLocaleDateString();
-  };
-
-  // Parse structured approvalNotes back into sections for display
-  const parseApprovalNotes = (notes: string | null | undefined) => {
-    if (!notes) return { assessment: "", recommendation: "", raw: "" };
-    const assessmentMatch = notes.match(/^Assessment:\s*([\s\S]*?)(?=\n\nRecommendation:|$)/m);
-    const recommendationMatch = notes.match(/Recommendation:\s*([\s\S]*)$/m);
-    return {
-      assessment: assessmentMatch?.[1]?.trim() || "",
-      recommendation: recommendationMatch?.[1]?.trim() || "",
-      raw: notes,
-    };
   };
 
   const claimColumns: EdtColumn<ClaimWithFuneralCase>[] = [
@@ -338,11 +332,12 @@ export default function StaffClaims() {
       cell: (c) => (
         <div className="flex items-center gap-2">
           <FileWarning className="h-4 w-4 text-primary/70 shrink-0" />
-          {c.claimNumber}
-          {(c as any).isExGratia && (
-            <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200 text-[10px]">
-              Ex Gratia
-            </Badge>
+          <span className="text-primary">{c.claimNumber}</span>
+          {c.isExGratia && (
+            <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200 text-[10px]">Ex Gratia</Badge>
+          )}
+          {c.groupId && (
+            <Badge variant="outline" className="bg-indigo-500/10 text-indigo-700 border-indigo-200 text-[10px]">Ledger</Badge>
           )}
         </div>
       ),
@@ -375,7 +370,7 @@ export default function StaffClaims() {
     },
     {
       id: "cashInLieuAmount",
-      header: "Cash-in-Lieu",
+      header: "Amount",
       accessor: (c) => c.cashInLieuAmount ?? 0,
       cell: (c) => <span className="font-medium tabular-nums">{c.cashInLieuAmount ? formatAmountWithCode(c.cashInLieuAmount, c.currency) : "—"}</span>,
     },
@@ -402,33 +397,16 @@ export default function StaffClaims() {
     },
     {
       id: "actions",
-      header: "Actions",
+      header: "",
       align: "right",
       sortable: false,
       exportable: false,
       headClassName: "text-right pr-6",
       cellClassName: "text-right pr-6",
       cell: (claim) => (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`button-actions-claim-${claim.id}`} aria-label="Claim actions">
-              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => openDetail(claim)} data-testid={`button-view-claim-${claim.id}`}>
-              <Eye className="h-4 w-4 mr-2" /> View Details
-            </DropdownMenuItem>
-            {CLAIM_TRANSITIONS[claim.status] && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => openTransition(claim)} data-testid={`button-transition-claim-${claim.id}`}>
-                  <ArrowRightLeft className="h-4 w-4 mr-2" /> Transition Status
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button variant="outline" size="sm" className="h-8" onClick={(e) => { e.stopPropagation(); openDetail(claim); }} data-testid={`button-view-claim-${claim.id}`}>
+          Open
+        </Button>
       ),
     },
   ];
@@ -436,9 +414,13 @@ export default function StaffClaims() {
   return (
     <StaffLayout>
       <PageShell>
+        {selectedClaimId ? (
+          <ClaimDetailView key={selectedClaimId} claimId={selectedClaimId} onBack={closeDetail} canApprove={canApprove} canWrite={canWrite} />
+        ) : (
+        <>
         <PageHeader
           title="Claims"
-          description="Manage claim submissions, document verification, and adjudication."
+          description="Log claims, investigate them, and record the verdict against the member on the policy."
           titleDataTestId="text-claims-title"
           actions={(
             <div className="flex gap-2 flex-wrap">
@@ -447,25 +429,25 @@ export default function StaffClaims() {
                   <FileDown className="h-4 w-4" /> Blank Claim Form
                 </a>
               </Button>
-              <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
-                <Plus className="h-4 w-4" /> Log New Claim
-              </Button>
+              {canWrite && (
+                <Button className="gap-2 shadow-sm touch-target sm:h-9 sm:min-h-0 sm:min-w-0" onClick={() => setShowCreateDialog(true)} data-testid="button-new-claim">
+                  <Plus className="h-4 w-4" /> Log New Claim
+                </Button>
+              )}
             </div>
           )}
         />
 
-        {overdueCount > 0 && (
-          <div className="flex items-center gap-2 -mt-2">
-            <Badge variant="destructive" className="gap-1.5" data-testid="badge-claims-overdue">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              {overdueCount} claim{overdueCount === 1 ? "" : "s"} open past {CLAIM_SLA_DAYS} days
-            </Badge>
-          </div>
-        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KpiStatCard label="Awaiting decision" value={awaitingDecision} hint="In the approvals queue" icon={Clock} />
+          <KpiStatCard label="Under investigation" value={investigating} hint="Back to approvals when concluded" icon={ShieldQuestion} />
+          <KpiStatCard label="Approved" value={approvedCount} hint="Including settled" icon={CheckCircle2} />
+          <KpiStatCard label={`Open past ${CLAIM_SLA_DAYS} days`} value={<span className={overdueCount ? "text-destructive" : ""} data-testid="badge-claims-overdue">{overdueCount}</span>} hint="Claims SLA" icon={AlertTriangle} />
+        </div>
 
         <AiInsightsPanel surface="claims" title="AI Insights" description="Ask AI to summarize claims activity and flag anything unusual." />
 
-        <CardSection title="Claims register" description="Search and filter the live claims ledger." flush>
+        <CardSection title="Claims register" description="Click a claim to open it." flush>
             <FilterBar className="border-b border-border/60 bg-muted/10 px-4 py-3 sm:px-6">
                 <div className="relative w-full min-w-[200px] sm:max-w-xs">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -478,7 +460,7 @@ export default function StaffClaims() {
                   />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-full sm:w-40" data-testid="select-status-filter">
+                  <SelectTrigger className="w-full sm:w-48" data-testid="select-status-filter">
                     <Filter className="h-4 w-4 mr-2 shrink-0" />
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
@@ -486,13 +468,14 @@ export default function StaffClaims() {
                     <SelectItem value="all">All Statuses</SelectItem>
                     <SelectItem value="submitted">Submitted</SelectItem>
                     <SelectItem value="verified">Verified</SelectItem>
+                    <SelectItem value="under_investigation">Under Investigation</SelectItem>
                     <SelectItem value="approved">Approved</SelectItem>
                     <SelectItem value="scheduled">Scheduled</SelectItem>
                     <SelectItem value="payable">Payable</SelectItem>
                     <SelectItem value="completed">Completed</SelectItem>
                     <SelectItem value="paid">Paid</SelectItem>
                     <SelectItem value="closed">Closed</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="rejected">Declined</SelectItem>
                   </SelectContent>
                 </Select>
             </FilterBar>
@@ -514,6 +497,7 @@ export default function StaffClaims() {
                   columns={claimColumns}
                   rows={filteredClaims}
                   getRowKey={(c) => c.id}
+                  onRowClick={openDetail}
                   searchable={false}
                   exportable
                   exportFilename="claims"
@@ -524,6 +508,8 @@ export default function StaffClaims() {
               </div>
             )}
         </CardSection>
+        </>
+        )}
       </PageShell>
 
       {/* ── Create claim dialog ── */}
@@ -531,6 +517,7 @@ export default function StaffClaims() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Log New Claim</DialogTitle>
+            <DialogDescription>It goes to the Approvals queue — or straight into investigation if that's your recommendation.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
 
@@ -561,7 +548,7 @@ export default function StaffClaims() {
                   </div>
                 ) : policyMembers.length > 0 ? (
                   <div className="space-y-1.5">
-                    <Label className="text-xs font-medium">Deceased Covered Member</Label>
+                    <Label className="text-xs font-medium">Claim is for <span className="text-destructive">*</span></Label>
                     <Select
                       value={selectedMemberId || "__none__"}
                       onValueChange={(v) => {
@@ -576,7 +563,7 @@ export default function StaffClaims() {
                           setNewClaim((p) => ({
                             ...p,
                             deceasedName: m.memberName || p.deceasedName,
-                            deceasedRelationship: m.relationship && m.relationship !== "Policy Holder" ? m.relationship : p.deceasedRelationship,
+                            deceasedRelationship: m.relationship && m.relationship !== "Policy Holder" ? m.relationship : (m.relationship === "Policy Holder" ? "Self (policyholder)" : p.deceasedRelationship),
                             cashInLieuAmount: !cashInLieuTouched && suggested ? suggested : p.cashInLieuAmount,
                           }));
                         }
@@ -587,18 +574,79 @@ export default function StaffClaims() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__none__">— Select member —</SelectItem>
-                        {policyMembers.map((m: any) => (
-                          <SelectItem key={m.id} value={String(m.id)}>
-                            {m.memberName || "Member"} · {(m.role || m.relationship || "member").replace(/_/g, " ")}
-                            {m.age != null ? ` · ${m.age}y` : ""}
-                          </SelectItem>
-                        ))}
+                        {policyMembers.map((m: any) => {
+                          const blocked = !!m.claimNumber && m.claimCurrentStatus !== "rejected";
+                          return (
+                            <SelectItem key={m.id} value={String(m.id)} disabled={blocked}>
+                              {m.memberName || "Member"} · {(m.relationship || m.role || "member").replace(/_/g, " ")}
+                              {m.age != null ? ` · ${m.age}y` : ""}
+                              {blocked ? ` · already on ${m.claimNumber}` : ""}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
-                    <p className="text-[10px] text-muted-foreground">Selecting a member auto-fills the deceased name and relationship below.</p>
+                    {(() => {
+                      const m = policyMembers.find((x: any) => String(x.id) === selectedMemberId);
+                      if (!m) return <p className="text-[10px] text-muted-foreground">The approved or declined verdict is recorded against this person on the policy.</p>;
+                      return (
+                        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                          <MemberClaimBadge status={m.claimStatus} />
+                          <span className={m.claimable ? "text-emerald-700" : "text-amber-700"}>{m.claimableReason}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">No covered members found on this policy — fill in deceased details manually.</p>
+                )}
+              </div>
+            )}
+
+            {/* Ledger group: paid from the group's ledger; burial society needs a quote */}
+            {(policyGroup || newClaim.groupId) && (
+              <div className="rounded-md border border-indigo-200 bg-indigo-500/5 p-3 space-y-2 text-sm" data-testid="claim-ledger-group-notice">
+                <p className="flex items-center gap-1.5 font-medium"><Users className="h-4 w-4" /> Paid from {policyGroup?.name ?? "the group"}'s ledger</p>
+                <p className="text-xs text-muted-foreground">
+                  When this claim is approved, the amount is deducted from the group's ledger and the new balance is shown. It isn't income, so it doesn't touch the daily financials.
+                </p>
+                {(isBurialSociety || hasQuote) && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium">Cash-service quote {isBurialSociety && <span className="text-destructive">*</span>}</Label>
+                    {hasQuote ? (
+                      <div className="flex items-center gap-2 text-xs">
+                        <Badge variant="outline">{quoteLabel || "Quote attached"}</Badge>
+                        <button type="button" className="text-primary underline" onClick={() => { setNewClaim((p) => ({ ...p, quotationId: "" })); setQuoteLabel(""); }}>Change</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex gap-2">
+                          <Input value={quoteSearch} onChange={(e) => setQuoteSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchQuotes(); } }} placeholder="Quote number or deceased name" className="h-8" data-testid="input-claim-quote-search" />
+                          <Button type="button" size="sm" variant="outline" onClick={searchQuotes} disabled={quoteSearching}>
+                            {quoteSearching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Find"}
+                          </Button>
+                        </div>
+                        {quoteResults && (
+                          <div className="max-h-36 overflow-y-auto rounded border bg-background divide-y">
+                            {quoteResults.length === 0 && <p className="p-2 text-xs text-muted-foreground">No quotes found. Create one on the Quotations page first.</p>}
+                            {quoteResults.map((q) => (
+                              <button key={q.id} type="button" disabled={!!q.claimId}
+                                className="w-full text-left p-2 text-xs hover:bg-muted/50 disabled:opacity-50"
+                                onClick={() => {
+                                  const amt = parseFloat(q.grandTotal || "0") > 0 ? q.grandTotal : q.total;
+                                  setNewClaim((p) => ({ ...p, quotationId: q.id, cashInLieuAmount: cashInLieuTouched ? p.cashInLieuAmount : String(amt ?? ""), currency: q.currency || p.currency }));
+                                  setQuoteLabel(`${q.quotationNumber} · ${formatAmountWithCode(amt, q.currency)}`);
+                                }}>
+                                <span className="font-mono">{q.quotationNumber}</span>{q.deceasedName ? ` · ${q.deceasedName}` : ""} · {formatAmountWithCode(parseFloat(q.grandTotal || "0") > 0 ? q.grandTotal : q.total, q.currency)}
+                                {q.claimId ? " · already on a claim" : ""}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {isBurialSociety && <p className="text-[10px] text-muted-foreground">Every burial society claim needs a cash-service quote — the quoted amount is what's deducted from their ledger.</p>}
+                  </div>
                 )}
               </div>
             )}
@@ -644,11 +692,6 @@ export default function StaffClaims() {
                   ))}
                 </SelectContent>
               </Select>
-              {newClaim.groupId && (
-                <p className="text-xs text-muted-foreground">
-                  Linked to a group-service quotation — approving this claim will debit the group's ledger for the cash-in-lieu amount below.
-                </p>
-              )}
             </div>
 
             {/* Deceased details */}
@@ -697,7 +740,7 @@ export default function StaffClaims() {
 
             {/* Cash-in-lieu */}
             <div className="space-y-2">
-              <Label>Cash-in-Lieu Amount <span className="text-muted-foreground text-xs">(optional{selectedProductVersion?.cashInLieuAdult || selectedProductVersion?.cashInLieuChild ? " — suggested from the product, editable" : ""})</span></Label>
+              <Label>Claim Amount (cash-in-lieu) <span className="text-muted-foreground text-xs">({policyGroup && !isBurialSociety ? "deducted from the group ledger on approval" : "optional"}{selectedProductVersion?.cashInLieuAdult || selectedProductVersion?.cashInLieuChild ? " — suggested from the product, editable" : ""})</span></Label>
               <div className="flex gap-2">
                 <Select value={newClaim.currency} onValueChange={(v) => setNewClaim((p) => ({ ...p, currency: v }))}>
                   <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
@@ -748,7 +791,25 @@ export default function StaffClaims() {
                   <SelectItem value="investigate">Further Investigation Required</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Your recommendation is submitted to the approvals queue for a senior officer to act on.</p>
+              {newClaim.recommendation === "investigate" ? (
+                <div className="space-y-3 rounded-md border border-violet-200 bg-violet-500/5 p-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-claim-inv-reason" className="text-xs">What needs investigating? <span className="text-destructive">*</span></Label>
+                    <Textarea id="new-claim-inv-reason" rows={2} value={newClaim.investigationReason}
+                      onChange={(e) => setNewClaim((p) => ({ ...p, investigationReason: e.target.value }))}
+                      placeholder="e.g. Date of death is two weeks after the policy started" data-testid="input-claim-investigation-reason" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-claim-inv-steps" className="text-xs">Next steps <span className="text-destructive">*</span></Label>
+                    <Textarea id="new-claim-inv-steps" rows={2} value={newClaim.investigationNextSteps}
+                      onChange={(e) => setNewClaim((p) => ({ ...p, investigationNextSteps: e.target.value }))}
+                      placeholder="e.g. Get the medical records from the clinic" data-testid="input-claim-investigation-next-steps" />
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">The claim starts under investigation and goes to the approvers once the findings are recorded.</p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Your recommendation goes to the approvals queue for a senior officer to act on.</p>
+              )}
             </div>
           </div>
 
@@ -758,213 +819,8 @@ export default function StaffClaims() {
             </Button>
             <Button onClick={handleCreate} disabled={createMutation.isPending} data-testid="button-submit-claim">
               {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Submit to Approvals
+              {newClaim.recommendation === "investigate" ? "Log & Start Investigation" : "Submit to Approvals"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Transition dialog ── */}
-      <Dialog open={showTransitionDialog} onOpenChange={setShowTransitionDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Transition Claim Status</DialogTitle>
-          </DialogHeader>
-          {selectedClaim && (
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <div>
-                  <p className="text-sm font-medium">{selectedClaim.claimNumber}</p>
-                  <p className="text-xs text-muted-foreground">
-                    Current status: <span className="font-semibold uppercase">{selectedClaim.status}</span>
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="transition-target">Transition To</Label>
-                <Select value={transitionTarget} onValueChange={setTransitionTarget}>
-                  <SelectTrigger id="transition-target" data-testid="select-transition-target">
-                    <SelectValue placeholder="Select new status…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(CLAIM_TRANSITIONS[selectedClaim.status] || []).map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Reason / Notes</Label>
-                <Textarea
-                  value={transitionReason}
-                  onChange={(e) => setTransitionReason(e.target.value)}
-                  placeholder="Reason for this transition…"
-                  data-testid="input-transition-reason"
-                />
-              </div>
-              {transitionTarget === "approved" && (
-                <div className="space-y-2">
-                  <Label>Waiting Period Override (only if this death occurred before the policy's waiting period ended)</Label>
-                  <Textarea
-                    value={waitingPeriodOverrideReason}
-                    onChange={(e) => setWaitingPeriodOverrideReason(e.target.value)}
-                    placeholder="Leave blank unless approval is rejected for a waiting-period violation — then explain why it should be approved anyway…"
-                    data-testid="input-waiting-period-override"
-                  />
-                </div>
-              )}
-              {transitionTarget === "approved" && (
-                <div className="space-y-2 rounded-md border border-amber-200 bg-amber-500/5 p-3">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="claim-ex-gratia"
-                      checked={isExGratia}
-                      onCheckedChange={(v) => setIsExGratia(v === true)}
-                      data-testid="checkbox-ex-gratia"
-                    />
-                    <Label htmlFor="claim-ex-gratia" className="cursor-pointer">
-                      Approve as ex gratia (doesn't strictly qualify, approving as a goodwill payment)
-                    </Label>
-                  </div>
-                  {isExGratia && (
-                    <Textarea
-                      value={exGratiaReason}
-                      onChange={(e) => setExGratiaReason(e.target.value)}
-                      placeholder="Explain why this claim is being approved despite not strictly qualifying…"
-                      data-testid="input-ex-gratia-reason"
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowTransitionDialog(false)} data-testid="button-cancel-transition">
-              Cancel
-            </Button>
-            <Button onClick={handleTransition} disabled={transitionMutation.isPending || !transitionTarget} data-testid="button-confirm-transition">
-              {transitionMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Confirm Transition
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Detail dialog ── */}
-      <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Claim Details</DialogTitle>
-          </DialogHeader>
-          {selectedClaim && (() => {
-            const { assessment, recommendation } = parseApprovalNotes(selectedClaim.approvalNotes);
-            return (
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-muted-foreground">Claim Number</p>
-                    <p className="font-medium" data-testid="text-detail-claim-number">{selectedClaim.claimNumber}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Status</p>
-                    <StatusBadge variant="claim" status={selectedClaim.status} />
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Claim Type</p>
-                    <p className="font-medium capitalize">{selectedClaim.claimType?.replace(/_/g, " ")}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Date of Death</p>
-                    <p className="font-medium">{formatDate(selectedClaim.dateOfDeath)}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Deceased Name</p>
-                    <p className="font-medium">{selectedClaim.deceasedName || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Relationship</p>
-                    <p className="font-medium">{selectedClaim.deceasedRelationship || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Cause of Death</p>
-                    <p className="font-medium">{selectedClaim.causeOfDeath || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Cash-in-Lieu</p>
-                    <p className="font-medium">
-                      {selectedClaim.cashInLieuAmount ? formatAmountWithCode(selectedClaim.cashInLieuAmount, selectedClaim.currency) : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Waiting Period Waived</p>
-                    <p className="font-medium">{selectedClaim.isWaitingPeriodWaived ? "Yes" : "No"}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Filed</p>
-                    <p className="font-medium">{formatDate(selectedClaim.createdAt as any)}</p>
-                  </div>
-                  {(selectedClaim as any).isExGratia && (
-                    <div className="sm:col-span-2">
-                      <p className="text-muted-foreground">Ex Gratia</p>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <Badge variant="outline" className="bg-amber-500/10 text-amber-700 border-amber-200" data-testid="badge-ex-gratia">
-                          Ex Gratia
-                        </Badge>
-                        {(selectedClaim as any).exGratiaReason && (
-                          <span className="text-xs text-muted-foreground">{(selectedClaim as any).exGratiaReason}</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                {selectedClaim.funeralCaseId && (
-                  <Link
-                    href={`/staff/funerals?openCase=${selectedClaim.funeralCaseId}`}
-                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-                    data-testid="link-view-funeral-case"
-                  >
-                    <ArrowRightLeft className="h-3.5 w-3.5" />
-                    View funeral case {selectedClaim.funeralCaseNumber ? `(${selectedClaim.funeralCaseNumber})` : ""}
-                  </Link>
-                )}
-                {assessment && (
-                  <div>
-                    <p className="text-muted-foreground text-sm font-medium">Assessment</p>
-                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded whitespace-pre-wrap">{assessment}</p>
-                  </div>
-                )}
-                {recommendation && (
-                  <div>
-                    <p className="text-muted-foreground text-sm font-medium">Recommendation</p>
-                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded capitalize">{recommendation}</p>
-                  </div>
-                )}
-                {selectedClaim.approvalNotes && !assessment && !recommendation && (
-                  <div>
-                    <p className="text-muted-foreground text-sm">Notes</p>
-                    <p className="text-sm mt-1 p-2 bg-muted/50 rounded">{selectedClaim.approvalNotes}</p>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDetailDialog(false)} data-testid="button-close-detail">
-              Close
-            </Button>
-            {selectedClaim && CLAIM_TRANSITIONS[selectedClaim.status] && (
-              <Button
-                onClick={() => {
-                  setShowDetailDialog(false);
-                  openTransition(selectedClaim);
-                }}
-                data-testid="button-detail-transition"
-              >
-                <ArrowRightLeft className="h-4 w-4 mr-2" /> Transition Status
-              </Button>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

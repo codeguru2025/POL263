@@ -109,8 +109,10 @@ import {
   type InsertGroupPoolPayout,
   type InsertAccumulationWithdrawal,
   paymentDisbursements, requisitions, expenditures, outboxMessages,
+  policyMembers, funeralQuotations, funeralCases, approvalRequests,
 } from "@shared/schema";
-import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
+import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
+import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
 import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
@@ -4873,6 +4875,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const policy = accessCheck.policy;
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
+    // Latest non-declined claim per member (a declined claim still shows via claimStatus).
+    const policyClaims = await storage.getClaimsByPolicy(policy.id, user.organizationId);
+    const claimByMember = new Map<string, any>();
+    for (const c of [...policyClaims].sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt))) {
+      if (c.policyMemberId) claimByMember.set(c.policyMemberId, c);
+    }
     const today = await todayForOrg(user.organizationId);
     const todayDate = new Date();
     const policyStatusOk = policy.status === "active" || policy.status === "grace";
@@ -4935,10 +4943,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const memberWaitingOver = !coverDate || coverDate <= today;
-      const memberClaimable = policyStatusOk && memberWaitingOver;
+      const memberClaim = claimByMember.get(m.id);
+      const alreadyClaimed = !!memberClaim && memberClaim.status !== "rejected";
+      const memberClaimable = policyStatusOk && memberWaitingOver && !alreadyClaimed;
 
       let claimableReason = "";
-      if (!policyStatusOk) {
+      if (alreadyClaimed) {
+        claimableReason = memberClaim.status === "approved" || ["scheduled", "payable", "completed", "paid", "closed"].includes(memberClaim.status)
+          ? `Already claimed — claim ${memberClaim.claimNumber} was approved.`
+          : `Claim ${memberClaim.claimNumber} is ${memberClaim.status.replace(/_/g, " ")}.`;
+      } else if (!policyStatusOk) {
         claimableReason = `Policy status is "${policy.status}"; must be active or in grace period.`;
       } else if (!memberWaitingOver) {
         claimableReason = `Waiting period ends ${coverDate}. Covered after that date.`;
@@ -4949,7 +4963,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       let effectiveStatus: string;
-      if (!m.isActive) {
+      if (m.claimStatus === "claimed") {
+        effectiveStatus = "deceased";
+      } else if (!m.isActive) {
         effectiveStatus = "removed";
       } else {
         effectiveStatus = policy.status;
@@ -4971,6 +4987,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         claimable: memberClaimable,
         claimableReason,
         effectiveStatus,
+        claimId: memberClaim?.id ?? null,
+        claimNumber: memberClaim?.claimNumber ?? null,
+        claimCurrentStatus: memberClaim?.status ?? null,
       };
     }));
 
@@ -6364,18 +6383,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // createdBy FKs users.id in the tenant DB — a platform owner's registry id isn't there
         // until mirrored, so resolve it (else the ledger credit silently fails and the group
         // balance never moves — exactly what the prod logs showed for Falakhe).
-        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-        await storage.createGroupLedgerEntry({
-          organizationId: user.organizationId,
-          groupId,
-          entryType: "premium_credit",
-          amount: amountNum.toFixed(2),
-          currency: currency || "USD",
-          description: `Group receipt ${groupRef}`,
-          referenceType: "payment_receipt",
-          referenceId: results[0]?.id,
-          createdBy: ledgerCreatedBy,
-        });
+        // Only ledger groups (legacy groups / burial societies) keep a ledger — a plain group
+        // policy receipt is just premium income.
+        const ledgerGroup = await storage.getGroup(groupId, user.organizationId);
+        if (ledgerGroup?.hasLedger) {
+          const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+          await storage.createGroupLedgerEntry({
+            organizationId: user.organizationId,
+            groupId,
+            entryType: "premium_credit",
+            amount: amountNum.toFixed(2),
+            currency: currency || "USD",
+            description: `Group receipt ${groupRef}`,
+            referenceType: "payment_receipt",
+            referenceId: results[0]?.id,
+            createdBy: ledgerCreatedBy,
+          });
+        }
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (group receipt)", { groupId, groupRef, error: err?.message });
       }
@@ -6541,7 +6565,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const receiptGroupId = (receipt.metadataJson as any)?.groupId;
       if (receiptGroupId) {
         try {
-          await storage.createGroupLedgerEntry({
+          const ledgerGroup = await storage.getGroup(receiptGroupId, user.organizationId);
+          if (ledgerGroup?.hasLedger) await storage.createGroupLedgerEntry({
             organizationId: user.organizationId,
             groupId: receiptGroupId,
             entryType: "premium_credit",
@@ -6550,7 +6575,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             description: `Group receipt ${receipt.receiptNumber} (backdated, approved)`,
             referenceType: "payment_receipt",
             referenceId: receipt.id,
-            createdBy: user.id,
+            // Registry id isn't a user row in an isolated tenant DB — FK violation otherwise.
+            createdBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
           });
         } catch (err: any) {
           structuredLog("error", "Group ledger credit failed (backdated group receipt approval)", { groupId: receiptGroupId, receiptId, error: err?.message });
@@ -7063,12 +7089,170 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * that displays this. Reading the raw column directly here would have made this check a no-op
    * for the vast majority of policies.
    */
-  async function checkWaitingPeriodViolation(policy: any, orgId: string, dateOfDeath: string | null | undefined): Promise<{ violated: boolean; waitingPeriodEndDate: string | null }> {
-    const waitingPeriodEndDate = await resolvePolicyWaitingPeriodEndDate(policy, orgId);
-    if (!waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
-    const asOf = dateOfDeath || await todayForOrg(orgId);
-    return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
-  }
+  // (checkWaitingPeriodViolation lives in server/claim-workflow.ts, shared with the approve path.)
+
+  /** Full claim view for the claim detail page — the claim plus everything it touches: policy,
+   *  the claimed member, linked funeral case + quote, the group and its ledger balance (and what
+   *  approving would deduct), status history, and the approval request. */
+  app.get("/api/claims/:id/detail", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const claim = await storage.getClaim(req.params.id as string, orgId);
+    if (!claim) return res.status(404).json({ message: "Not found" });
+    try {
+      const tdb = await getDbForOrg(orgId);
+      const [policy, client, history, approvals, fcRows] = await Promise.all([
+        storage.getPolicy(claim.policyId, orgId),
+        storage.getClient(claim.clientId, orgId),
+        tdb.select().from(claimStatusHistory).where(eq(claimStatusHistory.claimId, claim.id)).orderBy(asc(claimStatusHistory.createdAt)),
+        tdb.select().from(approvalRequests).where(and(
+          eq(approvalRequests.organizationId, orgId), eq(approvalRequests.requestType, "CLAIM_REVIEW"), eq(approvalRequests.entityId, claim.id),
+        )).orderBy(desc(approvalRequests.createdAt)),
+        tdb.select({ id: funeralCases.id, caseNumber: funeralCases.caseNumber, status: funeralCases.status })
+          .from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(funeralCases.claimId, claim.id))).limit(1),
+      ]);
+      const quotation = await getLinkedQuotation(tdb, orgId, claim.id);
+
+      let member: any = null;
+      if (claim.policyMemberId) {
+        const [m] = await tdb.select().from(policyMembers).where(eq(policyMembers.id, claim.policyMemberId)).limit(1);
+        if (m) {
+          let memberName = "", relationship = "", dateOfBirth: string | null = null;
+          if (m.dependentId) {
+            const dep = await storage.getDependent(m.dependentId, orgId);
+            if (dep) { memberName = `${dep.firstName} ${dep.lastName}`; relationship = dep.relationship; dateOfBirth = dep.dateOfBirth; }
+          } else if (m.clientId) {
+            const c = await storage.getClient(m.clientId, orgId);
+            if (c) { memberName = `${c.firstName} ${c.lastName}`; relationship = "Policy Holder"; dateOfBirth = c.dateOfBirth; }
+          }
+          member = { ...m, memberName, relationship, dateOfBirth };
+        }
+      }
+
+      let group: any = null;
+      const claimGroupId = await resolveClaimGroupId(tdb, claim);
+      if (claimGroupId) {
+        const g = await storage.getGroup(claimGroupId, orgId);
+        if (g) {
+          const balance = await getGroupLedgerBalanceInTx(tdb, orgId, g.id);
+          // What approving would deduct — or why it can't be approved yet.
+          let pendingDebit: { amount: number; currency: string } | null = null;
+          let debitBlocker: string | null = null;
+          if (UNDECIDED_CLAIM_STATUSES.includes(claim.status)) {
+            try {
+              const d = await resolveLedgerDebit(tdb, claim);
+              if (d) pendingDebit = { amount: d.amount, currency: d.currency };
+            } catch (e: any) {
+              debitBlocker = e?.message ?? "Can't be approved yet";
+            }
+          }
+          group = {
+            id: g.id, name: g.name, type: g.type, isLegacy: g.isLegacy, hasLedger: g.hasLedger,
+            balance, pendingDebit, debitBlocker,
+          };
+        }
+      }
+
+      const userIds = Array.from(new Set([
+        claim.submittedBy, claim.verifiedBy, claim.approvedBy, claim.decidedBy, claim.investigationOpenedBy,
+        ...history.map((h) => h.changedBy),
+      ].filter(Boolean) as string[]));
+      const userRows = userIds.length ? await tdb.select({ id: users.id, displayName: users.displayName, email: users.email }).from(users).where(inArray(users.id, userIds)) : [];
+      const userNames: Record<string, string> = {};
+      for (const u of userRows) userNames[u.id] = u.displayName || u.email;
+
+      return res.json({
+        claim: withClaimAging(claim),
+        policy: policy ? { id: policy.id, policyNumber: policy.policyNumber, status: policy.status, currency: policy.currency, groupId: policy.groupId, isLegacy: (policy as any).isLegacy } : null,
+        client: client ? { id: client.id, firstName: client.firstName, lastName: client.lastName, phone: client.phone, nationalId: client.nationalId } : null,
+        member,
+        funeralCase: fcRows[0] ?? null,
+        quotation: quotation ? { id: quotation.id, quotationNumber: quotation.quotationNumber, currency: quotation.currency, grandTotal: quotation.grandTotal, total: quotation.total, status: quotation.status } : null,
+        group,
+        history,
+        approval: approvals[0] ?? null,
+        userNames,
+      });
+    } catch (err: any) {
+      structuredLog("error", "GET /api/claims/:id/detail failed", { claimId: claim.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  /** Correct a claim that hasn't been decided yet: its amount, currency, or the cash-service
+   *  quote attached to it (burial society claims can't be approved without one). */
+  app.patch("/api/claims/:id", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const claim = await storage.getClaim(req.params.id as string, orgId);
+    if (!claim) return res.status(404).json({ message: "Not found" });
+    if (!UNDECIDED_CLAIM_STATUSES.includes(claim.status)) {
+      return res.status(400).json({ message: "This claim has already been decided and can no longer be changed." });
+    }
+    try {
+      const patch: Record<string, any> = {};
+      if (req.body.cashInLieuAmount !== undefined) {
+        const raw = req.body.cashInLieuAmount;
+        if (raw === null || raw === "") patch.cashInLieuAmount = null;
+        else {
+          const n = parseFloat(String(raw));
+          if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "Amount must be a positive number." });
+          patch.cashInLieuAmount = n.toFixed(2);
+        }
+      }
+      if (typeof req.body.currency === "string" && req.body.currency.trim()) patch.currency = req.body.currency.trim().toUpperCase();
+      // Link (or change) the claimed member — mainly for claims logged before members were
+      // captured on claims. Same rules as at creation: on this policy, not already claimed.
+      let memberToLink: any = null;
+      if (req.body.policyMemberId && req.body.policyMemberId !== claim.policyMemberId) {
+        const tdb = await getDbForOrg(orgId);
+        [memberToLink] = await tdb.select().from(policyMembers)
+          .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, claim.policyId))).limit(1);
+        if (!memberToLink) return res.status(400).json({ message: "That member isn't on this claim's policy." });
+        const [other] = await tdb.select({ claimNumber: claims.claimNumber }).from(claims)
+          .where(and(eq(claims.organizationId, orgId), eq(claims.policyMemberId, memberToLink.id), sql`${claims.status} <> 'rejected'`, sql`${claims.id} <> ${claim.id}`)).limit(1);
+        if (other) return res.status(409).json({ message: `This member already has claim ${other.claimNumber}.` });
+        patch.policyMemberId = memberToLink.id;
+      }
+      let quotationToLink: any = null;
+      if (req.body.quotationId) {
+        quotationToLink = await storage.getQuotationById(req.body.quotationId, orgId);
+        if (!quotationToLink) return res.status(404).json({ message: "Quotation not found" });
+        if (quotationToLink.claimId && quotationToLink.claimId !== claim.id) {
+          return res.status(409).json({ message: `Quote ${quotationToLink.quotationNumber} is already attached to another claim.` });
+        }
+      }
+      const updated = await withOrgTransaction(orgId, async (tx) => {
+        let row = claim;
+        if (Object.keys(patch).length) {
+          [row] = await tx.update(claims).set(patch).where(and(eq(claims.id, claim.id), eq(claims.organizationId, orgId))).returning();
+        }
+        if (memberToLink) {
+          if (claim.policyMemberId) {
+            await tx.update(policyMembers).set({ claimStatus: null, claimVerdictNote: null, claimVerdictAt: null })
+              .where(eq(policyMembers.id, claim.policyMemberId));
+          }
+          await tx.update(policyMembers).set({
+            claimStatus: claim.status === "under_investigation" ? "under_investigation" : "claim_pending",
+            claimVerdictNote: `Claim ${claim.claimNumber} ${claim.status === "under_investigation" ? "under investigation" : "awaiting a decision"}`,
+            claimVerdictAt: null,
+          }).where(eq(policyMembers.id, memberToLink.id));
+        }
+        if (quotationToLink) {
+          // One quote per claim — detach any previous one first.
+          await tx.update(funeralQuotations).set({ claimId: null })
+            .where(and(eq(funeralQuotations.organizationId, orgId), eq(funeralQuotations.claimId, claim.id)));
+          await tx.update(funeralQuotations).set({ claimId: claim.id }).where(eq(funeralQuotations.id, quotationToLink.id));
+        }
+        await auditLog(req, "UPDATE_CLAIM", "Claim", claim.id, claim, { ...row, linkedQuotationId: quotationToLink?.id }, undefined, tx);
+        return row;
+      });
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/claims/:id failed", { claimId: claim.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
 
   app.post("/api/claims", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
@@ -7106,8 +7290,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // when the policy's product is actually benefitTrigger:'hospitalization'; every other
       // product (i.e. every real product today) is completely unaffected.
       let hospitalCashPatch: Record<string, any> = {};
+      let claimPolicy: any = null;
       if (req.body.policyId) {
-        const claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
+        claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
+        if (!claimPolicy) return res.status(404).json({ message: "Policy not found" });
         const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
         if (wp.violated) {
           fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
@@ -7134,20 +7320,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         linkedQuotation = await storage.getQuotationById(req.body.quotationId, user.organizationId);
         if (!linkedQuotation) return res.status(404).json({ message: "Quotation not found" });
       }
-      if (req.body.groupId) {
-        const group = await storage.getGroup(req.body.groupId, user.organizationId);
-        if (!group) return res.status(404).json({ message: "Group not found" });
+      if (linkedQuotation?.claimId) {
+        return res.status(409).json({ message: `Quote ${linkedQuotation.quotationNumber} is already attached to another claim.` });
       }
 
-      const { quotationId: _quotationId, ...bodyWithoutQuotationId } = req.body;
+      // The claimed covered life — must be on this policy, and can't already have an open or
+      // approved claim (a person can only be claimed for once).
+      let claimedMember: any = null;
+      if (req.body.policyMemberId) {
+        const tdb = await getDbForOrg(user.organizationId);
+        [claimedMember] = await tdb.select().from(policyMembers)
+          .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, req.body.policyId))).limit(1);
+        if (!claimedMember) return res.status(400).json({ message: "That member isn't on this policy." });
+        const [openClaim] = await tdb.select({ claimNumber: claims.claimNumber, status: claims.status }).from(claims)
+          .where(and(
+            eq(claims.organizationId, user.organizationId),
+            eq(claims.policyMemberId, claimedMember.id),
+            sql`${claims.status} <> 'rejected'`,
+          )).limit(1);
+        if (openClaim) {
+          return res.status(409).json({ message: `This member already has claim ${openClaim.claimNumber} (${openClaim.status.replace(/_/g, " ")}). A person can only be claimed for once.` });
+        }
+      }
+
+      // Ledger groups (legacy groups / burial societies): the claim is paid from the group's
+      // ledger, so link it automatically from the member's policy — staff don't have to know.
+      let claimGroup: any = null;
+      const groupIdCandidate = req.body.groupId || claimPolicy?.groupId;
+      if (groupIdCandidate) {
+        const group = await storage.getGroup(groupIdCandidate, user.organizationId);
+        if (req.body.groupId && !group) return res.status(404).json({ message: "Group not found" });
+        if (group && (req.body.groupId || group.hasLedger)) claimGroup = group;
+      }
+      if (claimGroup?.type === "burial_society" && !linkedQuotation) {
+        return res.status(400).json({
+          code: "quotation_required",
+          message: `${claimGroup.name} is a burial society — attach the cash-service quote for this claim. The quoted amount is what gets deducted from the society's ledger.`,
+        });
+      }
+
+      // "Further investigation required" at submission: the claim starts under investigation
+      // (with what's being investigated + next steps) and only goes to the approvers once the
+      // investigation is concluded.
+      const startInvestigation = req.body.recommendation === "investigate";
+      const investigationReason = typeof req.body.investigationReason === "string" ? req.body.investigationReason.trim() : "";
+      const investigationNextSteps = typeof req.body.investigationNextSteps === "string" ? req.body.investigationNextSteps.trim() : "";
+      if (startInvestigation && (!investigationReason || !investigationNextSteps)) {
+        return res.status(400).json({ message: "Say what needs investigating and what the next steps are." });
+      }
+
+      const {
+        quotationId: _quotationId, recommendation: _recommendation, investigationReason: _ir, investigationNextSteps: _ins,
+        ...bodyWithoutQuotationId
+      } = req.body;
       const parsed = insertClaimSchema.parse({
         ...bodyWithoutQuotationId,
         ...caseFillPatch,
         ...hospitalCashPatch,
+        groupId: claimGroup?.id ?? null,
+        policyMemberId: claimedMember?.id ?? null,
         organizationId: user.organizationId,
         claimNumber: "PENDING",
-        status: "submitted",
+        status: startInvestigation ? "under_investigation" : "submitted",
         submittedBy: effectiveUserId,
+        ...(startInvestigation ? {
+          investigationReason, investigationNextSteps,
+          investigationOpenedAt: new Date(), investigationOpenedBy: effectiveUserId,
+        } : {}),
         ...(fraudFlags ? { fraudFlags } : {}),
       });
       const claim = await withOrgTransaction(user.organizationId, async (txDb) => {
@@ -7167,6 +7406,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.insert(claimStatusHistory).values({
           claimId: created.id, fromStatus: null, toStatus: "submitted", reason: "Claim submitted", changedBy: effectiveUserId,
         });
+        if (startInvestigation) {
+          await txDb.insert(claimStatusHistory).values({
+            claimId: created.id, fromStatus: "submitted", toStatus: "under_investigation",
+            reason: `Investigating: ${investigationReason} — Next steps: ${investigationNextSteps}`, changedBy: effectiveUserId,
+          });
+        }
+        // Linked in the same commit — a burial society claim can't be approved without its quote.
+        if (linkedQuotation) {
+          await txDb.update(funeralQuotations).set({ claimId: created.id })
+            .where(and(eq(funeralQuotations.id, linkedQuotation.id), eq(funeralQuotations.organizationId, user.organizationId)));
+        }
+        if (claimedMember) {
+          await txDb.update(policyMembers).set({
+            claimStatus: startInvestigation ? "under_investigation" : "claim_pending",
+            claimVerdictNote: `Claim ${claimNumber} ${startInvestigation ? `under investigation: ${investigationReason}` : "submitted"}`,
+            claimVerdictAt: null,
+          }).where(eq(policyMembers.id, claimedMember.id));
+        }
         return created;
       });
       await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
@@ -7177,15 +7434,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           structuredLog("error", "Failed to link claim to funeral case", { claimId: claim.id, funeralCaseId: linkedCase.id, error: linkErr?.message });
         }
       }
-      if (linkedQuotation) {
-        try {
-          await storage.linkQuotationToClaim(linkedQuotation.id, claim.id, user.organizationId);
-        } catch (linkErr: any) {
-          structuredLog("error", "Failed to link claim to quotation", { claimId: claim.id, quotationId: linkedQuotation.id, error: linkErr?.message });
-        }
-      }
-      // Auto-create approval request — all claims require manager approval
-      try {
+      // Auto-create approval request — all claims require manager approval. A claim that starts
+      // under investigation goes to the approvers only once the investigation is concluded
+      // (server/claim-workflow.ts requeueForApproval).
+      if (!startInvestigation) try {
         const approvalReq = await storage.createApprovalRequest({
           organizationId: user.organizationId,
           requestType: "CLAIM_REVIEW",
@@ -7213,145 +7465,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/claims/:id/transition", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
-    const user = req.user as any;
-    const claim = await storage.getClaim(req.params.id as string, user.organizationId);
-    if (!claim || claim.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-
-    const { toStatus, reason } = req.body;
-    const allowed = VALID_CLAIM_TRANSITIONS[claim.status];
-    if (!allowed || !allowed.includes(toStatus)) {
-      return res.status(400).json({ message: `Invalid transition from ${claim.status} to ${toStatus}` });
-    }
-
-    const effectiveUserId = await resolveOrSyncTenantUserId(claim.organizationId, user.id);
-    if (["approved", "paid"].includes(toStatus)) {
-      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-      if (!perms.includes("approve:claim")) {
-        return res.status(403).json({ message: "Approval permission required" });
-      }
-      // Segregation of duties: whoever submitted or verified this claim cannot be the one to
-      // approve/mark it paid — platform owner is the sole exception. Same pattern as
-      // requisitions (routes.ts ~6676).
-      const isSelfClaim = (claim.submittedBy === effectiveUserId || claim.verifiedBy === effectiveUserId) && !user.isPlatformOwner;
-      if (isSelfClaim) {
-        return res.status(403).json({ message: "You cannot approve or mark paid a claim you submitted or verified yourself." });
-      }
-    }
-
-    // Hard stop — this is the moment the payout actually gets committed, so a waiting-period
-    // violation is enforced here rather than only flagged at submission. Requires an explicit,
-    // logged override reason to proceed (same "let it through with a note, but never silently"
-    // pattern as premium overrides in POST /api/payments), not a permission check — the intent
-    // is to force a deliberate decision, not to gate who's allowed to make it.
-    let waitingPeriodOverride: { waitingPeriodEndDate: string; reason: string } | undefined;
-    if (toStatus === "approved" && claim.policyId) {
-      const claimPolicy = await storage.getPolicy(claim.policyId, user.organizationId);
-      const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, claim.dateOfDeath);
-      if (wp.violated) {
-        const overrideReason = typeof req.body.waitingPeriodOverrideReason === "string" ? req.body.waitingPeriodOverrideReason.trim() : "";
-        if (!overrideReason) {
-          return res.status(400).json({
-            code: "waiting_period_violation",
-            message: `This claim's date of death is before the policy's waiting period ends (${wp.waitingPeriodEndDate}). Provide waitingPeriodOverrideReason to approve anyway.`,
-            waitingPeriodEndDate: wp.waitingPeriodEndDate,
-          });
-        }
-        waitingPeriodOverride = { waitingPeriodEndDate: wp.waitingPeriodEndDate!, reason: overrideReason };
-      }
-    }
-
-    // Ex gratia — a general "this doesn't strictly qualify under the policy, approving anyway as
-    // a goodwill payment" declaration, available on any approval (not tied to the automated
-    // waiting-period check above, which stays exactly as-is). Same "explicit reason, never
-    // silent" posture: isExGratia without a reason is rejected outright.
-    let exGratia: { reason: string } | undefined;
-    if (toStatus === "approved" && req.body.isExGratia) {
-      const exGratiaReason = typeof req.body.exGratiaReason === "string" ? req.body.exGratiaReason.trim() : "";
-      if (!exGratiaReason) {
-        return res.status(400).json({ message: "exGratiaReason is required to approve a claim as ex gratia." });
-      }
-      exGratia = { reason: exGratiaReason };
-    }
-
-    const before = { ...claim };
-    const updateData: any = { status: toStatus };
-    if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
-    if (toStatus === "approved") updateData.approvedBy = effectiveUserId;
-    if (waitingPeriodOverride) {
-      updateData.fraudFlags = {
-        ...(claim.fraudFlags as any || {}),
-        waitingPeriod: { violated: true, waitingPeriodEndDate: waitingPeriodOverride.waitingPeriodEndDate, overriddenBy: effectiveUserId, overrideReason: waitingPeriodOverride.reason, overriddenAt: new Date().toISOString() },
-      };
-    }
-    if (exGratia) {
-      updateData.isExGratia = true;
-      updateData.exGratiaReason = exGratia.reason;
-    }
-
-    // Status update + history row + (if applicable) the group ledger debit + audit log must all
-    // commit together — a crash mid-way used to leave a durably-approved group claim with no
-    // ledger debit and no record it was ever owed (found in the 2026-08-19 functional audit).
-    const updated = await withOrgTransaction(claim.organizationId, async (txDb) => {
-      const [row] = await txDb.update(claims).set(updateData)
-        .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
-        .returning();
-      let historyReason = waitingPeriodOverride
-        ? `${reason ? `${reason} — ` : ""}Waiting period override: ${waitingPeriodOverride.reason}`
-        : reason;
-      if (exGratia) {
-        historyReason = `${historyReason ? `${historyReason} — ` : ""}Ex gratia: ${exGratia.reason}`;
-      }
-      await txDb.insert(claimStatusHistory).values({
-        claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyReason, changedBy: effectiveUserId,
+    // All the rules (permissions, segregation of duties, waiting period, ex gratia, investigation,
+    // member verdict, group-ledger debit, approval-queue sync) live in server/claim-workflow.ts
+    // so the Approvals queue applies exactly the same ones.
+    try {
+      const result = await transitionClaim({
+        req,
+        claimId: req.params.id as string,
+        toStatus: req.body.toStatus,
+        reason: req.body.reason,
+        waitingPeriodOverrideReason: req.body.waitingPeriodOverrideReason,
+        isExGratia: !!req.body.isExGratia,
+        exGratiaReason: req.body.exGratiaReason,
+        investigationReason: req.body.investigationReason,
+        investigationNextSteps: req.body.investigationNextSteps,
+        investigationFindings: req.body.investigationFindings,
+        source: "claims",
       });
-      // Group-service claim, approved — debit the group's ledger for the payout amount. This is
-      // the moment a group-service quotation's ledger deduction actually commits, after going
-      // through the same review/approval procedure as any other claim (segregation of duties,
-      // waiting-period/ex-gratia checks above) — satisfies "groups must also follow the standing
-      // claims procedure." Only fires once, on the submitted->approved transition (not on later
-      // scheduled/payable/paid/closed transitions of the same claim).
-      if (toStatus === "approved" && row.groupId && row.cashInLieuAmount) {
-        await storage.createGroupLedgerEntryInTx(txDb, {
-          organizationId: claim.organizationId,
-          groupId: row.groupId,
-          entryType: "claim_debit",
-          amount: row.cashInLieuAmount,
-          currency: row.currency,
-          description: `Claim ${row.claimNumber} approved`,
-          referenceType: "claim",
-          referenceId: row.id,
-          createdBy: user.id,
-        });
+      return res.json({ ...result.claim, ledger: result.ledger });
+    } catch (err: any) {
+      if (err instanceof ClaimWorkflowError) {
+        return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
       }
-      await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, row, undefined, txDb);
-      return row;
-    });
-    // Notify submitter of status change
-    if (claim.submittedBy && claim.submittedBy !== user.id) {
-      notifyUser(claim.organizationId, claim.submittedBy, {
-        type: "CLAIM_STATUS",
-        title: `Claim ${toStatus.charAt(0).toUpperCase() + toStatus.slice(1)}`,
-        body: `Claim ${claim.claimNumber} has been ${toStatus}${reason ? `: ${reason}` : ""}.`,
-        metadata: { claimId: claim.id, claimNumber: claim.claimNumber, toStatus },
-      }).catch(() => {});
+      structuredLog("error", "POST /api/claims/:id/transition failed", { claimId: req.params.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
-    // Notify client
-    if (claim.clientId) {
-      const statusLabel = toStatus.charAt(0).toUpperCase() + toStatus.slice(1);
-      notifyClientPush(claim.organizationId, claim.clientId, `Claim ${statusLabel}`, `Your claim ${claim.claimNumber} has been ${toStatus}.`, claim.policyId ?? undefined).catch(() => {});
-      storage.getClient(claim.clientId, claim.organizationId).then((claimClient) =>
-        dispatchNotification(claim.organizationId, "claim_status_change", claim.clientId!, {
-          clientName: claimClient ? `${claimClient.firstName} ${claimClient.lastName}` : undefined,
-          firstName: claimClient?.firstName,
-          lastName: claimClient?.lastName,
-          claimNumber: claim.claimNumber,
-          status: statusLabel,
-          policyId: claim.policyId ?? undefined,
-        })
-      ).catch(() => {});
-    }
-    return res.json(updated);
   });
 
   app.get("/api/claims/:id/documents", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
@@ -11058,8 +11196,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/approvals/:id/resolve", requireAuth, requireTenantScope, requirePermission("approve:requests"), async (req, res) => {
     const user = req.user as any;
     const { action, rejectionReason } = req.body;
-    if (action !== "approve" && action !== "reject") {
-      return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
+    if (action !== "approve" && action !== "reject" && action !== "investigate") {
+      return res.status(400).json({ message: "action must be 'approve', 'reject' or 'investigate'" });
     }
     const before = await storage.getApprovalRequests(user.organizationId);
     const approval = before.find(a => a.id === req.params.id as string);
@@ -11070,6 +11208,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     if (approval.initiatedBy === effectiveUserId && !user.isPlatformOwner) {
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
+    }
+
+    // A claim review decides the claim itself: approving/declining here moves the claim, writes
+    // the verdict onto the claimed member and (for ledger groups) debits the group ledger —
+    // exactly as if it had been decided on the Claims page. transitionClaim also updates this
+    // approval request inside the same transaction.
+    if (approval.requestType === "CLAIM_REVIEW") {
+      if (approval.status !== "pending") {
+        return res.status(400).json({ message: "This claim review has already been dealt with." });
+      }
+      const toStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "under_investigation";
+      try {
+        const result = await transitionClaim({
+          req,
+          claimId: approval.entityId,
+          toStatus,
+          reason: action === "reject" ? rejectionReason : req.body.reason,
+          isExGratia: !!req.body.isExGratia,
+          exGratiaReason: req.body.exGratiaReason,
+          investigationReason: req.body.investigationReason,
+          investigationNextSteps: req.body.investigationNextSteps,
+          source: "approvals",
+        });
+        const [after] = (await storage.getApprovalRequests(user.organizationId)).filter((a) => a.id === approval.id);
+        return res.json({ ...(after ?? approval), claim: result.claim, ledger: result.ledger });
+      } catch (err: any) {
+        if (err instanceof ClaimWorkflowError) {
+          return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
+        }
+        structuredLog("error", "Claim review resolve failed", { approvalId: approval.id, error: err?.message });
+        return res.status(500).json({ message: safeError(err) });
+      }
+    }
+    if (action === "investigate") {
+      return res.status(400).json({ message: "Only claim reviews can be sent for investigation." });
     }
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
@@ -12491,7 +12664,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     try {
-      const parsed = insertGroupSchema.parse({ ...req.body, organizationId: user.organizationId });
+      // Legacy groups and burial societies always keep a ledger; any other group only if asked.
+      const hasLedger = req.body.isLegacy === true || req.body.type === "burial_society" || req.body.hasLedger === true;
+      const parsed = insertGroupSchema.parse({ ...req.body, hasLedger, organizationId: user.organizationId });
       const group = await storage.createGroup(parsed);
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
       return res.status(201).json(group);
@@ -12509,7 +12684,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existing = await storage.getGroup(id, user.organizationId);
       if (!existing) return res.status(404).json({ message: "Group not found" });
       if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-      const updated = await storage.updateGroup(id, req.body, user.organizationId);
+      const patch = { ...req.body };
+      const nextIsLegacy = patch.isLegacy ?? existing.isLegacy;
+      const nextType = patch.type ?? existing.type;
+      if (nextIsLegacy === true || nextType === "burial_society") patch.hasLedger = true;
+      else if (patch.hasLedger === false && existing.hasLedger) {
+        // Don't let a group with ledger history silently lose its ledger view.
+        const entries = await storage.getGroupLedgerEntries(user.organizationId, id);
+        if (entries.length > 0) return res.status(400).json({ message: "This group already has ledger entries, so it has to stay a ledger group." });
+      }
+      const updated = await storage.updateGroup(id, patch, user.organizationId);
       await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
       return res.json(updated);
     } catch (err: any) {
@@ -12714,6 +12898,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── Group ledger (premium-in/claim-out balance — distinct from the pool-balance/contributions
   // routes above, which are the separate voluntary-contribution pool-society system) ──
+  /** Current ledger balance of every ledger group, for the Ledger Groups list. One query. */
+  app.get("/api/groups/ledger-balances", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const tdb = await getDbForOrg(user.organizationId);
+    const rows = await tdb.execute(sql`
+      SELECT group_id, currency,
+        SUM(CASE WHEN entry_type IN ('premium_credit', 'adjustment_credit', 'historical_import') THEN amount
+                 WHEN entry_type IN ('claim_debit', 'adjustment_debit') THEN -amount ELSE 0 END) AS balance
+      FROM group_ledger_entries
+      WHERE organization_id = ${user.organizationId}
+      GROUP BY group_id, currency
+    `);
+    const out: Record<string, Record<string, number>> = {};
+    for (const r of ((rows as any).rows ?? rows) as any[]) {
+      (out[r.group_id] ??= {})[r.currency] = parseFloat(r.balance);
+    }
+    return res.json(out);
+  });
+
   app.get("/api/groups/:id/ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
