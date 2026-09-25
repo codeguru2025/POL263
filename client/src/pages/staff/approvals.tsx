@@ -135,6 +135,9 @@ export default function StaffApprovals() {
               </>
             )}
             {d?.reason && <><br /><span className="text-xs text-muted-foreground italic">{d.reason}</span></>}
+            {a.requestType === "CLAIM_REVIEW" && a.status === "pending" && d?.requeuedReason && (
+              <><br /><span className="text-xs text-amber-700">{d.requeuedReason}</span></>
+            )}
             {a.requestType === "CLAIM_REVIEW" && d?.investigationFindings && (
               <><br /><span className="text-xs">Investigation findings: <strong>{d.investigationFindings}</strong></span></>
             )}

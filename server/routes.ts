@@ -112,7 +112,7 @@ import {
   policyMembers, funeralQuotations, funeralCases, approvalRequests,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
-import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
+import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
 import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
@@ -7056,7 +7056,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Claims ─────────────────────────────────────────────────
 
   app.get("/api/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-store");
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -7456,6 +7456,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } catch (approvalErr: any) {
         structuredLog("warn", "Failed to auto-create claim approval", { claimId: claim.id, error: approvalErr?.message });
       }
+      // Let the client know the claim was received (after the funeral-case link above, so the
+      // informant's number can be used if the policyholder has no phone on file).
+      notifyClientOfClaim(user.organizationId, claim, startInvestigation ? "under_investigation" : "submitted")
+        .catch((err) => structuredLog("warn", "Claim received notification failed", { claimId: claim.id, error: err?.message }));
       return res.status(201).json(claim);
     } catch (err: any) {
       if (handleZodError(err, res)) return;

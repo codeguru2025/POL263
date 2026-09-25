@@ -131,7 +131,7 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
     (SELECT h.from_status FROM claim_status_history h WHERE h.claim_id = ${claims.id} AND h.created_at >= ${asOfExclusive} ORDER BY h.created_at ASC LIMIT 1),
     ${claims.status}
   )`;
-  const openAtAsOf = sql`${statusAsOf} IN ('submitted', 'verified', 'approved')`;
+  const openAtAsOf = sql`${statusAsOf} IN ('submitted', 'verified', 'under_investigation', 'approved')`;
   const reportedByAsOf = sql`${claims.createdAt} < ${asOfExclusive}`;
 
   const claimConds: any[] = [

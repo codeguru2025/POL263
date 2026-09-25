@@ -38,8 +38,28 @@ claims (`group_id` set) are excluded from claims-payable and the IFRS 17 claims 
 they're paid from the group's own money. Migration `0129_claims_workflow_ledger_groups.sql` also
 adds `groups.has_ledger`, backfilled for every legacy group / burial society / group with ledger
 entries. **Verified:** `tests/unit/claim-workflow.test.ts` (13 tests: transition rules, guard rails,
-Approvals-queue permission, ledger-debit amount rules); full suite 750/750, `tsc` clean. Not yet
+Approvals-queue permission, ledger-debit amount rules); full suite 755/755 after the follow-up, `tsc` clean. Not yet
 clicked through against real data — needs the deploy (migration runs automatically on deploy).
+
+**Follow-up the same day (impact sweep):** four more problems that made the claim look stuck or
+kept the client uninformed:
+1. `GET /api/claims` sent `Cache-Control: private, max-age=30`. The app's fetch uses the browser
+   cache by default, so after a decision the refetched list could be a stale cached copy for up to
+   30s. It's now `no-store`. `/api/clients`, `/api/policies`, `/api/leads` and the dashboard
+   still carry the same header (left alone).
+2. The claim SMS for CLM-000003 was logged `skipped: Client has no phone number on file`, and 209
+   Falakhe SMSes in 3 days were skipped the same way. `NotificationContext.fallbackPhone` now lets
+   a claim SMS go to the linked funeral case's informant when the policyholder has no phone.
+3. Clients got no message when a claim was logged; they now get "Received" (or "Under
+   investigation"). Client-portal / customer-service claims (`submitClientClaim`) never linked a
+   member, never notified staff, and can't get an Approvals entry (`initiated_by` must be a staff
+   user). They now auto-link the member by exact name and notify `write:claim` staff.
+4. IFRS 17 LIC "open at as-of" didn't count `under_investigation`.
+Migration 0129 also links existing claims to their member by exact name and puts CLAIM_REVIEW
+requests that were approved/rejected while their claim stayed undecided (CLM-000003) back to
+pending, so the decision runs through the workflow with the SMS. Dry-run in a rolled-back
+transaction on the shared and Falakhe DBs: 86 groups flagged, CLM-000003 linked to its member,
+its request re-queued.
 
 **Lesson:** when a feature creates an approval request, grep the resolve route for that
 `requestType`. An approval type with no branch in the side-effect `if/else` is a silent no-op that

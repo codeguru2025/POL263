@@ -19,11 +19,11 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import {
-  approvalRequests, claimStatusHistory, claims, funeralQuotations, groupLedgerEntries, groups,
+  approvalRequests, claimStatusHistory, claims, funeralCases, funeralQuotations, groupLedgerEntries, groups,
   policies, policyMembers, VALID_CLAIM_TRANSITIONS, type Claim,
 } from "@shared/schema";
 import { storage } from "./storage";
-import { withOrgTransaction, resolveOrSyncTenantUserId, ensureRegistryUserMirroredToOrgDataDb, type OrgDataDb } from "./tenant-db";
+import { withOrgTransaction, getDbForOrg, resolveOrSyncTenantUserId, ensureRegistryUserMirroredToOrgDataDb, type OrgDataDb } from "./tenant-db";
 import { auditLog, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { todayForOrg } from "./date-utils";
 import { computeGroupLedgerBalance } from "./group-ledger";
@@ -421,19 +421,75 @@ export async function transitionClaim(input: TransitionClaimInput): Promise<{ cl
       metadata: { claimId: claim.id, claimNumber: claim.claimNumber },
     }).catch(() => {});
   }
-  if (claim.clientId && toStatus !== "verified") {
-    const statusLabel = label.charAt(0).toUpperCase() + label.slice(1);
-    notifyClientPush(orgId, claim.clientId, `Claim ${statusLabel}`, `Your claim ${claim.claimNumber} is ${label}.`, claim.policyId ?? undefined).catch(() => {});
-    storage.getClient(claim.clientId, orgId).then((claimClient) =>
-      dispatchNotification(orgId, "claim_status_change", claim.clientId!, {
-        clientName: claimClient ? `${claimClient.firstName} ${claimClient.lastName}` : undefined,
-        firstName: claimClient?.firstName,
-        lastName: claimClient?.lastName,
-        claimNumber: claim.claimNumber,
-        status: statusLabel,
-        policyId: claim.policyId ?? undefined,
-      })
-    ).catch((err) => structuredLog("warn", "Claim status client notification failed", { claimId: claim.id, error: err?.message }));
-  }
+  notifyClientOfClaim(orgId, claim, concludingInvestigation ? "back_for_review" : toStatus)
+    .catch((err) => structuredLog("warn", "Claim status client notification failed", { claimId: claim.id, error: err?.message }));
   return result;
+}
+
+/** What the client is told the claim's status is — plain words, not internal status keys. */
+const CLIENT_CLAIM_STATUS_LABEL: Record<string, string> = {
+  submitted: "Received",
+  verified: "Verified",
+  under_investigation: "Under investigation",
+  back_for_review: "Back for final review",
+  approved: "Approved",
+  rejected: "Declined",
+  scheduled: "Approved — service scheduled",
+  payable: "Approved — payment being processed",
+  paid: "Paid",
+  completed: "Completed",
+  closed: "Closed",
+};
+
+/**
+ * Tell the client (push + the tenant's claim_status_change SMS/email templates) about a claim.
+ * If the policyholder has no phone on file, the SMS goes to the linked funeral case's informant
+ * instead — the family member actually dealing with the claim.
+ */
+export async function notifyClientOfClaim(
+  orgId: string,
+  claim: Pick<Claim, "id" | "clientId" | "claimNumber" | "policyId">,
+  statusKey: string,
+): Promise<void> {
+  if (!claim.clientId) return;
+  const statusLabel = CLIENT_CLAIM_STATUS_LABEL[statusKey] ?? statusKey.replace(/_/g, " ");
+  let fallbackPhone: string | undefined;
+  try {
+    const tdb = await getDbForOrg(orgId);
+    const [fc] = await tdb.select({ informantPhone: funeralCases.informantPhone }).from(funeralCases)
+      .where(and(eq(funeralCases.organizationId, orgId), eq(funeralCases.claimId, claim.id))).limit(1);
+    fallbackPhone = fc?.informantPhone || undefined;
+  } catch { /* best effort — no fallback number */ }
+  await notifyClientPush(orgId, claim.clientId, `Claim ${claim.claimNumber}: ${statusLabel}`,
+    `Your claim ${claim.claimNumber} is now: ${statusLabel}.`, claim.policyId ?? undefined).catch(() => {});
+  const client = await storage.getClient(claim.clientId, orgId);
+  await dispatchNotification(orgId, "claim_status_change", claim.clientId, {
+    clientName: client ? `${client.firstName} ${client.lastName}` : undefined,
+    firstName: client?.firstName,
+    lastName: client?.lastName,
+    claimNumber: claim.claimNumber,
+    status: statusLabel,
+    policyId: claim.policyId ?? undefined,
+    fallbackPhone,
+  });
+}
+
+/**
+ * The covered member on a policy whose name matches the deceased's — used to link claims that
+ * arrive without a member picked (client portal, customer-service API). Only an exact
+ * (case/spacing-insensitive) match on exactly one member counts; anything ambiguous stays unlinked.
+ */
+export async function findPolicyMemberByName(tx: OrgDataDb, policyId: string, name: string | null | undefined): Promise<string | null> {
+  const wanted = (name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  if (!wanted) return null;
+  const rows = await tx.execute(sql`
+    SELECT pm.id
+    FROM policy_members pm
+    LEFT JOIN dependents d ON d.id = pm.dependent_id
+    LEFT JOIN clients c ON c.id = pm.client_id
+    WHERE pm.policy_id = ${policyId}
+      AND lower(regexp_replace(trim(coalesce(d.first_name || ' ' || d.last_name, c.first_name || ' ' || c.last_name, '')), '\\s+', ' ', 'g')) = ${wanted}
+  `);
+  const list = ((rows as any).rows ?? rows) as { id: string }[];
+  return list.length === 1 ? list[0].id : null;
 }

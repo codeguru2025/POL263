@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { storageMock, withOrgTransaction } = vi.hoisted(() => ({
+const { storageMock, withOrgTransaction, dispatchNotification, getDbForOrg } = vi.hoisted(() => ({
   storageMock: {
     getClaim: vi.fn(),
     getUserEffectivePermissions: vi.fn(),
@@ -8,11 +8,14 @@ const { storageMock, withOrgTransaction } = vi.hoisted(() => ({
     getClient: vi.fn(),
   },
   withOrgTransaction: vi.fn(),
+  dispatchNotification: vi.fn(async (..._args: any[]) => {}),
+  getDbForOrg: vi.fn(),
 }));
 
 vi.mock("../../server/storage", () => ({ storage: storageMock }));
 vi.mock("../../server/tenant-db", () => ({
   withOrgTransaction: (...args: any[]) => withOrgTransaction(...args),
+  getDbForOrg: (...args: any[]) => getDbForOrg(...args),
   resolveOrSyncTenantUserId: vi.fn(async (_org: string, id: string) => id),
   ensureRegistryUserMirroredToOrgDataDb: vi.fn(async () => {}),
 }));
@@ -22,9 +25,12 @@ vi.mock("../../server/route-helpers", () => ({
 }));
 vi.mock("../../server/date-utils", () => ({ todayForOrg: vi.fn(async () => "2026-09-25") }));
 vi.mock("../../server/user-notifications", () => ({ notifyUser: vi.fn(async () => {}), notifyUsersWithPermission: vi.fn(async () => {}) }));
-vi.mock("../../server/notifications", () => ({ notifyClientPush: vi.fn(async () => {}), dispatchNotification: vi.fn(async () => {}) }));
+vi.mock("../../server/notifications", () => ({
+  notifyClientPush: vi.fn(async () => {}),
+  dispatchNotification: (...args: any[]) => dispatchNotification(...args),
+}));
 
-import { transitionClaim, ledgerDebitFor, ClaimWorkflowError } from "../../server/claim-workflow";
+import { transitionClaim, ledgerDebitFor, notifyClientOfClaim, ClaimWorkflowError } from "../../server/claim-workflow";
 import { VALID_CLAIM_TRANSITIONS } from "../../shared/schema";
 
 const baseClaim = {
@@ -130,5 +136,32 @@ describe("ledgerDebitFor — what a ledger-group claim deducts", () => {
 
   it("refuses to approve when there's nothing to deduct", () => {
     expect(() => ledgerDebitFor(legacy, null, { cashInLieuAmount: null, currency: "USD" })).toThrow(/no amount to deduct/);
+  });
+});
+
+describe("notifyClientOfClaim — the client SMS", () => {
+  const fakeDb = (informantPhone: string | null) => ({
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => (informantPhone === null ? [] : [{ informantPhone }]) }) }) }),
+  });
+
+  it("uses plain wording and falls back to the funeral-case informant's phone", async () => {
+    getDbForOrg.mockResolvedValue(fakeDb("0771112222"));
+    storageMock.getClient.mockResolvedValue({ firstName: "Judith", lastName: "Ncube", phone: null });
+    await notifyClientOfClaim("org1", { id: "c1", clientId: "cl1", claimNumber: "CLM-000003", policyId: "p1" }, "rejected");
+    expect(dispatchNotification).toHaveBeenCalledWith("org1", "claim_status_change", "cl1", expect.objectContaining({
+      claimNumber: "CLM-000003", status: "Declined", clientName: "Judith Ncube", fallbackPhone: "0771112222",
+    }));
+  });
+
+  it("says Received when a claim is first logged, with no fallback when there's no funeral case", async () => {
+    getDbForOrg.mockResolvedValue(fakeDb(null));
+    storageMock.getClient.mockResolvedValue({ firstName: "A", lastName: "B", phone: "0770000000" });
+    await notifyClientOfClaim("org1", { id: "c1", clientId: "cl1", claimNumber: "CLM-9", policyId: "p1" }, "submitted");
+    expect(dispatchNotification).toHaveBeenCalledWith("org1", "claim_status_change", "cl1", expect.objectContaining({ status: "Received", fallbackPhone: undefined }));
+  });
+
+  it("does nothing for a claim with no client", async () => {
+    await notifyClientOfClaim("org1", { id: "c1", clientId: null as any, claimNumber: "CLM-9", policyId: "p1" }, "approved");
+    expect(dispatchNotification).not.toHaveBeenCalled();
   });
 });

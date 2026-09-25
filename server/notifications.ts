@@ -196,6 +196,9 @@ export interface NotificationContext {
   activationCode?: string;
   receiptId?: string;
   documentLabel?: string;
+  /** Number to text when the client has no phone on file — e.g. a claim's funeral-case
+   *  informant (next of kin). Never used as a merge tag, and only for the SMS channel. */
+  fallbackPhone?: string;
 }
 
 /** Backoff for retrying a notification SMS after a temporary failure: 5m, 15m, 30m, 1h, 2h, 4h.
@@ -385,7 +388,7 @@ export async function dispatchNotification(
           } else if (tmpl.channel === "sms") {
             if (clientPhone === undefined) {
               const client = await storage.getClient(clientId, orgId);
-              clientPhone = client?.phone ?? null;
+              clientPhone = client?.phone?.trim() || ctx.fallbackPhone?.trim() || null;
             }
             if (clientPhone && !smsCountryCodeResolved) {
               smsCountryCodeResolved = true;

@@ -206,6 +206,22 @@ describe("dispatchNotification — SMS edge cases", () => {
     expect(mockStorage.updateNotificationLogStatus).toHaveBeenCalledWith("org1", "log1", "skipped", expect.stringContaining("{activation_code}"));
   });
 
+  it("texts the fallback number (e.g. a claim's informant) when the client has no phone", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Claim {claim_number} is now {status}"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: null });
+    await dispatchNotification("org1", "claim_status_change", "c1", { claimNumber: "CLM-000003", status: "Approved", fallbackPhone: "0779999999" });
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1].to).toBe("0779999999");
+    expect(mockSendSms.mock.calls[0][1].message).toBe("Claim CLM-000003 is now Approved");
+  });
+
+  it("prefers the client's own phone over the fallback number", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi"));
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567" });
+    await dispatchNotification("org1", "claim_status_change", "c1", { fallbackPhone: "0779999999" });
+    expect(mockSendSms.mock.calls[0][1].to).toBe("0771234567");
+  });
+
   it("marks the log skipped (not sent) when the client has no phone number", async () => {
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue(smsTmpl("Hi {client_name}"));
     mockStorage.getClient.mockResolvedValue({ id: "c1", phone: null });
