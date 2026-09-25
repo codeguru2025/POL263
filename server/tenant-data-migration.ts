@@ -211,6 +211,7 @@ export function buildTenantCopyPlan(tenantId: string): Array<{ table: string; wh
     // Layer 9: notifications + misc
     { table: "notification_templates", where: orgFilter },
     { table: "notification_logs", where: orgFilter },
+    { table: "sms_messages", where: orgFilter },
     { table: "daily_report_notes", where: orgFilter },
     { table: "leads", where: orgFilter },
     { table: "client_feedback", where: orgFilter },

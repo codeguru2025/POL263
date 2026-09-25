@@ -13,6 +13,8 @@ import { StatusBadge, CardSection } from "@/components/ds";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { Users, UserPlus, Pencil, Loader2 } from "lucide-react";
+import { Link } from "wouter";
+import { MemberClaimBadge } from "@/components/member-claim-badge";
 
 interface MembersTabProps {
   selectedPolicy: any;
@@ -349,14 +351,26 @@ export function MembersTab({ selectedPolicy, displayPolicy, canEditPremium, addO
                       })()}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={m.effectiveStatus || "inactive"} />
+                      <div className="flex flex-col gap-1 items-start">
+                        <StatusBadge status={m.effectiveStatus || "inactive"} />
+                        {m.dateOfDeath && <span className="text-[10px] text-muted-foreground">Died {new Date(m.dateOfDeath).toLocaleDateString("en-ZA")}</span>}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-col gap-1">
-                        <Badge variant="outline" className={m.claimable ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/15 text-amber-700"}>
-                          {m.claimable ? "Yes" : "No"}
-                        </Badge>
-                        {m.claimableReason && <span className="text-[10px] text-muted-foreground leading-tight max-w-[140px]">{m.claimableReason}</span>}
+                        {m.claimStatus ? (
+                          <MemberClaimBadge status={m.claimStatus} />
+                        ) : (
+                          <Badge variant="outline" className={m.claimable ? "bg-emerald-500/15 text-emerald-700" : "bg-amber-500/15 text-amber-700"}>
+                            {m.claimable ? "Yes" : "No"}
+                          </Badge>
+                        )}
+                        {m.claimId && m.claimNumber && (
+                          <Link href={`/staff/claims?openClaim=${m.claimId}`} className="text-[10px] text-primary hover:underline">{m.claimNumber} →</Link>
+                        )}
+                        {(m.claimVerdictNote || m.claimableReason) && (
+                          <span className="text-[10px] text-muted-foreground leading-tight max-w-[160px]">{m.claimVerdictNote || m.claimableReason}</span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>

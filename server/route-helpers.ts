@@ -201,6 +201,17 @@ function hasAgeBandRates(pv: any): boolean {
   ].some((v) => v != null);
 }
 
+/** A product's pricing configuration can't produce a premium (e.g. a missing age-band rate card).
+ *  status/expose make the global error handler return it as a 422 with this message. */
+export class PricingConfigError extends Error {
+  readonly status = 422;
+  readonly expose = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "PricingConfigError";
+  }
+}
+
 function ageBandKeyFor(age: number | null, childThresholdAge: number): AgeBand {
   if (age !== null && age < childThresholdAge) return "child";
   if (age !== null && age >= 85) return "85_plus";
@@ -257,10 +268,14 @@ export async function computeIndividualAgeRatedPremium(
   const rateFor = (band: AgeBand): number => {
     const rate = rateByBand.get(band);
     if (rate == null) {
-      structuredLog("warn", "Age-band rate card unconfigured — pricing this member at $0", {
+      // Fail closed: pricing an unconfigured band at $0 issued real policies with free cover
+      // for that member (and skipped the payment link entirely when every band was missing).
+      structuredLog("warn", "Age-band rate card unconfigured — refusing to price", {
         productVersionId, currency, ageBand: band,
       });
-      return 0;
+      throw new PricingConfigError(
+        `This product has no ${currency} rate configured for the ${band.replace("_", "–")} age band, so it can't be priced yet. Please contact the office.`,
+      );
     }
     return rate;
   };

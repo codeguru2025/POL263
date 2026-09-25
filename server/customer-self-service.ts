@@ -11,11 +11,11 @@
  * Callers are responsible for authenticating the customer; every function still re-checks that
  * the target policy belongs to `clientId` within `orgId`.
  */
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { z } from "zod";
 import { withOrgTransaction } from "./tenant-db";
 import { storage } from "./storage";
-import { claims, claimStatusHistory, insertClaimSchema, type Claim, type Policy } from "@shared/schema";
+import { claims, claimStatusHistory, policyMembers, insertClaimSchema, type Claim, type Policy } from "@shared/schema";
 
 /** 400-class: bad/missing input from the customer. */
 export class CustomerInputError extends Error {
@@ -74,8 +74,25 @@ export async function submitClientClaim(
     causeOfDeath: causeOfDeath || null,
   };
 
+  let created: Claim;
   try {
-    return await withOrgTransaction(orgId, async (txDb) => {
+    created = await withOrgTransaction(orgId, async (txDb) => {
+      // Link the claimed covered member by name when it matches exactly one member who isn't
+      // already claimed for — so the verdict can be recorded against them later. Anything
+      // ambiguous stays unlinked for staff to pick on the claim.
+      let policyMemberId: string | null = null;
+      try {
+        const { findPolicyMemberByName } = await import("./claim-workflow");
+        const match = await findPolicyMemberByName(txDb, policyId, deceasedName);
+        if (match) {
+          const open = await txDb.execute(sql`
+            SELECT 1 FROM claims WHERE organization_id = ${orgId} AND policy_member_id = ${match} AND status <> 'rejected' LIMIT 1
+          `);
+          if ((((open as any).rows ?? open) as unknown[]).length === 0) policyMemberId = match;
+        }
+      } catch {
+        policyMemberId = null;
+      }
       const seqResult = await txDb.execute(sql`
         INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${orgId}, 1)
         ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1
@@ -83,16 +100,21 @@ export async function submitClientClaim(
       `);
       const nextVal = (seqResult as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
       const claimNumber = `CLM-${String(nextVal).padStart(6, "0")}`;
-      const parsed = insertClaimSchema.parse({ ...parsedBase, claimNumber });
-      const [created] = await txDb.insert(claims).values(parsed).returning();
+      const parsed = insertClaimSchema.parse({ ...parsedBase, claimNumber, ...(policyMemberId ? { policyMemberId } : {}) });
+      const [row] = await txDb.insert(claims).values(parsed).returning();
       await txDb.insert(claimStatusHistory).values({
-        claimId: created.id,
+        claimId: row.id,
         fromStatus: null,
         toStatus: "submitted",
         reason: `Submitted via ${source}`,
         changedBy: undefined,
       });
-      return created;
+      if (policyMemberId) {
+        await txDb.update(policyMembers).set({
+          claimStatus: "claim_pending", claimVerdictNote: `Claim ${claimNumber} submitted via ${source}`, claimVerdictAt: null,
+        }).where(eq(policyMembers.id, policyMemberId));
+      }
+      return row;
     });
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -100,6 +122,22 @@ export async function submitClientClaim(
     }
     throw err;
   }
+  // Best effort, after commit: tell the client it was received (SMS per the tenant's
+  // claim_status_change template) and tell staff there's a claim to deal with — a client-submitted
+  // claim has no staff "initiator", so it never gets an Approvals-queue entry of its own.
+  const submitted = created;
+  import("./claim-workflow")
+    .then((m) => m.notifyClientOfClaim(orgId, submitted, "submitted"))
+    .catch(() => {});
+  import("./user-notifications")
+    .then((m) => m.notifyUsersWithPermission(orgId, "write:claim", {
+      type: "CLAIM_SUBMITTED",
+      title: "New claim from a client",
+      body: `Claim ${submitted.claimNumber} was submitted via ${source} and needs to be reviewed on the Claims page.`,
+      metadata: { claimId: submitted.id, claimNumber: submitted.claimNumber },
+    }))
+    .catch(() => {});
+  return created;
 }
 
 export interface BeneficiaryInput {

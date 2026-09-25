@@ -75,11 +75,19 @@ export function getSupabaseUrl(): string | null {
   return process.env.SUPABASE_BACKUP_URL || process.env.SUPABASE_BACKUP_DIRECT_URL || null;
 }
 
+export function stripSslMode(url: string): string {
+  return url.replace(/\?sslmode=[^&]*&?/gi, "?").replace(/&sslmode=[^&]*/gi, "").replace(/\?$/, "");
+}
+
 export async function getBackupPool(): Promise<pg.Pool | null> {
   const url = getSupabaseUrl();
   if (!url) return null;
   const pool = new pg.Pool({
-    connectionString: url,
+    // Strip sslmode: pg 8 treats sslmode=require in the URL as verify-full and lets it OVERRIDE the
+    // ssl option below, so the Supabase pooler's self-signed chain failed every table, every night
+    // ("self-signed certificate in certificate chain") — 0 rows backed up while each run still
+    // recorded "partial". Same fix as server/control-plane-db.ts.
+    connectionString: stripSslMode(url),
     max: 3,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
@@ -304,9 +312,11 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
   // out a single dedicated client and holding it for the lock's entire lifetime (release in
   // `finally`) is the only way to guarantee acquire and release happen on the same session.
   const { pool: mainPool } = await import("./db");
+  // Transaction-level lock — a session lock doesn't hold through PgBouncer's transaction
+  // pooling (see server/advisory-lock.ts), which let both production instances run the backup.
+  const { tryXactLock, endXactLock } = await import("./advisory-lock");
   const lockClient = await mainPool.connect();
-  const lockResult = await lockClient.query("SELECT pg_try_advisory_lock(987654321) as acquired");
-  if (!lockResult.rows[0]?.acquired) {
+  if (!(await tryXactLock(lockClient, [987654321]))) {
     lockClient.release();
     structuredLog("info", "Backup sync skipped — another instance holds the advisory lock");
     return;
@@ -442,7 +452,8 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
     if (runId) {
       await runLogDb.update(backupSyncRuns).set({
         completedAt: new Date(),
-        status: errors.length === 0 ? "success" : "partial",
+        // Nothing copied at all is a failure, not "partial" — that label hid 0-row runs for weeks.
+        status: errors.length === 0 ? "success" : totalRows === 0 ? "failed" : "partial",
         totalRows: String(totalRows),
         tableCount: String(tableCount),
         errorCount: String(errors.length),
@@ -465,7 +476,7 @@ export async function runBackupSync(triggeredBy: "scheduler" | "manual" = "sched
     }
   } finally {
     if (backupPool) await backupPool.end().catch(() => {});
-    await lockClient.query("SELECT pg_advisory_unlock(987654321)").catch(() => {});
+    await endXactLock(lockClient);
     lockClient.release();
   }
 }

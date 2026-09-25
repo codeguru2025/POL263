@@ -51,6 +51,9 @@ interface Group {
   capacity: number | null;
   isActive: boolean;
   isLegacy: boolean;
+  /** Ledger group (legacy group / burial society) — keeps a group ledger that receipts credit
+   *  and approved member claims debit. Plain group policies don't. */
+  hasLedger: boolean;
   payoutRules: PoolPayoutRule[] | null;
   createdAt: string;
 }
@@ -67,6 +70,7 @@ interface GroupFormData {
   type: string;
   description: string;
   isLegacy: boolean;
+  hasLedger: boolean;
   chairpersonName: string;
   chairpersonPhone: string;
   chairpersonEmail: string;
@@ -87,7 +91,7 @@ interface GroupFormData {
 }
 
 const emptyForm: GroupFormData = {
-  name: "", type: "community", description: "", isLegacy: false,
+  name: "", type: "community", description: "", isLegacy: false, hasLedger: false,
   chairpersonName: "", chairpersonPhone: "", chairpersonEmail: "",
   secretaryName: "", secretaryPhone: "", secretaryEmail: "",
   treasurerName: "", treasurerPhone: "", treasurerEmail: "",
@@ -640,6 +644,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
           <span className="font-semibold">{group.name}</span>
           <Badge variant="outline" className="capitalize text-xs">{group.type}</Badge>
           {group.isLegacy && <Badge variant="secondary" className="text-xs">Legacy</Badge>}
+          {group.hasLedger && <Badge variant="outline" className="text-xs bg-indigo-500/10 text-indigo-700 border-indigo-200">Ledger group</Badge>}
           {!group.isActive && <Badge variant="destructive" className="text-xs">Inactive</Badge>}
         </div>
         <div className="flex items-center gap-1">
@@ -657,7 +662,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
 
       {/* Section tabs */}
       <div className="flex border-b px-4 gap-1">
-        {(["members", "receipt", "history", "ledger", "pool"] as const).map((s) => (
+        {(["members", "receipt", "history", "ledger", "pool"] as const).filter((s) => s !== "ledger" || group.hasLedger).map((s) => (
           <button
             key={s}
             onClick={() => setActiveSection(s)}
@@ -826,7 +831,7 @@ function GroupDetailPanel({ group }: { group: Group }) {
       {/* Group ledger: real premium-in/claim-out balance — distinct from Pool Society above.
           Credited by group receipts (legacy lump-sum and regular per-member), debited by
           approved group-service claims (server/group-ledger.ts). */}
-      {activeSection === "ledger" && (
+      {activeSection === "ledger" && group.hasLedger && (
         <div className="p-4">
           <GroupLedgerSection group={group} />
         </div>
@@ -999,7 +1004,7 @@ function GroupLedgerSection({ group }: { group: Group }) {
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
       ) : entries.length === 0 ? (
-        <EmptyState icon={FileStack} title="No ledger activity yet" description="Group receipts credit this ledger automatically; approved group-service claims debit it." className="border-0 bg-transparent py-8" />
+        <EmptyState icon={FileStack} title="No ledger activity yet" description="Group receipts add to this ledger automatically; approved member claims are deducted from it." className="border-0 bg-transparent py-8" />
       ) : (
         <div className="rounded-md border divide-y">
           {entries.map((e: any) => {
@@ -1923,6 +1928,16 @@ export default function StaffGroups() {
   const [formData, setFormData] = useState<GroupFormData>(emptyForm);
 
   const { data: groupsList, isLoading } = useQuery<Group[]>({ queryKey: ["/api/groups"] });
+  // Ledger groups (legacy groups + burial societies) are listed separately from ordinary
+  // group policies — they're the ones with a ledger that member claims are deducted from.
+  const [listView, setListView] = useState<"ledger" | "policies">("ledger");
+  const { data: ledgerBalances } = useQuery<Record<string, Record<string, number>>>({
+    queryKey: ["/api/groups/ledger-balances"],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/groups/ledger-balances", { credentials: "include" });
+      return res.ok ? res.json() : {};
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: async (data: GroupFormData) => {
@@ -1951,7 +1966,10 @@ export default function StaffGroups() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const ledgerGroupCount = (groupsList || []).filter((g) => g.hasLedger).length;
+  const policyGroupCount = (groupsList || []).length - ledgerGroupCount;
   const filteredGroups = (groupsList || []).filter((g) => {
+    if (listView === "ledger" ? !g.hasLedger : g.hasLedger) return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return g.name.toLowerCase().includes(q) || g.type.toLowerCase().includes(q) || (g.description || "").toLowerCase().includes(q);
@@ -1962,6 +1980,7 @@ export default function StaffGroups() {
     setFormData({
       name: group.name, type: group.type, description: group.description || "",
       isLegacy: group.isLegacy ?? false,
+      hasLedger: group.hasLedger ?? false,
       chairpersonName: group.chairpersonName || "", chairpersonPhone: group.chairpersonPhone || "", chairpersonEmail: group.chairpersonEmail || "",
       secretaryName: group.secretaryName || "", secretaryPhone: group.secretaryPhone || "", secretaryEmail: group.secretaryEmail || "",
       treasurerName: group.treasurerName || "", treasurerPhone: group.treasurerPhone || "", treasurerEmail: group.treasurerEmail || "",
@@ -1992,9 +2011,26 @@ export default function StaffGroups() {
         />
         <GroupLedgerImportDialog open={showImportDialog} onOpenChange={setShowImportDialog} />
 
+        <div className="flex gap-1 border-b" role="tablist">
+          {([
+            { key: "ledger", label: `Ledger Groups (${ledgerGroupCount})`, hint: "Legacy groups & burial societies" },
+            { key: "policies", label: `Group Policies (${policyGroupCount})`, hint: "Ordinary group policies" },
+          ] as const).map((t) => (
+            <button key={t.key} role="tab" aria-selected={listView === t.key}
+              onClick={() => { setListView(t.key); setExpandedGroupId(null); }}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${listView === t.key ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              data-testid={`tab-groups-${t.key}`}>
+              {t.label}
+              <span className="block text-[11px] font-normal text-muted-foreground">{t.hint}</span>
+            </button>
+          ))}
+        </div>
+
         <CardSection
-          title="Group registry"
-          description="Click a row to expand and manage that group."
+          title={listView === "ledger" ? "Ledger groups" : "Group policies"}
+          description={listView === "ledger"
+            ? "Legacy groups and burial societies. Receipts add to each group's ledger; approved member claims are deducted from it. Click a row to manage the group."
+            : "Ordinary group policies — no shared ledger. Click a row to expand and manage that group."}
           icon={Layers}
           headerRight={(
             <div className="relative w-full sm:w-64">
@@ -2008,8 +2044,10 @@ export default function StaffGroups() {
           {isLoading ? (
             <div className="p-8 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
           ) : filteredGroups.length === 0 ? (
-            <EmptyState dataTestId="text-no-groups" icon={Layers} title={searchQuery ? "No groups match your search" : "No groups yet"}
-              description={searchQuery ? "Try a different search term." : "Create your first group to get started."} className="border-0 rounded-none bg-transparent py-10" />
+            <EmptyState dataTestId="text-no-groups" icon={Layers}
+              title={searchQuery ? "No groups match your search" : listView === "ledger" ? "No ledger groups yet" : "No group policies yet"}
+              description={searchQuery ? "Try a different search term." : listView === "ledger" ? "Legacy groups and burial societies appear here." : "Ordinary group policies (no shared ledger) appear here."}
+              className="border-0 rounded-none bg-transparent py-10" />
           ) : (
             <DataTable containerClassName="border-0 shadow-none rounded-none bg-transparent">
               <TableHeader className={dataTableStickyHeaderClass}>
@@ -2017,7 +2055,7 @@ export default function StaffGroups() {
                   <TableHead className="pl-6 w-8"></TableHead>
                   <TableHead>Group</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead>Members</TableHead>
+                  <TableHead>{listView === "ledger" ? "Ledger balance" : "Members"}</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right pr-6">Actions</TableHead>
                 </TableRow>
@@ -2044,15 +2082,25 @@ export default function StaffGroups() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <Badge variant="outline" className="capitalize text-xs" data-testid={`badge-group-type-${group.id}`}>{group.type}</Badge>
+                          <Badge variant="outline" className="capitalize text-xs" data-testid={`badge-group-type-${group.id}`}>{group.type.replace(/_/g, " ")}</Badge>
                           {group.isLegacy && <Badge variant="secondary" className="text-xs" data-testid={`badge-group-legacy-${group.id}`}>Legacy</Badge>}
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <FileStack className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-sm font-medium" data-testid={`text-group-members-${group.id}`}>—</span>
-                        </div>
+                        {listView === "ledger" ? (
+                          <div className="flex flex-col text-sm tabular-nums" data-testid={`text-group-ledger-balance-${group.id}`}>
+                            {Object.entries(ledgerBalances?.[group.id] ?? {}).length === 0
+                              ? <span className="text-muted-foreground">No activity</span>
+                              : Object.entries(ledgerBalances![group.id]).map(([cur, bal]) => (
+                                <span key={cur} className={`font-medium ${bal < 0 ? "text-rose-700" : ""}`}>{cur} {bal.toFixed(2)}</span>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <FileStack className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span className="text-sm font-medium" data-testid={`text-group-members-${group.id}`}>—</span>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={group.isActive ? "default" : "secondary"} data-testid={`badge-group-status-${group.id}`}>
@@ -2156,6 +2204,23 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
             <p className="text-xs text-muted-foreground">Members can be captured with name only — no national ID, date of birth, or phone required.</p>
           </div>
         </div>
+        {(() => {
+          const forced = formData.isLegacy || formData.type === "burial_society";
+          return (
+            <div className="flex items-center gap-3 rounded-lg border p-3 bg-muted/30">
+              <Switch id={`${prefix}-has-ledger`} checked={forced || formData.hasLedger} disabled={forced}
+                onCheckedChange={(c) => setFormData({ ...formData, hasLedger: c })} data-testid={`switch-${prefix}-has-ledger`} />
+              <div>
+                <Label htmlFor={`${prefix}-has-ledger`} className="font-medium cursor-pointer">Keeps a group ledger</Label>
+                <p className="text-xs text-muted-foreground">
+                  {forced
+                    ? "Legacy groups and burial societies always keep a ledger: receipts add to it, and approved member claims are deducted from it."
+                    : "Turn on if this group's receipts go into a shared ledger that pays for its members' claims. Leave off for an ordinary group policy."}
+                </p>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="border-t pt-4 space-y-4">

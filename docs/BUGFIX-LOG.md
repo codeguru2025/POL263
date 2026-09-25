@@ -10,7 +10,268 @@ convention" note in `CLAUDE.md`.
 
 ---
 
-## 2026-09-23
+## 2026-09-25 — Approving a claim in the Approvals queue never approved the claim
+
+**Symptom:** A claim approved or declined from Staff → Approvals stayed "submitted"/"verified" on the
+Claims page forever. Nothing reached the policy, the member, or a burial society's ledger. The one
+live Falakhe claim was stuck at "verified". Reported as "claim status doesn't update once approved".
+
+**Root cause:** `POST /api/claims` creates a `CLAIM_REVIEW` approval request, but
+`POST /api/approvals/:id/resolve` only had side effects for `delete_policy`, `delete_receipt`,
+`delete_quote` and the two requisition corrections. A `CLAIM_REVIEW` approval flipped the approval
+row and nothing else. The claim's own transition route was a completely separate path, and the two
+never talked to each other. That transition route also passed the raw registry `user.id` as
+`group_ledger_entries.created_by` (same FK bomb as 2026-09-08), and so did the backdated
+group-receipt ledger credit in `POST /api/payment-receipts/:id/approve`.
+
+**Fix:** New `server/claim-workflow.ts` `transitionClaim()` is now the only place a claim changes
+status. Both the Claims page transition route and the Approvals resolve route (for `CLAIM_REVIEW`,
+plus a new `investigate` action) call it. In one transaction it moves the claim and records the
+decision (`decision_reason/decided_by/decided_at`). It writes the verdict onto the claimed covered
+life (`claims.policy_member_id` → `policy_members.claim_status/claim_verdict_note/date_of_death`).
+For a ledger group it debits the group ledger, reporting the balance before and after; a burial
+society must have a cash-service quote, and the quote total is what's deducted. It also keeps the
+approval request in step (approved / rejected / `on_hold` while investigated / back to `pending`
+once findings are recorded). New status `under_investigation` requires what + next steps going in
+and findings coming out. `created_by` now resolved via `resolveOrSyncTenantUserId`. Ledger-funded
+claims (`group_id` set) are excluded from claims-payable and the IFRS 17 claims liability, since
+they're paid from the group's own money. Migration `0129_claims_workflow_ledger_groups.sql` also
+adds `groups.has_ledger`, backfilled for every legacy group / burial society / group with ledger
+entries. **Verified:** `tests/unit/claim-workflow.test.ts` (13 tests: transition rules, guard rails,
+Approvals-queue permission, ledger-debit amount rules); full suite 755/755 after the follow-up, `tsc` clean. Not yet
+clicked through against real data — needs the deploy (migration runs automatically on deploy).
+
+**Follow-up the same day (impact sweep):** four more problems that made the claim look stuck or
+kept the client uninformed:
+1. `GET /api/claims` sent `Cache-Control: private, max-age=30`. The app's fetch uses the browser
+   cache by default, so after a decision the refetched list could be a stale cached copy for up to
+   30s. It's now `no-store`. `/api/clients`, `/api/policies`, `/api/leads` and the dashboard
+   still carry the same header (left alone).
+2. The claim SMS for CLM-000003 was logged `skipped: Client has no phone number on file`, and 209
+   Falakhe SMSes in 3 days were skipped the same way. `NotificationContext.fallbackPhone` now lets
+   a claim SMS go to the linked funeral case's informant when the policyholder has no phone.
+3. Clients got no message when a claim was logged; they now get "Received" (or "Under
+   investigation"). Client-portal / customer-service claims (`submitClientClaim`) never linked a
+   member, never notified staff, and can't get an Approvals entry (`initiated_by` must be a staff
+   user). They now auto-link the member by exact name and notify `write:claim` staff.
+4. IFRS 17 LIC "open at as-of" didn't count `under_investigation`.
+Migration 0129 also links existing claims to their member by exact name and puts CLAIM_REVIEW
+requests that were approved/rejected while their claim stayed undecided (CLM-000003) back to
+pending, so the decision runs through the workflow with the SMS. Dry-run in a rolled-back
+transaction on the shared and Falakhe DBs: 86 groups flagged, CLM-000003 linked to its member,
+its request re-queued.
+
+**Lesson:** when a feature creates an approval request, grep the resolve route for that
+`requestType`. An approval type with no branch in the side-effect `if/else` is a silent no-op that
+looks successful to the approver. More generally, any entity with two ways to change its status
+needs one shared function, not two routes that each think they own it.
+
+## 2026-09-24 — Nightly Supabase backup copied 0 rows for weeks, recorded as "partial"
+
+**Symptom:** `backup_sync_runs` showed every nightly run since at least 2026-09-18 as
+`partial … rows 0 tables 0 errs 119–133`, every error `self-signed certificate in certificate chain`
+(and each night twice — see the two-instance entry below). Nobody noticed because "partial" read
+as mostly-fine.
+
+**Root cause:** `getBackupPool` passes `ssl: { rejectUnauthorized: false }`, but pg 8's
+connection-string parser treats `sslmode=require` as `verify-full` and lets it OVERRIDE the `ssl`
+option. Production's `SUPABASE_BACKUP_URL` carries `sslmode=require` (reproduced locally: the same
+URL with `?sslmode=require` fails with the identical error; without it, connects). The Supabase
+pooler presents a self-signed chain, so every upsert failed. `control-plane-db.ts` already strips
+sslmode for exactly this reason — the backup pool didn't.
+
+**Fix:** `server/backup-sync.ts` — `stripSslMode()` on the backup URL; a run with errors and 0 rows
+is now recorded `failed`, not `partial`. `script/full-sync-to-supabase.ts` rewritten into a parity
+tool (reuses `runBackupSync` + prunes backup rows deleted on DO, only for fully-read tables; old
+version had a stale hardcoded table list). **Verified:** `tests/unit/backup-sync-ssl.test.ts`; manual
+parity run from a workstation.
+
+**Lesson:** with pg ≥ 8.x, `ssl: {rejectUnauthorized:false}` is silently ignored if the URL has
+`sslmode=`. Any new pg.Pool against a self-signed endpoint must strip it. And a job status must
+never say "partial" when nothing succeeded — check `totalRows === 0`.
+
+## 2026-09-24 — Every scheduled job ran twice (duplicate SMS); group-ledger policies put into grace
+
+**Symptom:** Falakhe clients got each pre-lapse SMS twice (same template, ~1s apart, from the
+05:00 UTC sweep). Burial-society (group-ledger) policies FLK00616, FLK00393, FLK00394 were moved to
+**grace** by the 04:00 lapse sweep — each with TWO identical status-history rows 40ms apart — and
+their clients got in-app "Grace Period Notice"s. Reported as "group schemes received lapse
+messages". (Today's lapse-type SMS themselves all went to individual policies — correct recipients,
+just doubled.)
+
+**Root cause (two bugs):**
+1. Production was scaled to **2 instances** on 2026-09-20 (repo `.do/app.yaml` still said 1). Every
+   scheduler runs on each instance and relies on `withAdvisoryLock` for exclusivity — but that took a
+   SESSION advisory lock through `DATABASE_URL`, which is DigitalOcean's PgBouncer pool in
+   TRANSACTION mode. PgBouncer doesn't pin a server connection to a client between transactions, and
+   advisory locks are re-entrant within one server session, so both instances "won" the lock. Same
+   flaw in the hand-rolled locks in backup-sync, month-end run and DO domain commissioning. The
+   notification sweep's "already ran today" guard was an in-memory Map — per instance.
+2. `policy-lapse-sweep` and the notification sweep judged group-scheme policies by their own
+   `current_cycle_end`/`grace_end_date`. Group schemes pay on the group's ledger (lump sums credited
+   to the group), so those per-policy dates never advance and paid-up members look overdue.
+
+**Fix:** `server/advisory-lock.ts` — BEGIN + `pg_try_advisory_xact_lock`, held for the duration of
+`fn`, COMMIT in `finally` (PgBouncer pins a server connection for a whole transaction; the lock can't
+leak); `tryXactLock`/`endXactLock` reused by backup-sync, month-end and do-app-domains. New
+`scheduler_run_claims` table (migration 0128) + `server/scheduler-claims.ts`: the notification sweep
+claims `<orgId>:<date>` once, durably, across instances. Lapse sweep: excludes `group_id IS NOT NULL`
+and every transition is a conditional `UPDATE … WHERE status = <expected> RETURNING` — no row, no
+history/notice. Notification sweep: no premium-due / pre-lapse to group policies. `.do/app.yaml`
+instance_count → 2.
+
+**Verified:** real Postgres (throwaway cluster): 3 concurrent lock callers → body runs once; released
+after finish and after a throw; no transactions left open; 3 concurrent claims → exactly 1 wins.
+`tests/unit/advisory-lock.test.ts` guards the BEGIN/xact-lock/COMMIT sequence. 736 tests, build.
+
+**Lesson:** on this stack a SESSION-level advisory lock is a no-op — any new lock must use
+`withAdvisoryLock`/`tryXactLock`. Grep signal: `pg_try_advisory_lock(` or `pg_advisory_unlock` anywhere.
+And any "once per day" guard must be durable (DB), never an in-memory Map, because instances
+multiply. When a duplicate appears ~1s apart and interleaved (A,B,A,B), suspect two instances first.
+
+## 2026-09-24 (later) — Audit follow-ups: the items deferred earlier the same day
+
+- **SMS dropped during outages/pauses:** a notification SMS that failed for a temporary reason
+  (circuit breaker open, provider 5xx/network, account issue) was marked failed and never retried.
+  `SmsSendResult.retryable` now classifies failures; `dispatchNotification` sets
+  `notification_logs.next_retry_at`, and `server/sms-retry-sweep.ts` (every 5 min, advisory lock
+  9_002_630_006) retries with 5m→15m→30m→1h→2h→4h backoff inside a 24h window, then marks it final.
+  **Lesson:** "never throws, returns ok:false" send helpers need a durable retry path, or every
+  transient outage silently loses messages.
+- **OTP codes would have been persisted** by the new SMS log — `redactOtp()` masks digit runs for
+  `kind: "otp"` before the row is written. **Lesson:** any new message log must treat OTP bodies as
+  credentials.
+- **`GET /api/public/funeral-request/:id`** returned any of a tenant's quotations to anyone holding
+  its public referral code; now only quotations created by the public form (note marker).
+- **Public-API bearer secret wasn't bound to its tenant:** the CSRF middleware now records the
+  secret's org on `req.publicApiOrgId`; bearer-eligible routes 403 a call aimed at another tenant.
+- **Staff issuance of `individual_age_rated` ignored cover top-up add-ons** (attached them but
+  priced/covered as if absent) — now summed per member exactly like public registration.
+- **Duplicate-policy response on public registration** confirmed that an ID/email already held
+  cover — now a generic "couldn't complete online, contact the office".
+- **Dependencies:** overrides pin `csurf`→`cookie@0.7.2`, `exceljs`→`uuid@11.1.1`,
+  `@esbuild-kit/core-utils`→`esbuild@0.25`; `vite` 5→8, `vitest` 2→5, `@vitejs/plugin-react` 4→6,
+  `esbuild` 0.28, `@types/node` 22 (matches `engines`), `image-size` 2.0.4 (upload DoS). `npm audit`:
+  0 vulnerabilities (prod and dev). Verified: tsc, 733 tests, production build, built client boots
+  in Chrome, `drizzle-kit check`, exceljs workbook generation.
+- Feature shipped alongside (not a bug): platform-granted SMS allowance + downloadable SMS report —
+  see `server/sms-allocation.ts`. Its atomic deduction was verified against a real (throwaway)
+  Postgres: 20 concurrent sends on 10 credits → exactly 10 sent, 10 held back.
+
+## 2026-09-24 — Full-codebase audit (security, tenant isolation, pricing, IFRS 17, NFR)
+
+Audit focused on the 36 commits since the 2026-09-01 audit (new public customer API, age-rated
+pricing engine, SMS/email), then swept the whole codebase for the bug classes found there.
+
+### CRITICAL — client portal account takeover via public registration + enroll
+
+**Symptom:** none observed in logs; found by code review.
+
+**Root cause:** two independent flaws that chained:
+1. `POST /api/client-auth/enroll` set a client's password given only `clientId`. `/claim`
+   verified the activation code + policy number, but nothing bound that step to `/enroll`, so the
+   verification was advisory.
+2. `handlePublicPolicyRegistration` (`/api/public/register-policy`, `/walkin-register`) matched an
+   EXISTING client by email or national ID, then (a) overwrote that client's phone/DOB/national
+   ID/branch with the unauthenticated request's values and (b) returned that client's real
+   `activationCode` and `clientId` in the 201 response.
+Knowing a client's email or national ID + any public referral code was enough to get their
+`clientId` and activation code, then enroll → full portal access to all their policies,
+dependents and beneficiaries (only unenrolled clients — most legacy-imported ones).
+
+**Fix:** `server/client-auth.ts` enroll now requires `activationCode` + `policyNumber` and
+re-verifies both (constant-time code compare; policy must belong to the client);
+`client/src/pages/client/claim.tsx` sends them. Registration now only fills BLANK fields on a
+matched existing client, never replaces their saved payment method, prices age-rated cover off
+the DOB on file, and withholds `activationCode`/`clientId` from the response (the activation
+notification still goes to the contact details on file); `client/src/pages/join/register.tsx`
+handles the withheld code.
+
+**Verified:** `tests/unit/client-enroll-proof.test.ts` — 3 attack cases FAIL against the old code
+(stash-tested), all 4 cases pass now.
+
+**Lesson:** a multi-step flow where step 1 verifies and step 2 acts must re-verify (or carry a
+signed proof) in step 2 — an id returned by step 1 is not a credential. And any public route that
+"finds or creates" a record must treat a FOUND record as someone else's: fill blanks, never
+overwrite, never echo its secrets.
+
+### HIGH — cross-tenant read/write through unscoped storage methods (shared DB)
+
+**Root cause:** 36 storage methods (`getProduct`, `getProductVersion`, `getFuneralCase`, `getLead`,
+`getGroup`, payment getters, and `update*`/`delete*` for clients, products, add-ons, benefit
+catalogue/bundles, age bands, age-band rate cards, policies, receipts, leads, terms, cashups,
+settlements, …) took `orgId` but used it only to pick the database — the `WHERE` was `id` alone.
+On the shared DB, isolation depended on every route remembering an ownership pre-check. Several
+didn't: PATCH `/api/add-ons/:id`, `/api/benefit-catalog/:id`, `/api/benefit-bundles/:id`,
+`/api/age-bands/:id`, `/api/funeral-tasks/:id`, `/api/terms/:id`, PATCH/DELETE
+`/api/age-band-rates/:id`. Worse, the new age-band rate-card POST validated the product version
+with the unscoped getter and `getAgeBandRateCards` read by `productVersionId` alone — tenant A
+could inject rate cards that PRICED tenant B's policies. Several PATCH routes also passed raw
+`req.body`, so `organizationId` could be mass-assigned to re-home a row.
+
+**Fix:** `server/storage.ts` — all 36 methods now filter `eq(table.organizationId, orgId)`;
+updates pass through a new `stripImmutableKeys()` (drops `id`/`organizationId`);
+`updateFuneralTask` scopes via the parent case (the table has no org column) and can't re-parent;
+`getAgeBandRateCards` scoped by org. `server/routes.ts` — age-band-rate PATCH whitelists fields,
+validates, and PATCH/DELETE record before-state.
+
+**Verified:** `tests/unit/storage-tenant-scoping.test.ts` (static guard, 59 cases); tsc; full suite.
+
+**Lesson:** tenant scoping belongs in the storage layer, not in each route. When adding a storage
+method that takes `orgId`, the `WHERE` must use it — "orgId selects the DB" is not scoping on the
+shared DB. Grep signal: `.where(eq(<table>.id, id))` inside a method whose params include `orgId`.
+
+### HIGH — age-rated (Diaspora) policies silently repriced on every view
+
+**Root cause:** `recalculatePolicyPremiumIfNeeded` / `batchRecalculatePolicyPremiums` (drift check
+run on policy list/detail views) call `computePolicyPremium` without the age-rated inputs, so an
+`individual_age_rated` policy was re-priced with no policyholder DOB (→ 21–65 band), default cover,
+no cover top-ups — and the "drift" was written back as the new premium. Product conversion and the
+premium-change preview had the same gap for an age-rated target.
+
+**Fix:** `server/routes.ts` — drift recalculation skips `individual_age_rated` products (premium is
+fixed at issuance, stored per member); conversion/preview pass the policyholder DOB via new
+`ageRatedInputForPolicy()`.
+
+**Lesson:** when a pricing model gains inputs that live outside `(productVersion, dependentDobs,
+addOns)`, grep EVERY `computePolicyPremium(` caller — the background/drift ones are the dangerous
+ones because they write silently.
+
+### HIGH — age-rated pricing failed OPEN ($0) on a missing rate card
+
+**Root cause:** `computeIndividualAgeRatedPremium` priced any member whose age band had no rate card
+at $0 (with only a warn log) — a real policy could be issued with free cover for that life, and with
+every band missing the premium was $0 so no payment link was even created.
+
+**Fix:** `server/route-helpers.ts` — throws `PricingConfigError` (status 422, `expose`), which the
+global handler (`server/index.ts`) now returns with its message for exposed 4xx errors; the quote
+engine skips just that product; public registration dry-runs pricing BEFORE writing anything.
+Existing test that asserted the $0 behaviour rewritten to assert the 422.
+
+**Lesson:** same as "fail-open defaults" in the debugging-patterns memory — a missing price is an
+error, never zero.
+
+### MEDIUM — fixed in the same pass
+
+- **RBAC gaps:** `GET /api/groups/:id/policies` returned client national IDs/phones to any staff
+  user (now `read:policy`); six `/api/dashboard/*` chart routes exposed org-wide revenue to any
+  staff (now the same `read:finance|read:policy|read:client` guard as `/stats`); `/api/diagnostics`
+  (now `read:audit_log`, like its siblings).
+- **IFRS 17 LIC (`server/insurance-revenue.ts`):** the liability for incurred claims wasn't filtered
+  to PAA contracts (revenue/LRC were) and used each claim's CURRENT status with no date bound, so a
+  back-dated report was wrong both ways. Now PAA-only, reported on/before `asOf`, and status
+  reconstructed as of `asOf` from `claim_status_history`. Ran read-only against Falakhe's DB:
+  executes; Falakhe has 542 active policies, all on UNCLASSIFIED product versions, so the report
+  shows nothing for them until an auditor classifies the versions.
+- **Public-API bearer lookup ran before every rate limiter** (it sits in the CSRF middleware): any
+  `Authorization: Bearer junk` request cost a control-plane query + a decrypt per tenant,
+  unthrottled. 60s in-process cache, cleared on rotation (`server/public-api-bearer.ts`).
+- **Public registration left orphan client/dependent rows** when add-on/cover/pricing validation
+  rejected the request after the inserts, and every retry for an existing client duplicated its
+  dependents. Those checks + the duplicate-policy check now run before any write.
+- **Dependencies:** `multer` 2.2.0→2.4.0 (DoS / size-limit bypass), `nodemailer` 9.0.5→9.1.1
+  (recipient-domain bypass, address-parser DoS — public routes email visitor-supplied addresses).
+- `require("./notifications")` in two routes (500 under `tsx`/ESM in dev) → static import.
 
 ### Flaky test: "valid secret + tampered token → 401" sometimes got 200 (blocked a push)
 

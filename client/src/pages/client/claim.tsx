@@ -54,6 +54,9 @@ export default function ClientClaim() {
       const referralCode = sessionStorage.getItem("agent_referral_code") || undefined;
       const res = await apiRequest("POST", "/api/client-auth/enroll", {
         clientId,
+        // Re-sent so the server can re-verify possession — enroll must not trust clientId alone.
+        activationCode: activationCode.trim().toUpperCase(),
+        policyNumber: policyNumber.trim().toUpperCase(),
         password: newPassword,
         securityQuestionId,
         securityAnswer,

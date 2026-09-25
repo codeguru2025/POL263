@@ -698,3 +698,52 @@ export type TenantInvoice = typeof tenantInvoices.$inferSelect;
 export type BillingSettings = typeof billingSettings.$inferSelect;
 export type TenantBillingEvent = typeof tenantBillingEvents.$inferSelect;
 export type PendingTenantSignup = typeof pendingTenantSignups.$inferSelect;
+
+// ─── SMS ALLOWANCE ────────────────────────────────────────────────────────────
+
+/**
+ * Per-tenant SMS allowance granted by the platform owner. One credit = one SMS part (the provider
+ * bills per 160-character GSM-7 part / 70-character Unicode part, so a long text uses several).
+ * No row = not metered (unlimited — e.g. a tenant sending on its own provider account). Only the
+ * counters live here; the per-message log (numbers, text) stays in the tenant's own database
+ * (sms_messages), in keeping with this database never holding client data.
+ *
+ * creditsUsed is changed only by an atomic conditional UPDATE (server/sms-allocation.ts), so two
+ * instances sending at once can never both spend the last credit.
+ */
+export const tenantSmsAllocations = pgTable("tenant_sms_allocations", {
+  tenantId: uuid("tenant_id")
+    .primaryKey()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  /** Running total of every credit ever granted (grants add, corrections subtract). */
+  creditsAllocated: integer("credits_allocated").default(0).notNull(),
+  creditsUsed: integer("credits_used").default(0).notNull(),
+  /** Admins are alerted once the remaining balance drops to this many credits. */
+  lowBalanceThreshold: integer("low_balance_threshold").default(50).notNull(),
+  /** false = keep counting but never block sends (allowance paused / unlimited again). */
+  enforced: boolean("enforced").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/** Audit trail of allowance changes made by the platform owner. */
+export const tenantSmsAllocationEvents = pgTable(
+  "tenant_sms_allocation_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    /** grant | correction | settings */
+    type: text("type").notNull(),
+    credits: integer("credits").default(0).notNull(),
+    balanceAfter: integer("balance_after"),
+    note: text("note"),
+    actorEmail: text("actor_email"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("tenant_sms_allocation_events_tenant_idx").on(t.tenantId, t.createdAt)]
+);
+
+export type TenantSmsAllocation = typeof tenantSmsAllocations.$inferSelect;
+export type TenantSmsAllocationEvent = typeof tenantSmsAllocationEvents.$inferSelect;

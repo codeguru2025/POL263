@@ -925,7 +925,7 @@ export function setupAuth(app: Express) {
       const { sendSms, sendPlatformSms } = await import("./sms-service");
       const message = `Your POL263 verification code is ${otp}. It expires shortly — do not share it.`;
       sendResult = user.organizationId
-        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp", countryCode })
+        ? await sendSms(user.organizationId, { to: storedNumber, message, kind: "otp", countryCode, meta: { source: "mfa", sentByUserId: user.id } })
         : await sendPlatformSms({ to: storedNumber, message, kind: "otp" });
     } else {
       const { sendWhatsAppOtp } = await import("./whatsapp-service");

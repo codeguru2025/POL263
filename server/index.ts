@@ -116,7 +116,14 @@ if (enableCsrf) {
   // this needs no orgId resolved from the body first.
   app.use(async (req, res, next) => {
     if (CSRF_EXEMPT_PATHS.includes(req.path) || isCustomerServicePath(req.path)) return next();
-    if (isPublicApiBearerPath(req.path) && (await authenticatePublicApiBearerToken(req.headers.authorization))) return next();
+    if (isPublicApiBearerPath(req.path)) {
+      const bearer = await authenticatePublicApiBearerToken(req.headers.authorization);
+      if (bearer) {
+        // Remembered so each route can refuse a call aimed at a different tenant (publicApiOrgMismatch).
+        (req as any).publicApiOrgId = bearer.orgId;
+        return next();
+      }
+    }
     return csrfProtection(req, res, next);
   });
 
@@ -419,6 +426,9 @@ if (enableCsrf) {
     let message: string;
     if (err.code === "EBADCSRFTOKEN") {
       message = "Session expired. Please reload the page and try again.";
+    } else if (err.expose === true && status < 500) {
+      // Deliberately user-facing 4xx errors (e.g. PricingConfigError) — safe to show as-is.
+      message = err.message;
     } else if (process.env.NODE_ENV === "production") {
       message = "Internal Server Error";
     } else {
@@ -463,6 +473,8 @@ if (enableCsrf) {
       // premium-due/pre-lapse warnings) — previously only reachable via a manual admin
       // endpoint that nothing ever called automatically.
       import("./client-notification-sweep").then(({ startClientNotificationSweepScheduler }) => startClientNotificationSweepScheduler()).catch(() => {});
+      // Retries notification SMS that failed for a temporary reason (provider down, allowance used up).
+      import("./sms-retry-sweep").then(({ startSmsRetryScheduler }) => startSmsRetryScheduler()).catch(() => {});
 
       // Ensure all orgs have every role defined in ROLE_PERMISSION_MAP (e.g. newly added roles like "driver")
       import("./seed").then(async ({ seedPermissions, seedOrgRoles }) => {
@@ -498,6 +510,7 @@ if (enableCsrf) {
     import("./tenant-billing-sweep").then(({ stopTenantBillingSweepScheduler }) => stopTenantBillingSweepScheduler()).catch(() => {});
     import("./policy-lapse-sweep").then(({ stopPolicyLapseSweepScheduler }) => stopPolicyLapseSweepScheduler()).catch(() => {});
     import("./client-notification-sweep").then(({ stopClientNotificationSweepScheduler }) => stopClientNotificationSweepScheduler()).catch(() => {});
+    import("./sms-retry-sweep").then(({ stopSmsRetryScheduler }) => stopSmsRetryScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);

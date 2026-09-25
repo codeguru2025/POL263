@@ -10,6 +10,7 @@
 import { storage } from "./storage";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
 import { withAdvisoryLock } from "./advisory-lock";
+import { claimSchedulerRun } from "./scheduler-claims";
 import { structuredLog } from "./logger";
 import { todayForOrg } from "./date-utils";
 
@@ -126,7 +127,12 @@ async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResu
       }
     }
 
-    if (p.status === "active" && p.currentCycleEnd) {
+    // Group-scheme policies are paid on the group's ledger (lump sums credited to the group), not
+    // per policy — their own cycle/grace dates never advance, so "premium due"/"about to lapse"
+    // texts to members are always wrong. Same exclusion as the lapse sweep.
+    const onGroupLedger = !!p.groupId;
+
+    if (!onGroupLedger && p.status === "active" && p.currentCycleEnd) {
       const daysToEnd = daysBetween(todayStr, String(p.currentCycleEnd));
       if (daysToEnd === 3) {
         await dispatchNotification(orgId, "premium_due", p.clientId, ctx);
@@ -134,7 +140,7 @@ async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResu
       }
     }
 
-    if ((p.status === "active" || p.status === "grace") && p.graceEndDate) {
+    if (!onGroupLedger && (p.status === "active" || p.status === "grace") && p.graceEndDate) {
       const daysToGrace = daysBetween(todayStr, String(p.graceEndDate));
       if (daysToGrace === 7 || daysToGrace === 3 || daysToGrace === 1) {
         await dispatchNotification(orgId, "pre_lapse_warning", p.clientId, ctx);
@@ -182,7 +188,10 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
     // Each org's own "today" (organizations.timezone) — computed per-org since tenants can be in
     // different timezones, not once for the whole sweep run.
     const todayStr = await todayForOrg(org.id);
-    if (lastRunDateByOrg.get(org.id) === todayStr) {
+    // Durable, cross-instance "already sent today" check (production runs 2 instances — an
+    // in-memory map only knew about its own, so both sent every daily text). Claimed BEFORE
+    // sending and never released: a half-finished run must not be re-run into duplicates.
+    if (lastRunDateByOrg.get(org.id) === todayStr || !(await claimSchedulerRun("client-notification-sweep", `${org.id}:${todayStr}`))) {
       // Already sent today's date-based batch for this org (scheduled run, or an earlier
       // manual click) — re-running would double-send every matching birthday/anniversary/
       // premium-due/pre-lapse email, not just the ones that would've changed.

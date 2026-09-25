@@ -118,15 +118,37 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
   // ── Liability for incurred claims (widened from the operational balance sheet's
   // status='approved'-only line — includes reported-not-yet-approved claims too — but still not
   // an IBNR estimate; that needs an actuarial assumption this system doesn't have yet). ──
+  //
+  // Measured AS OF `asOf`, over PAA contracts only — same population as the revenue/LRC above.
+  // Previously this used each claim's CURRENT status with no date bound and no PAA filter, so a
+  // back-dated report counted claims reported after asOf, dropped claims that were open at asOf
+  // but paid since, and mixed GMM/unclassified contracts into a PAA-only liability.
+  // Status as of asOf = the last transition on/before asOf; if every transition is later, the
+  // status the first one moved FROM; with no history at all, the current status.
+  const asOfExclusive = sql`(${asOf}::date + 1)`;
+  const statusAsOf = sql`COALESCE(
+    (SELECT h.to_status FROM claim_status_history h WHERE h.claim_id = ${claims.id} AND h.created_at < ${asOfExclusive} ORDER BY h.created_at DESC LIMIT 1),
+    (SELECT h.from_status FROM claim_status_history h WHERE h.claim_id = ${claims.id} AND h.created_at >= ${asOfExclusive} ORDER BY h.created_at ASC LIMIT 1),
+    ${claims.status}
+  )`;
+  const openAtAsOf = sql`${statusAsOf} IN ('submitted', 'verified', 'under_investigation', 'approved')`;
+  const reportedByAsOf = sql`${claims.createdAt} < ${asOfExclusive}`;
+
   const claimConds: any[] = [
     eq(claims.organizationId, orgId),
-    sql`${claims.status} IN ('submitted', 'verified', 'approved')`,
+    eq(productVersions.measurementApproach, "paa"),
+    reportedByAsOf,
+    openAtAsOf,
     sql`${claims.cashInLieuAmount} IS NOT NULL`,
+    // Ledger-group claims are funded from the group's own ledger, not the insurer's funds.
+    sql`${claims.groupId} IS NULL`,
   ];
   if (branchId) claimConds.push(eq(claims.branchId, branchId));
   const claimRows = await tdb
     .select({ currency: claims.currency, total: sql<string>`COALESCE(SUM(${claims.cashInLieuAmount}), '0')` })
     .from(claims)
+    .innerJoin(policies, eq(claims.policyId, policies.id))
+    .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
     .where(and(...claimConds))
     .groupBy(claims.currency);
   const incurredClaimsLiability: AmountMap = {};
@@ -146,8 +168,11 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
   // productVersionId (legacy policies), still contributes nothing — same as before, not a guess.
   const inKindConds: any[] = [
     eq(claims.organizationId, orgId),
-    sql`${claims.status} IN ('submitted', 'verified', 'approved')`,
+    eq(productVersions.measurementApproach, "paa"),
+    reportedByAsOf,
+    openAtAsOf,
     sql`${claims.cashInLieuAmount} IS NULL`,
+    sql`${claims.groupId} IS NULL`,
   ];
   if (branchId) inKindConds.push(eq(claims.branchId, branchId));
   const inKindRows = await tdb
@@ -222,7 +247,7 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
       unconvertible: cClaims.unconvertible,
       excludesIbnr: true,
       inKindClaimsEstimated,
-      note: "Reported claims only (submitted/verified/approved). Excludes IBNR — no actuarial IBNR loading has been configured for this tenant yet. " +
+      note: "Reported claims only (open — submitted/verified/approved — as of the as-of date), PAA contracts only. Excludes IBNR — no actuarial IBNR loading has been configured for this tenant yet. " +
         (inKindClaimsEstimated > 0
           ? `Includes ${inKindClaimsEstimated} in-kind claim(s) valued at their product's cash-in-lieu rate (retail-equivalent estimate, not an actual cash payout).`
           : "No in-kind claims with a configured cash-in-lieu rate this period."),

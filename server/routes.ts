@@ -15,12 +15,12 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
-import { withAdvisoryLock } from "./advisory-lock";
+import { withAdvisoryLock, tryXactLock, endXactLock } from "./advisory-lock";
 import { todayForOrg, localToUtcDate, getOrgTimezone } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
 import { buildInsuranceContractSummary } from "./insurance-revenue";
@@ -63,6 +63,9 @@ import { createPaymentIntent, initiatePaynowPayment, handlePaynowResult, pollPay
 import * as objectStorage from "./object-storage";
 import { getPaynowConfig, getOrgPaynowConfig } from "./paynow-config";
 import { getOrgSmsConfig, upsertOrgSmsConfig } from "./sms-config";
+import { getSmsAllowance, listSmsAllowanceEvents } from "./sms-allocation";
+import { buildSmsReportCsv, streamSmsReportPdf, smsTypeLabel } from "./sms-report";
+import type { SmsMessageFilters } from "./storage";
 import { getReceiptPdfPath } from "./receipt-pdf";
 import { PLATFORM_OWNER_EMAIL, SYSTEM_PERMISSIONS } from "./constants";
 import { isReservedTenantSlug } from "./tenant-slug-policy";
@@ -87,7 +90,7 @@ import {
   insertMortuaryServiceRateSchema, insertCaseServiceChargeSchema,
   insertCemeterySchema, insertEquipmentItemSchema, insertPitchingAssignmentSchema,
   insertBenefitBundleSchema, insertAddOnSchema, insertAgeBandConfigSchema,
-  insertAgeBandRateCardSchema, AGE_BANDS,
+  insertAgeBandRateCardSchema, AGE_BANDS, ageBandRateCards,
   insertPaymentTransactionSchema, insertApprovalRequestSchema,
   insertPayrollEmployeeSchema, insertPayrollRunSchema, insertCashupSchema,
   insertGroupSchema, insertGroupMemberSchema, insertGroupContributionSchema, insertGroupPoolPayoutSchema,
@@ -106,10 +109,12 @@ import {
   type InsertGroupPoolPayout,
   type InsertAccumulationWithdrawal,
   paymentDisbursements, requisitions, expenditures, outboxMessages,
+  policyMembers, funeralQuotations, funeralCases, approvalRequests,
 } from "@shared/schema";
-import { sql, eq, count, and, max, asc, desc } from "drizzle-orm";
+import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
+import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
 import { pool, db } from "./db";
-import { notifyClientPush, dispatchNotification, buildPolicyContext } from "./notifications";
+import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -189,6 +194,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     message: { ok: false, message: "Too many test messages — wait a few minutes and try again." },
   });
 
+  /** The policyholder's DOB, for pricing an existing policy against an individual_age_rated
+   *  product (conversion / premium-change preview). Without it the holder is priced as a 21–65. */
+  async function ageRatedInputForPolicy(policy: any, orgId: string) {
+    const client = policy.clientId ? await storage.getClient(policy.clientId, orgId) : undefined;
+    return { policyholderDateOfBirth: client?.dateOfBirth ?? null };
+  }
+
   async function getActivePolicyDependentDobList(policy: any, orgId: string): Promise<(string | null | undefined)[]> {
     if (!policy?.id || !policy?.clientId) return [];
     const members = await storage.getPolicyMembers(policy.id, orgId);
@@ -222,6 +234,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // same case (below).
     const pv = await storage.getProductVersion(policy.productVersionId, orgId);
     if (!pv) return policy;
+    // individual_age_rated premiums are priced once at issuance from each member's own DOB and
+    // cover amount (incl. cover top-ups), stored per member on policy_members. This drift check
+    // has none of those inputs, so it would reprice every such policy as a 21–65 at default cover
+    // on every view — silently rewriting the real premium. Leave them alone.
+    const pvProduct = await storage.getProduct(pv.productId, orgId);
+    if (pvProduct?.pricingModel === "individual_age_rated") return policy;
     const dependentDateOfBirths = await getActivePolicyDependentDobList(policy, orgId);
     const rawAddOns = await storage.getPolicyAddOns(policy.id, orgId);
     const memberAddOns = rawAddOns
@@ -236,7 +254,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberAddOns.length > 0 ? memberAddOns : undefined,
       undefined,
       dependentDateOfBirths,
-      { productVersion: pv },
+      { productVersion: pv, product: pvProduct ?? null },
     );
 
     const current = parseFloat(String(policy.premiumAmount ?? "0"));
@@ -287,6 +305,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const pv = productVersionById.get(policy.productVersionId);
       if (!pv) return; // matches computePolicyPremium's own "no such version -> 0" guard being moot here — leave untouched rather than zero a real policy out from bad data
       const product = pv.productId ? productById.get(pv.productId) : undefined;
+      // See recalculatePolicyPremiumIfNeeded — age-rated premiums are fixed at issuance.
+      if (product?.pricingModel === "individual_age_rated") return;
 
       const members = membersByPolicy[policy.id] || [];
       const activeDependentIds = members.filter((m: any) => m?.isActive !== false && !!m?.dependentId).map((m: any) => String(m.dependentId));
@@ -1113,6 +1133,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * selected at share time. Never lets a query param override a REAL agent's own organizationId —
    * only an org-less (platform-owner) account ever reads it.
    */
+  /** True when the request was authenticated with a tenant's public-API bearer secret (see the
+   *  CSRF middleware in server/index.ts) but targets a DIFFERENT tenant. A tenant's secret only
+   *  vouches for calls about that tenant. Browser calls (no bearer) are unaffected. */
+  function publicApiOrgMismatch(req: any, orgId: string): boolean {
+    const bearerOrgId = req.publicApiOrgId as string | undefined;
+    return !!bearerOrgId && bearerOrgId !== orgId;
+  }
+
   async function resolveVcardOrgId(agent: { organizationId: string | null }, queryOrg: unknown): Promise<string | null> {
     if (agent.organizationId) return agent.organizationId;
     if (typeof queryOrg === "string" && queryOrg.trim()) {
@@ -1213,6 +1241,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const lead = await storage.createLead({
       organizationId: orgId,
       agentId: agent.id,
@@ -1290,6 +1319,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // policy's add-ons (POST /api/funeral-cases/:id/service-charges-from-addon). Returns
   // { reference } as the DFS-side integration already expects, plus the full quotation if one
   // was created.
+  // Marks a quotation as created by the public form below. The public GET further down only ever
+  // returns quotations carrying it — without that check, anyone holding a tenant's (public)
+  // referral code could read ANY of that tenant's staff-created funeral quotations by id.
+  const PUBLIC_FUNERAL_REQUEST_NOTE = "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.";
+
   app.post("/api/public/funeral-request", async (req, res) => {
     const { refCode, firstName, lastName, phone, email, deceasedName, deceasedAge, deceasedSex, message, requestedAddOnIds } = req.body;
     if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
@@ -1303,6 +1337,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
 
     const lead = await storage.createLead({
       organizationId: orgId,
@@ -1335,7 +1370,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         quote = await storage.createStandaloneQuotation(orgId, {
           currency: quotationCurrency,
           status: "draft",
-          notes: "Requested via public 'Arrange a Funeral Now' form — no policy context; full cash price, no policyholder discount applied.",
+          notes: PUBLIC_FUNERAL_REQUEST_NOTE,
           deceasedName: typeof deceasedName === "string" && deceasedName.trim() ? deceasedName.trim() : undefined,
           deceasedAge: typeof deceasedAge === "number" ? deceasedAge : undefined,
           deceasedSex: typeof deceasedSex === "string" ? deceasedSex : undefined,
@@ -1364,6 +1399,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.body?.org ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const requestedIds: string[] = Array.isArray(requestedAddOnIds) ? requestedAddOnIds.filter((id: unknown) => typeof id === "string") : [];
     const orgAddOns = requestedIds.length > 0 ? await storage.getAddOns(orgId) : [];
     const matchedAddOns = requestedIds
@@ -1387,8 +1423,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode);
     const orgId = agent ? await resolveVcardOrgId(agent, req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const quotation = await storage.getQuotationById(req.params.id as string, orgId);
-    if (!quotation) return res.status(404).json({ message: "Not found" });
+    if (!quotation || !String(quotation.notes ?? "").startsWith("Requested via public 'Arrange a Funeral Now' form")) return res.status(404).json({ message: "Not found" });
     return res.json(quotation);
   });
 
@@ -1495,6 +1532,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agent = await storage.getUserByReferralCode(refCode.trim());
     const orgId = agent ? await resolveVcardOrgId(agent, bodyOrg ?? req.query.org) : null;
     if (!agent || !orgId) return res.status(404).json({ message: "Agent not found" });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     const resolvedCurrency = typeof currency === "string" && currency ? currency : "USD";
     const resolvedSchedule = typeof paymentSchedule === "string" && paymentSchedule ? paymentSchedule : "monthly";
 
@@ -3390,28 +3428,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!AGE_BANDS.includes(req.body.ageBand)) {
       return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
     }
-    const parsed = insertAgeBandRateCardSchema.parse({
-      ...req.body,
-      productVersionId: req.params.id as string,
-      organizationId: user.organizationId,
-    });
+    let parsed;
+    try {
+      parsed = insertAgeBandRateCardSchema.parse({
+        ...req.body,
+        productVersionId: req.params.id as string,
+        organizationId: user.organizationId,
+      });
+    } catch (err: any) {
+      if (handleZodError(err, res)) return;
+      throw err;
+    }
     const card = await storage.createAgeBandRateCard(parsed);
     await auditLog(req, "CREATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", card.id, null, card);
     return res.status(201).json(card);
   });
 
+  // Only these fields are editable — never productVersionId/organizationId (a rate card must not
+  // be re-homed onto another version or tenant's pricing).
+  const findOrgAgeBandRateCard = async (id: string, orgId: string) => {
+    const tdb = await getDbForOrg(orgId);
+    const [row] = await tdb.select().from(ageBandRateCards).where(and(eq(ageBandRateCards.id, id), eq(ageBandRateCards.organizationId, orgId)));
+    return row;
+  };
+
   app.patch("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
-    const updated = await storage.updateAgeBandRateCard(req.params.id as string, req.body, user.organizationId);
+    const before = await findOrgAgeBandRateCard(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Rate card not found" });
+    const patch: Record<string, unknown> = {};
+    if (req.body.ageBand !== undefined) {
+      if (!AGE_BANDS.includes(req.body.ageBand)) return res.status(400).json({ message: `ageBand must be one of: ${AGE_BANDS.join(", ")}` });
+      patch.ageBand = req.body.ageBand;
+    }
+    if (req.body.currency !== undefined) patch.currency = String(req.body.currency).toUpperCase();
+    if (req.body.ratePerThousand !== undefined) {
+      const rate = parseFloat(String(req.body.ratePerThousand));
+      if (!Number.isFinite(rate) || rate < 0) return res.status(400).json({ message: "ratePerThousand must be a non-negative number" });
+      patch.ratePerThousand = String(rate);
+    }
+    if (req.body.isActive !== undefined) patch.isActive = !!req.body.isActive;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ message: "No editable fields supplied" });
+    const updated = await storage.updateAgeBandRateCard(req.params.id as string, patch as any, user.organizationId);
     if (!updated) return res.status(404).json({ message: "Rate card not found" });
-    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, updated);
+    await auditLog(req, "UPDATE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, before, updated);
     return res.json(updated);
   });
 
   app.delete("/api/age-band-rates/:id", requireAuth, requireTenantScope, requirePermission("write:product"), async (req, res) => {
     const user = req.user as any;
+    const before = await findOrgAgeBandRateCard(req.params.id as string, user.organizationId);
+    if (!before) return res.status(404).json({ message: "Rate card not found" });
     await storage.deleteAgeBandRateCard(req.params.id as string, user.organizationId);
-    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, null, null);
+    await auditLog(req, "DELETE_AGE_BAND_RATE_CARD", "AgeBandRateCard", req.params.id as string, before, null);
     return res.status(204).end();
   });
 
@@ -4102,21 +4171,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       for (const m of dependentsToAdd) {
         if (m.dependentId && typeof (m as any).coverAmount === "number") requestedMemberCoverByDependentId.set(m.dependentId, (m as any).coverAmount);
       }
+      // cover_topup add-ons raise the member's sum assured (and so their premium) — the public
+      // registration route already did this; staff issuance used to attach the add-on but price
+      // and cover the member as if it weren't there. Only cover_topup is meaningful here.
+      const ageRatedOrgAddOns = resolvedMemberAddOns.length > 0 ? await storage.getAddOns(user.organizationId) : [];
+      const ageRatedAddOnById = new Map(ageRatedOrgAddOns.map((a: any) => [a.id, a]));
+      const topupByMemberRef = new Map<string, number>();
+      for (const ma of resolvedMemberAddOns) {
+        const addOn: any = ageRatedAddOnById.get(ma.addOnId);
+        if (!addOn || addOn.isActive === false) return res.status(400).json({ message: `Add-on ${ma.addOnId} is invalid or inactive.` });
+        if (addOn.pricingMode !== "cover_topup") {
+          return res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` });
+        }
+        topupByMemberRef.set(ma.memberRef, (topupByMemberRef.get(ma.memberRef) ?? 0) + (parseFloat(String(addOn.coverIncrementAmount ?? 0)) || 0));
+      }
       const dependentsForRating = memberRows.slice(1).map((mr) => ({
         dateOfBirth: authorizedDeps.find((d: any) => d.id === mr.dependentId)?.dateOfBirth ?? null,
         coverAmount: mr.dependentId ? requestedMemberCoverByDependentId.get(mr.dependentId) : undefined,
+        coverTopup: mr.dependentId ? topupByMemberRef.get(mr.dependentId) : undefined,
       }));
       const policyholderCoverInput = typeof req.body.coverAmount === "number" ? req.body.coverAmount : undefined;
+      const policyholderTopup = topupByMemberRef.get("holder") ?? 0;
       const defaultCover = issuedProduct.coverAmount != null ? parseFloat(String(issuedProduct.coverAmount)) : 0;
-      const effectivePolicyholderCover = policyholderCoverInput ?? defaultCover;
-      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount > effectivePolicyholderCover);
+      const effectivePolicyholderCover = (policyholderCoverInput ?? defaultCover) + policyholderTopup;
+      const overCap = dependentsForRating.find((d) => d.coverAmount != null && d.coverAmount + (d.coverTopup ?? 0) > effectivePolicyholderCover);
       if (overCap) {
         return res.status(400).json({ message: `A dependent's cover amount cannot exceed the policyholder's cover amount (${policyInsert.currency || "USD"} ${effectivePolicyholderCover}).` });
       }
       const breakdown = await computeIndividualAgeRatedPremium(
         user.organizationId, productVersion.id, issuedProduct, policyInsert.currency || "USD", policyInsert.paymentSchedule || "monthly",
         Number((productVersion as any).dependentMaxAge ?? 20),
-        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput },
+        { dateOfBirth: clientRow.dateOfBirth, coverAmount: policyholderCoverInput, coverTopup: policyholderTopup || undefined },
         dependentsForRating,
       );
       policyInsert.premiumAmount = breakdown.total.toFixed(2);
@@ -4551,6 +4636,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         undefined,
         undefined,
         dependentDateOfBirths,
+        undefined,
+        undefined,
+        await ageRatedInputForPolicy(policy, user.organizationId),
       );
 
       // "Effective from" date drives arrears/credit reconciliation — it does NOT
@@ -4787,6 +4875,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const policy = accessCheck.policy;
     const members = await storage.getPolicyMembers(req.params.id as string, user.organizationId);
+    // Latest non-declined claim per member (a declined claim still shows via claimStatus).
+    const policyClaims = await storage.getClaimsByPolicy(policy.id, user.organizationId);
+    const claimByMember = new Map<string, any>();
+    for (const c of [...policyClaims].sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt))) {
+      if (c.policyMemberId) claimByMember.set(c.policyMemberId, c);
+    }
     const today = await todayForOrg(user.organizationId);
     const todayDate = new Date();
     const policyStatusOk = policy.status === "active" || policy.status === "grace";
@@ -4849,10 +4943,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const memberWaitingOver = !coverDate || coverDate <= today;
-      const memberClaimable = policyStatusOk && memberWaitingOver;
+      const memberClaim = claimByMember.get(m.id);
+      const alreadyClaimed = !!memberClaim && memberClaim.status !== "rejected";
+      const memberClaimable = policyStatusOk && memberWaitingOver && !alreadyClaimed;
 
       let claimableReason = "";
-      if (!policyStatusOk) {
+      if (alreadyClaimed) {
+        claimableReason = memberClaim.status === "approved" || ["scheduled", "payable", "completed", "paid", "closed"].includes(memberClaim.status)
+          ? `Already claimed — claim ${memberClaim.claimNumber} was approved.`
+          : `Claim ${memberClaim.claimNumber} is ${memberClaim.status.replace(/_/g, " ")}.`;
+      } else if (!policyStatusOk) {
         claimableReason = `Policy status is "${policy.status}"; must be active or in grace period.`;
       } else if (!memberWaitingOver) {
         claimableReason = `Waiting period ends ${coverDate}. Covered after that date.`;
@@ -4863,7 +4963,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       let effectiveStatus: string;
-      if (!m.isActive) {
+      if (m.claimStatus === "claimed") {
+        effectiveStatus = "deceased";
+      } else if (!m.isActive) {
         effectiveStatus = "removed";
       } else {
         effectiveStatus = policy.status;
@@ -4885,6 +4987,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         claimable: memberClaimable,
         claimableReason,
         effectiveStatus,
+        claimId: memberClaim?.id ?? null,
+        claimNumber: memberClaim?.claimNumber ?? null,
+        claimCurrentStatus: memberClaim?.status ?? null,
       };
     }));
 
@@ -5029,7 +5134,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const dependentDobs = await getActivePolicyDependentDobList(policy, user.organizationId);
       const addOnIds = await getPolicyAddOnIds(policy.id, user.organizationId);
       newPremium = parseFloat(String(await computePolicyPremium(
-        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs,
+        user.organizationId, req.body.productVersionId.trim(), currency, paymentSchedule, addOnIds, undefined, undefined, dependentDobs, undefined, undefined, await ageRatedInputForPolicy(policy, user.organizationId),
       )));
     }
 
@@ -5928,7 +6033,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!req.file?.buffer) return res.status(400).json({ message: "No file uploaded" });
     const orgPool = await getPoolForOrg(user.organizationId);
     const lockClient = await orgPool.connect();
-    const lockAcquired = (await lockClient.query("SELECT pg_try_advisory_lock($1::bigint) as acquired", [MONTH_END_LOCK_KEY])).rows[0]?.acquired;
+    // Transaction-level lock — session locks don't hold through PgBouncer transaction pooling (server/advisory-lock.ts).
+    const lockAcquired = await tryXactLock(lockClient, [MONTH_END_LOCK_KEY]);
     if (!lockAcquired) {
       lockClient.release();
       return res.status(409).json({ message: "A month-end run is already in progress for this organisation. Please wait and try again." });
@@ -6070,7 +6176,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await auditLog(req, "MONTH_END_RUN", "MonthEndRun", run.id, null, { runId: run.id, runNumber, receiptedCount: receipted, creditNoteCount: creditNotes, totalRows: rows.length, fileName: run.fileName });
     return res.status(201).json({ run: { ...run, receiptedCount: receipted, creditNoteCount: creditNotes, status: "completed" }, receiptedCount: receipted, creditNoteCount: creditNotes });
     } finally {
-      await lockClient.query("SELECT pg_advisory_unlock($1::bigint)", [MONTH_END_LOCK_KEY]).catch(() => {});
+      await endXactLock(lockClient);
       lockClient.release();
     }
   });
@@ -6277,18 +6383,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // createdBy FKs users.id in the tenant DB — a platform owner's registry id isn't there
         // until mirrored, so resolve it (else the ledger credit silently fails and the group
         // balance never moves — exactly what the prod logs showed for Falakhe).
-        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-        await storage.createGroupLedgerEntry({
-          organizationId: user.organizationId,
-          groupId,
-          entryType: "premium_credit",
-          amount: amountNum.toFixed(2),
-          currency: currency || "USD",
-          description: `Group receipt ${groupRef}`,
-          referenceType: "payment_receipt",
-          referenceId: results[0]?.id,
-          createdBy: ledgerCreatedBy,
-        });
+        // Only ledger groups (legacy groups / burial societies) keep a ledger — a plain group
+        // policy receipt is just premium income.
+        const ledgerGroup = await storage.getGroup(groupId, user.organizationId);
+        if (ledgerGroup?.hasLedger) {
+          const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+          await storage.createGroupLedgerEntry({
+            organizationId: user.organizationId,
+            groupId,
+            entryType: "premium_credit",
+            amount: amountNum.toFixed(2),
+            currency: currency || "USD",
+            description: `Group receipt ${groupRef}`,
+            referenceType: "payment_receipt",
+            referenceId: results[0]?.id,
+            createdBy: ledgerCreatedBy,
+          });
+        }
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (group receipt)", { groupId, groupRef, error: err?.message });
       }
@@ -6454,7 +6565,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const receiptGroupId = (receipt.metadataJson as any)?.groupId;
       if (receiptGroupId) {
         try {
-          await storage.createGroupLedgerEntry({
+          const ledgerGroup = await storage.getGroup(receiptGroupId, user.organizationId);
+          if (ledgerGroup?.hasLedger) await storage.createGroupLedgerEntry({
             organizationId: user.organizationId,
             groupId: receiptGroupId,
             entryType: "premium_credit",
@@ -6463,7 +6575,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             description: `Group receipt ${receipt.receiptNumber} (backdated, approved)`,
             referenceType: "payment_receipt",
             referenceId: receipt.id,
-            createdBy: user.id,
+            // Registry id isn't a user row in an isolated tenant DB — FK violation otherwise.
+            createdBy: await resolveOrSyncTenantUserId(user.organizationId, user.id),
           });
         } catch (err: any) {
           structuredLog("error", "Group ledger credit failed (backdated group receipt approval)", { groupId: receiptGroupId, receiptId, error: err?.message });
@@ -6632,6 +6745,97 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ─── SMS allowance + usage report (tenant admins) ───────────────────────────
+  // The allowance itself is granted by the platform owner (control plane — see
+  // server/sms-allocation.ts and the SMS tab of the platform tenant console). Admins see what's
+  // left and a full, downloadable log of every text (server/sms-report.ts). Phone numbers and
+  // message text are client data, hence the notification/settings permission.
+  const SMS_REPORT_PERMS = ["manage:settings", "read:notification"] as const;
+  const SMS_REPORT_MAX_ROWS = 50_000;
+
+  async function parseSmsReportFilters(req: any, orgId: string) {
+    const tz = await getOrgTimezone(orgId);
+    const today = await todayForOrg(orgId);
+    const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const fromStr = isDate(req.query.from) ? req.query.from : `${today.slice(0, 7)}-01`;
+    const toStr = isDate(req.query.to) ? req.query.to : today;
+    const toNext = new Date(`${toStr}T00:00:00Z`);
+    toNext.setUTCDate(toNext.getUTCDate() + 1);
+    const filters: SmsMessageFilters = {
+      from: localToUtcDate(fromStr, "00:00", tz),
+      to: localToUtcDate(toNext.toISOString().slice(0, 10), "00:00", tz),
+      status: ["sent", "failed", "blocked"].includes(String(req.query.status)) ? String(req.query.status) : undefined,
+      source: ["notification", "test", "mfa", "broadcast", "other"].includes(String(req.query.source)) ? String(req.query.source) : undefined,
+      search: typeof req.query.search === "string" && req.query.search.trim() ? req.query.search.trim().slice(0, 100) : undefined,
+    };
+    return { filters, tz, fromStr, toStr };
+  }
+
+  app.get("/api/sms/usage", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const { filters, fromStr, toStr } = await parseSmsReportFilters({ query: {} }, user.organizationId);
+    const [allowance, month, grants] = await Promise.all([
+      getSmsAllowance(user.organizationId),
+      storage.getSmsMessageStats(user.organizationId, filters),
+      listSmsAllowanceEvents(user.organizationId, 20),
+    ]);
+    return res.json({
+      allowance,
+      thisMonth: { from: fromStr, to: toStr, ...month },
+      // Who at the platform made the change is platform-internal — tenants just see what changed.
+      history: grants.map((g) => ({ id: g.id, type: g.type, credits: g.credits, balanceAfter: g.balanceAfter, note: g.note, createdAt: g.createdAt })),
+    });
+  });
+
+  app.get("/api/sms/messages", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const { filters, fromStr, toStr } = await parseSmsReportFilters(req, user.organizationId);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const [{ rows, total }, stats] = await Promise.all([
+      storage.getSmsMessages(user.organizationId, filters, limit, offset),
+      storage.getSmsMessageStats(user.organizationId, filters),
+    ]);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter((x): x is string => !!x)));
+    const clients = clientIds.length ? await storage.getClientsByIds(clientIds, user.organizationId) : [];
+    const nameById = new Map(clients.map((c: any) => [c.id, `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim()]));
+    return res.json({
+      from: fromStr, to: toStr, total, stats,
+      rows: rows.map((r) => ({ ...r, clientName: r.clientId ? nameById.get(r.clientId) ?? null : null, typeLabel: smsTypeLabel(r) })),
+    });
+  });
+
+  app.get("/api/sms/messages/export", requireAuth, requireTenantScope, requireAnyPermission(...SMS_REPORT_PERMS), async (req, res) => {
+    const user = req.user as any;
+    const format = req.query.format === "pdf" ? "pdf" : "csv";
+    const { filters, tz, fromStr, toStr } = await parseSmsReportFilters(req, user.organizationId);
+    const [{ rows, total }, stats, allowance, org] = await Promise.all([
+      storage.getSmsMessages(user.organizationId, filters, SMS_REPORT_MAX_ROWS, 0),
+      storage.getSmsMessageStats(user.organizationId, filters),
+      getSmsAllowance(user.organizationId),
+      storage.getOrganization(user.organizationId),
+    ]);
+    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter((x): x is string => !!x)));
+    const clients = clientIds.length ? await storage.getClientsByIds(clientIds, user.organizationId) : [];
+    const nameById = new Map(clients.map((c: any) => [c.id, `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim()]));
+    const reportRows = rows.map((r) => ({ ...r, clientName: r.clientId ? nameById.get(r.clientId) ?? null : null }));
+    const ctx = {
+      orgName: org?.name || "POL263",
+      timezone: tz,
+      periodLabel: `${fromStr} to ${toStr}${total > rows.length ? ` (first ${rows.length.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} messages)` : ""}`,
+      allowance,
+      stats,
+      generatedBy: user.displayName || user.email || "staff",
+    };
+    // Bulk export of client phone numbers + message text — always audit-logged.
+    await auditLog(req, "EXPORT_SMS_REPORT", "SmsMessage", undefined, null, { format, from: fromStr, to: toStr, rows: rows.length, filters: { status: filters.status, source: filters.source, search: filters.search } });
+    const filename = `sms-report-${fromStr}-to-${toStr}.${format}`;
+    if (format === "pdf") return streamSmsReportPdf(res, reportRows, ctx, filename);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(buildSmsReportCsv(reportRows, ctx));
+  });
+
   app.get("/api/sms-config", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     const cfg = await getOrgSmsConfig(user.organizationId);
@@ -6691,6 +6895,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       message: `${org?.name || "POL263"}: this is a test message confirming SMS is working. No action needed.`,
       kind: "transactional",
       countryCode: cf.homeCountryCode,
+      meta: { source: "test", sentByUserId: user.id },
     });
     await auditLog(req, "SEND_TEST_SMS", "Organization", user.organizationId, null, {
       to: rawTo.replace(/\d(?=\d{3})/g, "•"), ok: result.ok,
@@ -6851,7 +7056,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Claims ─────────────────────────────────────────────────
 
   app.get("/api/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
-    res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
+    res.set("Cache-Control", "private, no-store");
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -6884,12 +7089,170 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
    * that displays this. Reading the raw column directly here would have made this check a no-op
    * for the vast majority of policies.
    */
-  async function checkWaitingPeriodViolation(policy: any, orgId: string, dateOfDeath: string | null | undefined): Promise<{ violated: boolean; waitingPeriodEndDate: string | null }> {
-    const waitingPeriodEndDate = await resolvePolicyWaitingPeriodEndDate(policy, orgId);
-    if (!waitingPeriodEndDate) return { violated: false, waitingPeriodEndDate: null };
-    const asOf = dateOfDeath || await todayForOrg(orgId);
-    return { violated: asOf < waitingPeriodEndDate, waitingPeriodEndDate };
-  }
+  // (checkWaitingPeriodViolation lives in server/claim-workflow.ts, shared with the approve path.)
+
+  /** Full claim view for the claim detail page — the claim plus everything it touches: policy,
+   *  the claimed member, linked funeral case + quote, the group and its ledger balance (and what
+   *  approving would deduct), status history, and the approval request. */
+  app.get("/api/claims/:id/detail", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const claim = await storage.getClaim(req.params.id as string, orgId);
+    if (!claim) return res.status(404).json({ message: "Not found" });
+    try {
+      const tdb = await getDbForOrg(orgId);
+      const [policy, client, history, approvals, fcRows] = await Promise.all([
+        storage.getPolicy(claim.policyId, orgId),
+        storage.getClient(claim.clientId, orgId),
+        tdb.select().from(claimStatusHistory).where(eq(claimStatusHistory.claimId, claim.id)).orderBy(asc(claimStatusHistory.createdAt)),
+        tdb.select().from(approvalRequests).where(and(
+          eq(approvalRequests.organizationId, orgId), eq(approvalRequests.requestType, "CLAIM_REVIEW"), eq(approvalRequests.entityId, claim.id),
+        )).orderBy(desc(approvalRequests.createdAt)),
+        tdb.select({ id: funeralCases.id, caseNumber: funeralCases.caseNumber, status: funeralCases.status })
+          .from(funeralCases).where(and(eq(funeralCases.organizationId, orgId), eq(funeralCases.claimId, claim.id))).limit(1),
+      ]);
+      const quotation = await getLinkedQuotation(tdb, orgId, claim.id);
+
+      let member: any = null;
+      if (claim.policyMemberId) {
+        const [m] = await tdb.select().from(policyMembers).where(eq(policyMembers.id, claim.policyMemberId)).limit(1);
+        if (m) {
+          let memberName = "", relationship = "", dateOfBirth: string | null = null;
+          if (m.dependentId) {
+            const dep = await storage.getDependent(m.dependentId, orgId);
+            if (dep) { memberName = `${dep.firstName} ${dep.lastName}`; relationship = dep.relationship; dateOfBirth = dep.dateOfBirth; }
+          } else if (m.clientId) {
+            const c = await storage.getClient(m.clientId, orgId);
+            if (c) { memberName = `${c.firstName} ${c.lastName}`; relationship = "Policy Holder"; dateOfBirth = c.dateOfBirth; }
+          }
+          member = { ...m, memberName, relationship, dateOfBirth };
+        }
+      }
+
+      let group: any = null;
+      const claimGroupId = await resolveClaimGroupId(tdb, claim);
+      if (claimGroupId) {
+        const g = await storage.getGroup(claimGroupId, orgId);
+        if (g) {
+          const balance = await getGroupLedgerBalanceInTx(tdb, orgId, g.id);
+          // What approving would deduct — or why it can't be approved yet.
+          let pendingDebit: { amount: number; currency: string } | null = null;
+          let debitBlocker: string | null = null;
+          if (UNDECIDED_CLAIM_STATUSES.includes(claim.status)) {
+            try {
+              const d = await resolveLedgerDebit(tdb, claim);
+              if (d) pendingDebit = { amount: d.amount, currency: d.currency };
+            } catch (e: any) {
+              debitBlocker = e?.message ?? "Can't be approved yet";
+            }
+          }
+          group = {
+            id: g.id, name: g.name, type: g.type, isLegacy: g.isLegacy, hasLedger: g.hasLedger,
+            balance, pendingDebit, debitBlocker,
+          };
+        }
+      }
+
+      const userIds = Array.from(new Set([
+        claim.submittedBy, claim.verifiedBy, claim.approvedBy, claim.decidedBy, claim.investigationOpenedBy,
+        ...history.map((h) => h.changedBy),
+      ].filter(Boolean) as string[]));
+      const userRows = userIds.length ? await tdb.select({ id: users.id, displayName: users.displayName, email: users.email }).from(users).where(inArray(users.id, userIds)) : [];
+      const userNames: Record<string, string> = {};
+      for (const u of userRows) userNames[u.id] = u.displayName || u.email;
+
+      return res.json({
+        claim: withClaimAging(claim),
+        policy: policy ? { id: policy.id, policyNumber: policy.policyNumber, status: policy.status, currency: policy.currency, groupId: policy.groupId, isLegacy: (policy as any).isLegacy } : null,
+        client: client ? { id: client.id, firstName: client.firstName, lastName: client.lastName, phone: client.phone, nationalId: client.nationalId } : null,
+        member,
+        funeralCase: fcRows[0] ?? null,
+        quotation: quotation ? { id: quotation.id, quotationNumber: quotation.quotationNumber, currency: quotation.currency, grandTotal: quotation.grandTotal, total: quotation.total, status: quotation.status } : null,
+        group,
+        history,
+        approval: approvals[0] ?? null,
+        userNames,
+      });
+    } catch (err: any) {
+      structuredLog("error", "GET /api/claims/:id/detail failed", { claimId: claim.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  /** Correct a claim that hasn't been decided yet: its amount, currency, or the cash-service
+   *  quote attached to it (burial society claims can't be approved without one). */
+  app.patch("/api/claims/:id", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
+    const user = req.user as any;
+    const orgId = user.organizationId;
+    const claim = await storage.getClaim(req.params.id as string, orgId);
+    if (!claim) return res.status(404).json({ message: "Not found" });
+    if (!UNDECIDED_CLAIM_STATUSES.includes(claim.status)) {
+      return res.status(400).json({ message: "This claim has already been decided and can no longer be changed." });
+    }
+    try {
+      const patch: Record<string, any> = {};
+      if (req.body.cashInLieuAmount !== undefined) {
+        const raw = req.body.cashInLieuAmount;
+        if (raw === null || raw === "") patch.cashInLieuAmount = null;
+        else {
+          const n = parseFloat(String(raw));
+          if (!Number.isFinite(n) || n < 0) return res.status(400).json({ message: "Amount must be a positive number." });
+          patch.cashInLieuAmount = n.toFixed(2);
+        }
+      }
+      if (typeof req.body.currency === "string" && req.body.currency.trim()) patch.currency = req.body.currency.trim().toUpperCase();
+      // Link (or change) the claimed member — mainly for claims logged before members were
+      // captured on claims. Same rules as at creation: on this policy, not already claimed.
+      let memberToLink: any = null;
+      if (req.body.policyMemberId && req.body.policyMemberId !== claim.policyMemberId) {
+        const tdb = await getDbForOrg(orgId);
+        [memberToLink] = await tdb.select().from(policyMembers)
+          .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, claim.policyId))).limit(1);
+        if (!memberToLink) return res.status(400).json({ message: "That member isn't on this claim's policy." });
+        const [other] = await tdb.select({ claimNumber: claims.claimNumber }).from(claims)
+          .where(and(eq(claims.organizationId, orgId), eq(claims.policyMemberId, memberToLink.id), sql`${claims.status} <> 'rejected'`, sql`${claims.id} <> ${claim.id}`)).limit(1);
+        if (other) return res.status(409).json({ message: `This member already has claim ${other.claimNumber}.` });
+        patch.policyMemberId = memberToLink.id;
+      }
+      let quotationToLink: any = null;
+      if (req.body.quotationId) {
+        quotationToLink = await storage.getQuotationById(req.body.quotationId, orgId);
+        if (!quotationToLink) return res.status(404).json({ message: "Quotation not found" });
+        if (quotationToLink.claimId && quotationToLink.claimId !== claim.id) {
+          return res.status(409).json({ message: `Quote ${quotationToLink.quotationNumber} is already attached to another claim.` });
+        }
+      }
+      const updated = await withOrgTransaction(orgId, async (tx) => {
+        let row = claim;
+        if (Object.keys(patch).length) {
+          [row] = await tx.update(claims).set(patch).where(and(eq(claims.id, claim.id), eq(claims.organizationId, orgId))).returning();
+        }
+        if (memberToLink) {
+          if (claim.policyMemberId) {
+            await tx.update(policyMembers).set({ claimStatus: null, claimVerdictNote: null, claimVerdictAt: null })
+              .where(eq(policyMembers.id, claim.policyMemberId));
+          }
+          await tx.update(policyMembers).set({
+            claimStatus: claim.status === "under_investigation" ? "under_investigation" : "claim_pending",
+            claimVerdictNote: `Claim ${claim.claimNumber} ${claim.status === "under_investigation" ? "under investigation" : "awaiting a decision"}`,
+            claimVerdictAt: null,
+          }).where(eq(policyMembers.id, memberToLink.id));
+        }
+        if (quotationToLink) {
+          // One quote per claim — detach any previous one first.
+          await tx.update(funeralQuotations).set({ claimId: null })
+            .where(and(eq(funeralQuotations.organizationId, orgId), eq(funeralQuotations.claimId, claim.id)));
+          await tx.update(funeralQuotations).set({ claimId: claim.id }).where(eq(funeralQuotations.id, quotationToLink.id));
+        }
+        await auditLog(req, "UPDATE_CLAIM", "Claim", claim.id, claim, { ...row, linkedQuotationId: quotationToLink?.id }, undefined, tx);
+        return row;
+      });
+      return res.json(updated);
+    } catch (err: any) {
+      structuredLog("error", "PATCH /api/claims/:id failed", { claimId: claim.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
 
   app.post("/api/claims", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
     const user = req.user as any;
@@ -6927,8 +7290,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // when the policy's product is actually benefitTrigger:'hospitalization'; every other
       // product (i.e. every real product today) is completely unaffected.
       let hospitalCashPatch: Record<string, any> = {};
+      let claimPolicy: any = null;
       if (req.body.policyId) {
-        const claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
+        claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
+        if (!claimPolicy) return res.status(404).json({ message: "Policy not found" });
         const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
         if (wp.violated) {
           fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
@@ -6955,20 +7320,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         linkedQuotation = await storage.getQuotationById(req.body.quotationId, user.organizationId);
         if (!linkedQuotation) return res.status(404).json({ message: "Quotation not found" });
       }
-      if (req.body.groupId) {
-        const group = await storage.getGroup(req.body.groupId, user.organizationId);
-        if (!group) return res.status(404).json({ message: "Group not found" });
+      if (linkedQuotation?.claimId) {
+        return res.status(409).json({ message: `Quote ${linkedQuotation.quotationNumber} is already attached to another claim.` });
       }
 
-      const { quotationId: _quotationId, ...bodyWithoutQuotationId } = req.body;
+      // The claimed covered life — must be on this policy, and can't already have an open or
+      // approved claim (a person can only be claimed for once).
+      let claimedMember: any = null;
+      if (req.body.policyMemberId) {
+        const tdb = await getDbForOrg(user.organizationId);
+        [claimedMember] = await tdb.select().from(policyMembers)
+          .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, req.body.policyId))).limit(1);
+        if (!claimedMember) return res.status(400).json({ message: "That member isn't on this policy." });
+        const [openClaim] = await tdb.select({ claimNumber: claims.claimNumber, status: claims.status }).from(claims)
+          .where(and(
+            eq(claims.organizationId, user.organizationId),
+            eq(claims.policyMemberId, claimedMember.id),
+            sql`${claims.status} <> 'rejected'`,
+          )).limit(1);
+        if (openClaim) {
+          return res.status(409).json({ message: `This member already has claim ${openClaim.claimNumber} (${openClaim.status.replace(/_/g, " ")}). A person can only be claimed for once.` });
+        }
+      }
+
+      // Ledger groups (legacy groups / burial societies): the claim is paid from the group's
+      // ledger, so link it automatically from the member's policy — staff don't have to know.
+      let claimGroup: any = null;
+      const groupIdCandidate = req.body.groupId || claimPolicy?.groupId;
+      if (groupIdCandidate) {
+        const group = await storage.getGroup(groupIdCandidate, user.organizationId);
+        if (req.body.groupId && !group) return res.status(404).json({ message: "Group not found" });
+        if (group && (req.body.groupId || group.hasLedger)) claimGroup = group;
+      }
+      if (claimGroup?.type === "burial_society" && !linkedQuotation) {
+        return res.status(400).json({
+          code: "quotation_required",
+          message: `${claimGroup.name} is a burial society — attach the cash-service quote for this claim. The quoted amount is what gets deducted from the society's ledger.`,
+        });
+      }
+
+      // "Further investigation required" at submission: the claim starts under investigation
+      // (with what's being investigated + next steps) and only goes to the approvers once the
+      // investigation is concluded.
+      const startInvestigation = req.body.recommendation === "investigate";
+      const investigationReason = typeof req.body.investigationReason === "string" ? req.body.investigationReason.trim() : "";
+      const investigationNextSteps = typeof req.body.investigationNextSteps === "string" ? req.body.investigationNextSteps.trim() : "";
+      if (startInvestigation && (!investigationReason || !investigationNextSteps)) {
+        return res.status(400).json({ message: "Say what needs investigating and what the next steps are." });
+      }
+
+      const {
+        quotationId: _quotationId, recommendation: _recommendation, investigationReason: _ir, investigationNextSteps: _ins,
+        ...bodyWithoutQuotationId
+      } = req.body;
       const parsed = insertClaimSchema.parse({
         ...bodyWithoutQuotationId,
         ...caseFillPatch,
         ...hospitalCashPatch,
+        groupId: claimGroup?.id ?? null,
+        policyMemberId: claimedMember?.id ?? null,
         organizationId: user.organizationId,
         claimNumber: "PENDING",
-        status: "submitted",
+        status: startInvestigation ? "under_investigation" : "submitted",
         submittedBy: effectiveUserId,
+        ...(startInvestigation ? {
+          investigationReason, investigationNextSteps,
+          investigationOpenedAt: new Date(), investigationOpenedBy: effectiveUserId,
+        } : {}),
         ...(fraudFlags ? { fraudFlags } : {}),
       });
       const claim = await withOrgTransaction(user.organizationId, async (txDb) => {
@@ -6988,6 +7406,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.insert(claimStatusHistory).values({
           claimId: created.id, fromStatus: null, toStatus: "submitted", reason: "Claim submitted", changedBy: effectiveUserId,
         });
+        if (startInvestigation) {
+          await txDb.insert(claimStatusHistory).values({
+            claimId: created.id, fromStatus: "submitted", toStatus: "under_investigation",
+            reason: `Investigating: ${investigationReason} — Next steps: ${investigationNextSteps}`, changedBy: effectiveUserId,
+          });
+        }
+        // Linked in the same commit — a burial society claim can't be approved without its quote.
+        if (linkedQuotation) {
+          await txDb.update(funeralQuotations).set({ claimId: created.id })
+            .where(and(eq(funeralQuotations.id, linkedQuotation.id), eq(funeralQuotations.organizationId, user.organizationId)));
+        }
+        if (claimedMember) {
+          await txDb.update(policyMembers).set({
+            claimStatus: startInvestigation ? "under_investigation" : "claim_pending",
+            claimVerdictNote: `Claim ${claimNumber} ${startInvestigation ? `under investigation: ${investigationReason}` : "submitted"}`,
+            claimVerdictAt: null,
+          }).where(eq(policyMembers.id, claimedMember.id));
+        }
         return created;
       });
       await auditLog(req, "CREATE_CLAIM", "Claim", claim.id, null, claim);
@@ -6998,15 +7434,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           structuredLog("error", "Failed to link claim to funeral case", { claimId: claim.id, funeralCaseId: linkedCase.id, error: linkErr?.message });
         }
       }
-      if (linkedQuotation) {
-        try {
-          await storage.linkQuotationToClaim(linkedQuotation.id, claim.id, user.organizationId);
-        } catch (linkErr: any) {
-          structuredLog("error", "Failed to link claim to quotation", { claimId: claim.id, quotationId: linkedQuotation.id, error: linkErr?.message });
-        }
-      }
-      // Auto-create approval request — all claims require manager approval
-      try {
+      // Auto-create approval request — all claims require manager approval. A claim that starts
+      // under investigation goes to the approvers only once the investigation is concluded
+      // (server/claim-workflow.ts requeueForApproval).
+      if (!startInvestigation) try {
         const approvalReq = await storage.createApprovalRequest({
           organizationId: user.organizationId,
           requestType: "CLAIM_REVIEW",
@@ -7025,6 +7456,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } catch (approvalErr: any) {
         structuredLog("warn", "Failed to auto-create claim approval", { claimId: claim.id, error: approvalErr?.message });
       }
+      // Let the client know the claim was received (after the funeral-case link above, so the
+      // informant's number can be used if the policyholder has no phone on file).
+      notifyClientOfClaim(user.organizationId, claim, startInvestigation ? "under_investigation" : "submitted")
+        .catch((err) => structuredLog("warn", "Claim received notification failed", { claimId: claim.id, error: err?.message }));
       return res.status(201).json(claim);
     } catch (err: any) {
       if (handleZodError(err, res)) return;
@@ -7034,145 +7469,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/claims/:id/transition", requireAuth, requireTenantScope, requirePermission("write:claim"), async (req, res) => {
-    const user = req.user as any;
-    const claim = await storage.getClaim(req.params.id as string, user.organizationId);
-    if (!claim || claim.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
-    await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
-
-    const { toStatus, reason } = req.body;
-    const allowed = VALID_CLAIM_TRANSITIONS[claim.status];
-    if (!allowed || !allowed.includes(toStatus)) {
-      return res.status(400).json({ message: `Invalid transition from ${claim.status} to ${toStatus}` });
-    }
-
-    const effectiveUserId = await resolveOrSyncTenantUserId(claim.organizationId, user.id);
-    if (["approved", "paid"].includes(toStatus)) {
-      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-      if (!perms.includes("approve:claim")) {
-        return res.status(403).json({ message: "Approval permission required" });
-      }
-      // Segregation of duties: whoever submitted or verified this claim cannot be the one to
-      // approve/mark it paid — platform owner is the sole exception. Same pattern as
-      // requisitions (routes.ts ~6676).
-      const isSelfClaim = (claim.submittedBy === effectiveUserId || claim.verifiedBy === effectiveUserId) && !user.isPlatformOwner;
-      if (isSelfClaim) {
-        return res.status(403).json({ message: "You cannot approve or mark paid a claim you submitted or verified yourself." });
-      }
-    }
-
-    // Hard stop — this is the moment the payout actually gets committed, so a waiting-period
-    // violation is enforced here rather than only flagged at submission. Requires an explicit,
-    // logged override reason to proceed (same "let it through with a note, but never silently"
-    // pattern as premium overrides in POST /api/payments), not a permission check — the intent
-    // is to force a deliberate decision, not to gate who's allowed to make it.
-    let waitingPeriodOverride: { waitingPeriodEndDate: string; reason: string } | undefined;
-    if (toStatus === "approved" && claim.policyId) {
-      const claimPolicy = await storage.getPolicy(claim.policyId, user.organizationId);
-      const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, claim.dateOfDeath);
-      if (wp.violated) {
-        const overrideReason = typeof req.body.waitingPeriodOverrideReason === "string" ? req.body.waitingPeriodOverrideReason.trim() : "";
-        if (!overrideReason) {
-          return res.status(400).json({
-            code: "waiting_period_violation",
-            message: `This claim's date of death is before the policy's waiting period ends (${wp.waitingPeriodEndDate}). Provide waitingPeriodOverrideReason to approve anyway.`,
-            waitingPeriodEndDate: wp.waitingPeriodEndDate,
-          });
-        }
-        waitingPeriodOverride = { waitingPeriodEndDate: wp.waitingPeriodEndDate!, reason: overrideReason };
-      }
-    }
-
-    // Ex gratia — a general "this doesn't strictly qualify under the policy, approving anyway as
-    // a goodwill payment" declaration, available on any approval (not tied to the automated
-    // waiting-period check above, which stays exactly as-is). Same "explicit reason, never
-    // silent" posture: isExGratia without a reason is rejected outright.
-    let exGratia: { reason: string } | undefined;
-    if (toStatus === "approved" && req.body.isExGratia) {
-      const exGratiaReason = typeof req.body.exGratiaReason === "string" ? req.body.exGratiaReason.trim() : "";
-      if (!exGratiaReason) {
-        return res.status(400).json({ message: "exGratiaReason is required to approve a claim as ex gratia." });
-      }
-      exGratia = { reason: exGratiaReason };
-    }
-
-    const before = { ...claim };
-    const updateData: any = { status: toStatus };
-    if (toStatus === "verified") updateData.verifiedBy = effectiveUserId;
-    if (toStatus === "approved") updateData.approvedBy = effectiveUserId;
-    if (waitingPeriodOverride) {
-      updateData.fraudFlags = {
-        ...(claim.fraudFlags as any || {}),
-        waitingPeriod: { violated: true, waitingPeriodEndDate: waitingPeriodOverride.waitingPeriodEndDate, overriddenBy: effectiveUserId, overrideReason: waitingPeriodOverride.reason, overriddenAt: new Date().toISOString() },
-      };
-    }
-    if (exGratia) {
-      updateData.isExGratia = true;
-      updateData.exGratiaReason = exGratia.reason;
-    }
-
-    // Status update + history row + (if applicable) the group ledger debit + audit log must all
-    // commit together — a crash mid-way used to leave a durably-approved group claim with no
-    // ledger debit and no record it was ever owed (found in the 2026-08-19 functional audit).
-    const updated = await withOrgTransaction(claim.organizationId, async (txDb) => {
-      const [row] = await txDb.update(claims).set(updateData)
-        .where(and(eq(claims.id, claim.id), eq(claims.organizationId, claim.organizationId)))
-        .returning();
-      let historyReason = waitingPeriodOverride
-        ? `${reason ? `${reason} — ` : ""}Waiting period override: ${waitingPeriodOverride.reason}`
-        : reason;
-      if (exGratia) {
-        historyReason = `${historyReason ? `${historyReason} — ` : ""}Ex gratia: ${exGratia.reason}`;
-      }
-      await txDb.insert(claimStatusHistory).values({
-        claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyReason, changedBy: effectiveUserId,
+    // All the rules (permissions, segregation of duties, waiting period, ex gratia, investigation,
+    // member verdict, group-ledger debit, approval-queue sync) live in server/claim-workflow.ts
+    // so the Approvals queue applies exactly the same ones.
+    try {
+      const result = await transitionClaim({
+        req,
+        claimId: req.params.id as string,
+        toStatus: req.body.toStatus,
+        reason: req.body.reason,
+        waitingPeriodOverrideReason: req.body.waitingPeriodOverrideReason,
+        isExGratia: !!req.body.isExGratia,
+        exGratiaReason: req.body.exGratiaReason,
+        investigationReason: req.body.investigationReason,
+        investigationNextSteps: req.body.investigationNextSteps,
+        investigationFindings: req.body.investigationFindings,
+        source: "claims",
       });
-      // Group-service claim, approved — debit the group's ledger for the payout amount. This is
-      // the moment a group-service quotation's ledger deduction actually commits, after going
-      // through the same review/approval procedure as any other claim (segregation of duties,
-      // waiting-period/ex-gratia checks above) — satisfies "groups must also follow the standing
-      // claims procedure." Only fires once, on the submitted->approved transition (not on later
-      // scheduled/payable/paid/closed transitions of the same claim).
-      if (toStatus === "approved" && row.groupId && row.cashInLieuAmount) {
-        await storage.createGroupLedgerEntryInTx(txDb, {
-          organizationId: claim.organizationId,
-          groupId: row.groupId,
-          entryType: "claim_debit",
-          amount: row.cashInLieuAmount,
-          currency: row.currency,
-          description: `Claim ${row.claimNumber} approved`,
-          referenceType: "claim",
-          referenceId: row.id,
-          createdBy: user.id,
-        });
+      return res.json({ ...result.claim, ledger: result.ledger });
+    } catch (err: any) {
+      if (err instanceof ClaimWorkflowError) {
+        return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
       }
-      await auditLog(req, "TRANSITION_CLAIM", "Claim", claim.id, before, row, undefined, txDb);
-      return row;
-    });
-    // Notify submitter of status change
-    if (claim.submittedBy && claim.submittedBy !== user.id) {
-      notifyUser(claim.organizationId, claim.submittedBy, {
-        type: "CLAIM_STATUS",
-        title: `Claim ${toStatus.charAt(0).toUpperCase() + toStatus.slice(1)}`,
-        body: `Claim ${claim.claimNumber} has been ${toStatus}${reason ? `: ${reason}` : ""}.`,
-        metadata: { claimId: claim.id, claimNumber: claim.claimNumber, toStatus },
-      }).catch(() => {});
+      structuredLog("error", "POST /api/claims/:id/transition failed", { claimId: req.params.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
     }
-    // Notify client
-    if (claim.clientId) {
-      const statusLabel = toStatus.charAt(0).toUpperCase() + toStatus.slice(1);
-      notifyClientPush(claim.organizationId, claim.clientId, `Claim ${statusLabel}`, `Your claim ${claim.claimNumber} has been ${toStatus}.`, claim.policyId ?? undefined).catch(() => {});
-      storage.getClient(claim.clientId, claim.organizationId).then((claimClient) =>
-        dispatchNotification(claim.organizationId, "claim_status_change", claim.clientId!, {
-          clientName: claimClient ? `${claimClient.firstName} ${claimClient.lastName}` : undefined,
-          firstName: claimClient?.firstName,
-          lastName: claimClient?.lastName,
-          claimNumber: claim.claimNumber,
-          status: statusLabel,
-          policyId: claim.policyId ?? undefined,
-        })
-      ).catch(() => {});
-    }
-    return res.json(updated);
   });
 
   app.get("/api/claims/:id/documents", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
@@ -8829,7 +9150,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/notification-merge-tags", requireAuth, requireTenantScope, requirePermission("read:notification"), (_req, res) => {
-    const { MERGE_TAGS, EVENT_TYPES } = require("./notifications");
     return res.json({ mergeTags: MERGE_TAGS, eventTypes: EVENT_TYPES });
   });
 
@@ -8837,7 +9157,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const { subject, body } = req.body;
     if (!subject || !body) return res.status(400).json({ message: "Subject and body are required" });
-    const { broadcastNotification } = require("./notifications");
     const sent = await broadcastNotification(user.organizationId, subject, body);
     await auditLog(req, "BROADCAST_NOTIFICATION", "Notification", undefined, null, { subject, sent });
     return res.json({ sent });
@@ -10881,8 +11200,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/approvals/:id/resolve", requireAuth, requireTenantScope, requirePermission("approve:requests"), async (req, res) => {
     const user = req.user as any;
     const { action, rejectionReason } = req.body;
-    if (action !== "approve" && action !== "reject") {
-      return res.status(400).json({ message: "action must be 'approve' or 'reject'" });
+    if (action !== "approve" && action !== "reject" && action !== "investigate") {
+      return res.status(400).json({ message: "action must be 'approve', 'reject' or 'investigate'" });
     }
     const before = await storage.getApprovalRequests(user.organizationId);
     const approval = before.find(a => a.id === req.params.id as string);
@@ -10893,6 +11212,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const effectiveUserId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     if (approval.initiatedBy === effectiveUserId && !user.isPlatformOwner) {
       return res.status(400).json({ message: "Cannot approve own request (maker-checker)" });
+    }
+
+    // A claim review decides the claim itself: approving/declining here moves the claim, writes
+    // the verdict onto the claimed member and (for ledger groups) debits the group ledger —
+    // exactly as if it had been decided on the Claims page. transitionClaim also updates this
+    // approval request inside the same transaction.
+    if (approval.requestType === "CLAIM_REVIEW") {
+      if (approval.status !== "pending") {
+        return res.status(400).json({ message: "This claim review has already been dealt with." });
+      }
+      const toStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "under_investigation";
+      try {
+        const result = await transitionClaim({
+          req,
+          claimId: approval.entityId,
+          toStatus,
+          reason: action === "reject" ? rejectionReason : req.body.reason,
+          isExGratia: !!req.body.isExGratia,
+          exGratiaReason: req.body.exGratiaReason,
+          investigationReason: req.body.investigationReason,
+          investigationNextSteps: req.body.investigationNextSteps,
+          source: "approvals",
+        });
+        const [after] = (await storage.getApprovalRequests(user.organizationId)).filter((a) => a.id === approval.id);
+        return res.json({ ...(after ?? approval), claim: result.claim, ledger: result.ledger });
+      } catch (err: any) {
+        if (err instanceof ClaimWorkflowError) {
+          return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
+        }
+        structuredLog("error", "Claim review resolve failed", { approvalId: approval.id, error: err?.message });
+        return res.status(500).json({ message: safeError(err) });
+      }
+    }
+    if (action === "investigate") {
+      return res.status(400).json({ message: "Only claim reviews can be sent for investigation." });
     }
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
@@ -11776,18 +12130,70 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const product = await storage.getProduct(pv.productId, orgId);
     if (!product) { res.status(400).json({ message: "Product not found" }); return; }
 
+    // Pre-flight: every add-on/pricing rejection that can be decided from the request alone runs
+    // here, BEFORE the client and dependents are written — rejecting after those inserts left
+    // orphan client/dependent rows behind on every failed attempt (and duplicated dependents on retry).
+    {
+      const preDeps = Array.isArray(rawDeps) ? rawDeps : [];
+      const preAddOns = requestedAddOnIds.length + requestedMemberAddOns.length > 0 ? await storage.getAddOns(orgId) : [];
+      const preById = new Map(preAddOns.map((a: any) => [a.id, a]));
+      let holderTopup = 0;
+      const depTopups = new Map<number, number>();
+      for (const entry of [...requestedAddOnIds.map((addOnId) => ({ memberRef: "holder", addOnId })), ...requestedMemberAddOns]) {
+        const addOn = preById.get(entry?.addOnId);
+        if (!addOn || addOn.isActive === false) { res.status(400).json({ message: `Add-on ${entry?.addOnId} is invalid or inactive.` }); return; }
+        if (product.pricingModel === "individual_age_rated" && addOn.pricingMode !== "cover_topup") {
+          res.status(400).json({ message: `"${addOn.name}" cannot be added to this product — only cover top-up add-ons are supported here.` }); return;
+        }
+        const inc = parseFloat(String(addOn.coverIncrementAmount ?? 0)) || 0;
+        const ref = String(entry?.memberRef ?? "");
+        if (ref === "holder") holderTopup += inc;
+        else if (/^dependent:\d+$/.test(ref) && Number(ref.slice(10)) < preDeps.length) {
+          const idx = Number(ref.slice(10));
+          depTopups.set(idx, (depTopups.get(idx) ?? 0) + inc);
+        } else {
+          res.status(400).json({ message: `Unrecognized memberRef "${ref}" — use "holder" or "dependent:<index>" for a dependent in this request.` }); return;
+        }
+      }
+      if (product.pricingModel === "individual_age_rated") {
+        const defaultCover = product.coverAmount != null ? parseFloat(String(product.coverAmount)) : 0;
+        const holderCover = (typeof policyholderCoverInput === "number" ? policyholderCoverInput : defaultCover) + holderTopup;
+        for (let i = 0; i < preDeps.length; i++) {
+          const dc = typeof preDeps[i]?.coverAmount === "number" ? preDeps[i].coverAmount : undefined;
+          if (dc != null && dc + (depTopups.get(i) ?? 0) > holderCover) {
+            res.status(400).json({ message: `Dependent ${i + 1}'s cover amount cannot exceed the policyholder's cover amount (${currency || "USD"} ${holderCover}).` }); return;
+          }
+        }
+        try {
+          // Dry run — surfaces a missing rate card (PricingConfigError) before anything is written.
+          await computeIndividualAgeRatedPremium(orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
+            Number(pv.dependentMaxAge ?? 20), { dateOfBirth }, preDeps.map((d: any) => ({ dateOfBirth: d?.dateOfBirth ?? null })));
+        } catch (err: any) {
+          if (err instanceof PricingConfigError) { res.status(422).json({ message: err.message }); return; }
+          throw err;
+        }
+      }
+    }
+
     let client: Awaited<ReturnType<typeof storage.createClient>>;
     const emailTrim = email ? String(email).trim() : "";
     const nationalIdTrim = nationalIdNorm;
     let existing = emailTrim ? await storage.getClientByEmail(orgId, emailTrim) : undefined;
     if (!existing && nationalIdTrim) existing = await storage.getClientByNationalId(orgId, nationalIdTrim);
+    // True when this unauthenticated request matched a client that already existed (by email or
+    // national ID). Such a caller has proven nothing about owning that record, so it may only
+    // FILL BLANK fields — never overwrite the phone/DOB/ID/branch on file (the phone is where SMS
+    // and activation codes go) — and the response must not hand back that client's activation
+    // code or id (together with the new policy number, those were enough to claim the client's
+    // portal account).
+    const matchedExistingClient = !!existing;
     if (existing) {
       client = existing;
       const updates: Record<string, unknown> = {};
-      if (effectiveBranchId !== undefined) updates.branchId = effectiveBranchId;
-      if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
-      if (dateOfBirth !== undefined) updates.dateOfBirth = dateOfBirth || null;
-      if (nationalIdTrim) updates.nationalId = nationalIdTrim;
+      if (!client.branchId && effectiveBranchId) updates.branchId = effectiveBranchId;
+      if (!client.phone && phone) updates.phone = String(phone).trim();
+      if (!client.dateOfBirth && dateOfBirth) updates.dateOfBirth = dateOfBirth;
+      if (!client.nationalId && nationalIdTrim) updates.nationalId = nationalIdTrim;
       if (!(client as any).consentedAt && consentedAtDate) updates.consentedAt = consentedAtDate;
       if (!client.activationCode) updates.activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       if (agentId && !(client as any).agentId) updates.agentId = agentId;
@@ -11812,6 +12218,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         agentId: agentId || null,
         consentedAt: consentedAtDate,
       }));
+    }
+
+    // Duplicate check before any dependents are written — checking only after (below) meant every
+    // retried registration for an existing client added another copy of each dependent.
+    if (matchedExistingClient) {
+      const priorPolicies = await storage.getPoliciesByClient(client.id, orgId);
+      if (priorPolicies.find((p) => p.productVersionId === pv.id && p.status !== "cancelled")) {
+        // Deliberately generic: this is an unauthenticated route, and "this client already has a
+        // policy" would confirm to anyone that a given ID number/email holds cover here.
+        res.status(400).json({ error: "Registration not completed", message: "We couldn't complete this registration online. Please contact our office and we'll help you finish it." });
+        return;
+      }
     }
 
     try {
@@ -11935,7 +12353,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           orgId, pv.id, product, currency || "USD", paymentSchedule || "monthly",
           Number(pv.dependentMaxAge ?? 20),
           {
-            dateOfBirth,
+            // The DOB on file wins for a matched existing client (the request's value is only
+            // used to fill a blank one above) — never price off an unverified public input.
+            dateOfBirth: client.dateOfBirth || dateOfBirth,
             coverAmount: typeof policyholderCoverInput === "number" ? policyholderCoverInput : undefined,
             coverTopup: policyholderCoverTopup || undefined,
           },
@@ -11983,7 +12403,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const existingForClient = await storage.getPoliciesByClient(client.id, orgId);
       if (existingForClient.find((p) => p.productVersionId === policyParsed.productVersionId && p.status !== "cancelled")) {
-        res.status(400).json({ error: "Duplicate policy", message: "This client already has an active policy for this product." });
+        res.status(400).json({ error: "Registration not completed", message: "We couldn't complete this registration online. Please contact our office and we'll help you finish it." });
         return;
       }
       const memberRows: Array<{ clientId?: string | null; dependentId?: string | null; role: string; coverAmount?: number; premiumContribution?: number }> = [
@@ -12012,7 +12432,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         requestId: (req as any).requestId,
         ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
       } as any);
-      if (normalizedPaymentMethod) {
+      // An existing client's saved default payment method is theirs — an unauthenticated
+      // registration must not replace it (same reasoning as matchedExistingClient above).
+      if (normalizedPaymentMethod && !matchedExistingClient) {
         await storage.upsertDefaultClientPaymentMethod(orgId, client.id, {
           organizationId: orgId, clientId: client.id, ...normalizedPaymentMethod, isDefault: true, isActive: true,
         } as any);
@@ -12067,12 +12489,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       res.status(201).json({
-        policyNumber: policy.policyNumber, activationCode: client.activationCode, clientId: client.id,
+        policyNumber: policy.policyNumber,
+        // Withheld for a matched existing client — see matchedExistingClient above. The activation
+        // notification dispatched above still reaches them via the contact details on file.
+        activationCode: matchedExistingClient ? null : client.activationCode,
+        clientId: matchedExistingClient ? null : client.id,
         paymentLink,
         warnings,
-        message: agentId
-          ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
-          : "Policy registered. Use your policy number and activation code to claim your account.",
+        message: matchedExistingClient
+          ? "Policy registered. Your account details have been sent to the contact details we already have on file for you."
+          : agentId
+            ? "Policy registered. Use your policy number and activation code to claim your account, then sign in."
+            : "Policy registered. Use your policy number and activation code to claim your account.",
       });
     } catch (e) {
       if (e instanceof z.ZodError) { res.status(400).json({ message: "Validation failed", details: e.errors }); return; }
@@ -12103,6 +12531,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!phone || !String(phone).trim()) return res.status(400).json({ message: "Phone is required." });
     if (!dateOfBirth) return res.status(400).json({ message: "Date of birth is required." });
     if (!req.body.gender) return res.status(400).json({ message: "Gender is required." });
+    if (publicApiOrgMismatch(req, orgId)) return res.status(403).json({ message: "This API credential belongs to a different organization." });
     return handlePublicPolicyRegistration(req, res, orgId, agent.id, req.body.branchId || agent.branchId || null, agent.email ? `${agent.email} (agent referral link)` : "Agent referral link");
   });
 
@@ -12239,7 +12668,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
     const user = req.user as any;
     try {
-      const parsed = insertGroupSchema.parse({ ...req.body, organizationId: user.organizationId });
+      // Legacy groups and burial societies always keep a ledger; any other group only if asked.
+      const hasLedger = req.body.isLegacy === true || req.body.type === "burial_society" || req.body.hasLedger === true;
+      const parsed = insertGroupSchema.parse({ ...req.body, hasLedger, organizationId: user.organizationId });
       const group = await storage.createGroup(parsed);
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
       return res.status(201).json(group);
@@ -12257,7 +12688,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const existing = await storage.getGroup(id, user.organizationId);
       if (!existing) return res.status(404).json({ message: "Group not found" });
       if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
-      const updated = await storage.updateGroup(id, req.body, user.organizationId);
+      const patch = { ...req.body };
+      const nextIsLegacy = patch.isLegacy ?? existing.isLegacy;
+      const nextType = patch.type ?? existing.type;
+      if (nextIsLegacy === true || nextType === "burial_society") patch.hasLedger = true;
+      else if (patch.hasLedger === false && existing.hasLedger) {
+        // Don't let a group with ledger history silently lose its ledger view.
+        const entries = await storage.getGroupLedgerEntries(user.organizationId, id);
+        if (entries.length > 0) return res.status(400).json({ message: "This group already has ledger entries, so it has to stay a ledger group." });
+      }
+      const updated = await storage.updateGroup(id, patch, user.organizationId);
       await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
       return res.json(updated);
     } catch (err: any) {
@@ -12266,7 +12706,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/groups/:id/policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     const group = await storage.getGroup(groupId, user.organizationId);
@@ -12462,6 +12902,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── Group ledger (premium-in/claim-out balance — distinct from the pool-balance/contributions
   // routes above, which are the separate voluntary-contribution pool-society system) ──
+  /** Current ledger balance of every ledger group, for the Ledger Groups list. One query. */
+  app.get("/api/groups/ledger-balances", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const tdb = await getDbForOrg(user.organizationId);
+    const rows = await tdb.execute(sql`
+      SELECT group_id, currency,
+        SUM(CASE WHEN entry_type IN ('premium_credit', 'adjustment_credit', 'historical_import') THEN amount
+                 WHEN entry_type IN ('claim_debit', 'adjustment_debit') THEN -amount ELSE 0 END) AS balance
+      FROM group_ledger_entries
+      WHERE organization_id = ${user.organizationId}
+      GROUP BY group_id, currency
+    `);
+    const out: Record<string, Record<string, number>> = {};
+    for (const r of ((rows as any).rows ?? rows) as any[]) {
+      (out[r.group_id] ??= {})[r.currency] = parseFloat(r.balance);
+    }
+    return res.json(out);
+  });
+
   app.get("/api/groups/:id/ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
@@ -13227,7 +13686,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Diagnostics ────────────────────────────────────────
 
-  app.get("/api/diagnostics", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/diagnostics", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -13246,7 +13705,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Enhanced Dashboard Stats ───────────────────────────
 
-  app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/revenue-trend", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13277,7 +13736,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(trend);
   });
 
-  app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/policy-status-breakdown", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13298,7 +13757,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(breakdown);
   });
 
-  app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     const isAgent = isAgentScoped(userRoles);
@@ -13312,7 +13771,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(stages);
   });
 
-  app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/covered-lives", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13330,7 +13789,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
-  app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/product-performance", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -13378,7 +13837,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(performance);
   });
 
-  app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, async (req, res) => {
+  app.get("/api/dashboard/lapse-retention", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);

@@ -40,7 +40,7 @@ export function CommandCenter() {
   const arr = (x: any): any[] => (Array.isArray(x) ? x : []);
   const submittedReqs = arr(requisitions).filter((r) => r?.status === "submitted").length;
   const openClaims = arr(claims).filter((c) => !["closed", "paid", "rejected", "completed"].includes(c?.status)).length;
-  const reviewClaims = arr(claims).filter((c) => c?.status === "submitted" || c?.status === "verified").length;
+  const reviewClaims = arr(claims).filter((c) => c?.status === "submitted" || c?.status === "verified" || c?.status === "under_investigation").length;
   const openPipeline = arr(leads).filter((l) => !["lost", "activated"].includes(l?.stage)).length;
   const activeFunerals = arr(funerals).filter((f) => f?.status !== "closed" && f?.status !== "completed").length;
   const pendingApprovals = arr(approvals).filter((a) => a?.status === "pending").length;

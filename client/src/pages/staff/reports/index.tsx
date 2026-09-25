@@ -119,6 +119,7 @@ export default function StaffReports() {
                   <SelectItem value="__all__">All statuses</SelectItem>
                   <SelectItem value="submitted">Submitted</SelectItem>
                   <SelectItem value="verified">Verified</SelectItem>
+                  <SelectItem value="under_investigation">Under Investigation</SelectItem>
                   <SelectItem value="approved">Approved</SelectItem>
                   <SelectItem value="paid">Paid</SelectItem>
                   <SelectItem value="closed">Closed</SelectItem>

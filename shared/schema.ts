@@ -1144,6 +1144,15 @@ export const policyMembers = pgTable(
      *  same snapshot convention as case_service_charges.computedAmount, so a later
      *  age_band_rate_cards edit never silently rewrites a historical policy's billing. */
     premiumContribution: numeric("premium_contribution"),
+    /** Claim verdict for this covered life, written by the claim workflow
+     *  (server/claim-workflow.ts) — null (never claimed) | claim_pending | under_investigation |
+     *  claimed (approved) | claim_declined. The claim itself points here via
+     *  claims.policyMemberId; this is the "what happened to this person" marker shown on the
+     *  policy. */
+    claimStatus: text("claim_status"),
+    claimVerdictAt: timestamp("claim_verdict_at"),
+    claimVerdictNote: text("claim_verdict_note"),
+    dateOfDeath: date("date_of_death"),
   },
   (t) => [
     index("pm_policy_idx").on(t.policyId),
@@ -1702,6 +1711,8 @@ export const claims = pgTable(
      *  addition to) a cash payout — see server/group-ledger.ts (future phase). Nullable —
      *  harmless/unused until the group-ledger debit logic is built. */
     groupId: uuid("group_id").references(() => groups.id),
+    /** The covered life this claim is for — the verdict is written back onto that member. */
+    policyMemberId: uuid("policy_member_id").references(() => policyMembers.id),
     claimNumber: text("claim_number").notNull(),
     claimType: text("claim_type").notNull(),
     status: text("status").default("submitted").notNull(),
@@ -1726,10 +1737,25 @@ export const claims = pgTable(
     verifiedBy: uuid("verified_by").references(() => users.id),
     approvedBy: uuid("approved_by").references(() => users.id),
     approvalNotes: text("approval_notes"),
+    /** Set while status is under_investigation: what is being investigated, and the next steps
+     *  before the claim goes back for approval. Findings are recorded when it's concluded. */
+    investigationReason: text("investigation_reason"),
+    investigationNextSteps: text("investigation_next_steps"),
+    investigationOpenedAt: timestamp("investigation_opened_at"),
+    investigationOpenedBy: uuid("investigation_opened_by").references(() => users.id),
+    investigationFindings: text("investigation_findings"),
+    investigationClosedAt: timestamp("investigation_closed_at"),
+    /** The final verdict (approved or rejected) — who, when, and why. */
+    decisionReason: text("decision_reason"),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at"),
+    /** Amount actually debited from the group's ledger on approval (ledger groups only). */
+    ledgerAmount: numeric("ledger_amount", { precision: 12, scale: 2 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
     index("claims_org_idx").on(t.organizationId),
+    index("claims_policy_member_idx").on(t.policyMemberId),
     index("claims_policy_idx").on(t.policyId),
     index("claims_status_idx").on(t.status),
     index("claims_client_idx").on(t.clientId),
@@ -2889,6 +2915,9 @@ export const notificationLogs = pgTable(
     failureReason: text("failure_reason"),
     readAt: timestamp("read_at"),
     sentAt: timestamp("sent_at"),
+    /** SMS only: when a retryable failure (provider down, paused, allowance used up) is due to be
+     *  retried by the SMS retry sweep. null = no retry pending. */
+    nextRetryAt: timestamp("next_retry_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
@@ -2898,6 +2927,44 @@ export const notificationLogs = pgTable(
     index("notification_logs_recipient_read_idx").on(t.recipientId, t.readAt),
   ]
 );
+
+/**
+ * Every SMS the platform tried to send for this org — the source for the tenant's SMS usage
+ * report. One row per send attempt (a notification retried later gets a new row per attempt).
+ * creditsCharged is what was deducted from the platform-granted allowance (0 when not metered,
+ * refunded to 0 when the provider rejected it).
+ */
+export const smsMessages = pgTable(
+  "sms_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id),
+    recipient: text("recipient").notNull(),
+    /** No FK on purpose — a log row must never fail to write because a referenced row moved. */
+    clientId: uuid("client_id"),
+    message: text("message").notNull(),
+    segments: integer("segments").default(1).notNull(),
+    creditsCharged: integer("credits_charged").default(0).notNull(),
+    /** transactional | promotional | otp */
+    kind: text("kind").default("transactional").notNull(),
+    /** notification | test | mfa | broadcast | other — what triggered the send. */
+    source: text("source").default("other").notNull(),
+    /** Notification event type (payment_receipt, pre_lapse_warning…) when source = notification. */
+    eventType: text("event_type"),
+    /** sent | failed | blocked (allowance used up / SMS paused) */
+    status: text("status").notNull(),
+    failureReason: text("failure_reason"),
+    providerMessageId: text("provider_message_id"),
+    notificationLogId: uuid("notification_log_id"),
+    sentByUserId: uuid("sent_by_user_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("sms_messages_org_created_idx").on(t.organizationId, t.createdAt)]
+);
+export type SmsMessage = typeof smsMessages.$inferSelect;
+export type InsertSmsMessage = typeof smsMessages.$inferInsert;
 
 /**
  * Inbound email inbox — mail received at a tenant's provisioned address
@@ -4046,12 +4113,14 @@ export const VALID_POLICY_TRANSITIONS: Record<string, string[]> = {
   archived: ["active", "inactive"],
 };
 
-export const CLAIM_STATUSES = ["submitted", "verified", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;
+export const CLAIM_STATUSES = ["submitted", "verified", "under_investigation", "approved", "scheduled", "payable", "completed", "paid", "closed", "rejected"] as const;
 export type ClaimStatus = typeof CLAIM_STATUSES[number];
 
+/** under_investigation -> verified means "investigation concluded, back for approval". */
 export const VALID_CLAIM_TRANSITIONS: Record<string, string[]> = {
-  submitted: ["verified", "rejected"],
-  verified: ["approved", "rejected"],
+  submitted: ["verified", "under_investigation", "approved", "rejected"],
+  verified: ["approved", "under_investigation", "rejected"],
+  under_investigation: ["verified", "rejected"],
   approved: ["scheduled", "payable"],
   scheduled: ["completed"],
   payable: ["paid"],
@@ -4093,6 +4162,9 @@ export const groups = pgTable(
     capacity: integer("capacity"),
     isActive: boolean("is_active").default(true).notNull(),
     isLegacy: boolean("is_legacy").default(false).notNull(),
+    /** Ledger group (legacy group / burial society): keeps a running group ledger that group
+     *  receipts credit and approved member claims debit. Plain group policies leave this false. */
+    hasLedger: boolean("has_ledger").default(false).notNull(),
     /**
      * Pool-society engine (server/pool-society.ts, Phase 3d) — configurable payout amounts per
      * event type: array of { eventType, label, amount, currency }. Null for every group today;

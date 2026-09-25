@@ -11,7 +11,7 @@ vi.mock("../../server/storage", () => ({
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: vi.fn((_orgId: string, userId: string) => Promise.resolve(userId)) }));
 
-import { computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge } from "../../server/route-helpers";
+import { computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError } from "../../server/route-helpers";
 import { storage } from "../../server/storage";
 
 const RATED_VERSION: any = { id: "pv1", productId: "prod1", dependentMaxAge: 18 };
@@ -110,13 +110,22 @@ describe("computeIndividualAgeRatedPremium", () => {
     expect(yearly.total).toBeCloseTo(monthly.total * 12, 5);
   });
 
-  it("prices at $0 and warns when no rate card is configured for the currency", async () => {
+  it("refuses to price (422 PricingConfigError) when no rate card is configured for the currency", async () => {
     vi.mocked(storage.getAgeBandRateCards).mockResolvedValue([]);
-    const result = await computeIndividualAgeRatedPremium(
+    const attempt = computeIndividualAgeRatedPremium(
       "org1", "pv1", RATED_PRODUCT, "USD", "monthly", 18,
       { dateOfBirth: dobForAge(40) }, [],
     );
-    expect(result.total).toBe(0);
+    await expect(attempt).rejects.toBeInstanceOf(PricingConfigError);
+    await expect(attempt).rejects.toMatchObject({ status: 422, expose: true });
+  });
+
+  it("refuses to price when just ONE member's band is missing — never a free life on a paid policy", async () => {
+    vi.mocked(storage.getAgeBandRateCards).mockResolvedValue(RATE_CARDS.filter((rc) => rc.ageBand !== "85_plus") as any);
+    await expect(computeIndividualAgeRatedPremium(
+      "org1", "pv1", RATED_PRODUCT, "USD", "monthly", 18,
+      { dateOfBirth: dobForAge(40) }, [{ dateOfBirth: dobForAge(90) }],
+    )).rejects.toBeInstanceOf(PricingConfigError);
   });
 });
 
