@@ -30,7 +30,7 @@ vi.mock("../../server/notifications", () => ({
   dispatchNotification: (...args: any[]) => dispatchNotification(...args),
 }));
 
-import { transitionClaim, ledgerDebitFor, notifyClientOfClaim, ClaimWorkflowError } from "../../server/claim-workflow";
+import { transitionClaim, ledgerDebitFor, notifyClientOfClaim, ClaimWorkflowError, isDeathClaimType, findConflictingMemberClaim } from "../../server/claim-workflow";
 import { VALID_CLAIM_TRANSITIONS } from "../../shared/schema";
 
 const baseClaim = {
@@ -102,6 +102,16 @@ describe("transitionClaim guard rails (checked before anything is written)", () 
     );
   });
 
+  it("needs the claim approval permission to decline or investigate from the Claims page too", async () => {
+    storageMock.getUserEffectivePermissions.mockResolvedValue(["write:claim"]);
+    await expectRejection(transitionClaim({ req: req(), claimId: "c1", toStatus: "rejected", reason: "Not covered", source: "claims" }), 403);
+    await expectRejection(
+      transitionClaim({ req: req(), claimId: "c1", toStatus: "under_investigation", investigationReason: "Dates", investigationNextSteps: "Call family", source: "claims" }),
+      403,
+    );
+    expect(withOrgTransaction).not.toHaveBeenCalled();
+  });
+
   it("proceeds to the transaction once the inputs are valid", async () => {
     withOrgTransaction.mockResolvedValue({ claim: { ...baseClaim, status: "rejected" }, ledger: null });
     const result = await transitionClaim({ req: req(), claimId: "c1", toStatus: "rejected", reason: "Not covered", source: "approvals" });
@@ -163,5 +173,32 @@ describe("notifyClientOfClaim — the client SMS", () => {
   it("does nothing for a claim with no client", async () => {
     await notifyClientOfClaim("org1", { id: "c1", clientId: null as any, claimNumber: "CLM-9", policyId: "p1" }, "approved");
     expect(dispatchNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe("one death claim per person — living members' claims don't block it", () => {
+  const txWith = (rows: any[]) => ({
+    select: () => ({ from: () => ({ where: async () => rows }) }),
+  }) as any;
+
+  it("treats repatriation, cash in lieu and group service as death claims, disability as not", () => {
+    for (const t of ["death", "accidental_death", "repatriation", "cash_in_lieu", "group_service"]) expect(isDeathClaimType(t)).toBe(true);
+    for (const t of ["disability", "hospital_cash", null, undefined]) expect(isDeathClaimType(t as any)).toBe(false);
+  });
+
+  it("an approved disability claim does not block a death claim", async () => {
+    const tx = txWith([{ id: "a", claimNumber: "CLM-000001", status: "approved", claimType: "disability" }]);
+    expect(await findConflictingMemberClaim(tx, "org1", "m1", "death")).toBeNull();
+  });
+
+  it("a second death claim of any death type is blocked", async () => {
+    const tx = txWith([{ id: "a", claimNumber: "CLM-000001", status: "submitted", claimType: "repatriation" }]);
+    expect(await findConflictingMemberClaim(tx, "org1", "m1", "death")).toMatchObject({ claimNumber: "CLM-000001" });
+  });
+
+  it("a second claim of the same living type is blocked, and a claim never conflicts with itself", async () => {
+    const tx = txWith([{ id: "a", claimNumber: "CLM-000001", status: "approved", claimType: "disability" }]);
+    expect(await findConflictingMemberClaim(tx, "org1", "m1", "disability")).toMatchObject({ claimNumber: "CLM-000001" });
+    expect(await findConflictingMemberClaim(tx, "org1", "m1", "disability", "a")).toBeNull();
   });
 });

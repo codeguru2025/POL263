@@ -69,6 +69,10 @@ export default function TenantSignup() {
   const [payerPhone, setPayerPhone] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
   const [polling, setPolling] = useState(false);
+  const [paymentFailed, setPaymentFailed] = useState(false);
+  // Bumped on every payment prompt so each attempt polls under its own query key — otherwise the
+  // previous attempt's cached "payment_failed" answer is read back instantly and ends the retry.
+  const [paymentAttempt, setPaymentAttempt] = useState(0);
   const [provisioned, setProvisioned] = useState(false);
   const [tenantSlug, setTenantSlug] = useState("");
   const [domainCommissioned, setDomainCommissioned] = useState(false);
@@ -114,14 +118,16 @@ export default function TenantSignup() {
       });
       return res.json() as Promise<{ redirectUrl?: string }>;
     },
+    onMutate: () => setPaymentFailed(false),
     onSuccess: (data) => {
       if (data.redirectUrl) { window.location.href = data.redirectUrl; return; }
+      setPaymentAttempt((n) => n + 1);
       setPolling(true);
     },
   });
 
   const { data: pollData } = useQuery({
-    queryKey: [`/api/public/tenant-signup/${token}/poll`, polling],
+    queryKey: [`/api/public/tenant-signup/${token}/poll`, polling, paymentAttempt],
     queryFn: async () => {
       const res = await apiRequest("POST", `/api/public/tenant-signup/${token}/poll`);
       return res.json() as Promise<{ status: string; provisioned?: boolean; slug?: string; domainCommissioned?: boolean }>;
@@ -136,8 +142,12 @@ export default function TenantSignup() {
       setProvisioned(true);
       if (pollData.slug) setTenantSlug(pollData.slug);
       setDomainCommissioned(!!pollData.domainCommissioned);
+    } else if (polling && pollData?.status === "payment_failed") {
+      // PayNow cancelled/failed the payment — stop waiting and let them send it again.
+      setPolling(false);
+      setPaymentFailed(true);
     }
-  }, [pollData]);
+  }, [pollData, polling]);
 
   useEffect(() => () => {
     if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
@@ -505,6 +515,11 @@ export default function TenantSignup() {
                 )}
 
                 {initiateMutation.isError && <p className="text-sm text-destructive">{(initiateMutation.error as Error).message}</p>}
+                {paymentFailed && (
+                  <p className="text-sm text-destructive" data-testid="text-signup-payment-failed">
+                    The payment didn't go through — it was cancelled or no prompt reached your phone. Check the number and send the prompt again, or choose another payment method.
+                  </p>
+                )}
 
                 {polling ? (
                   <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-2">

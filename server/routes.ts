@@ -112,7 +112,7 @@ import {
   policyMembers, funeralQuotations, funeralCases, approvalRequests, policyHolderChanges,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
-import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES } from "./claim-workflow";
+import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES, findConflictingMemberClaim, isDeathClaimType } from "./claim-workflow";
 import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
@@ -267,16 +267,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
 
   /**
+   * The policy's premium once `removedMember` has come off it (call after deactivating them).
+   * recalculatePolicyPremiumIfNeeded deliberately leaves two kinds of policy alone, which meant
+   * removing (or a death claim ending) a member never lowered their premium:
+   *  - individual_age_rated: the premium is the sum of each member's stored premiumContribution,
+   *    so the removed member's contribution comes off exactly;
+   *  - a manually set premium (premiumOverride, e.g. every legacy policy): there's no formula to
+   *    recompute it from, so it's left unchanged and flagged for staff to review by hand.
+   */
+  async function repricePolicyAfterMemberRemoval(policy: any, removedMember: any, orgId: string): Promise<{ policy: any; premiumReviewNeeded: boolean }> {
+    if (policy?.premiumOverride != null && String(policy.premiumOverride).trim() !== "") {
+      return { policy, premiumReviewNeeded: true };
+    }
+    const pv = policy?.productVersionId ? await storage.getProductVersion(policy.productVersionId, orgId) : undefined;
+    const product = pv ? await storage.getProduct(pv.productId, orgId) : undefined;
+    if (product?.pricingModel === "individual_age_rated") {
+      const contribution = parseFloat(String(removedMember?.premiumContribution ?? ""));
+      if (!Number.isFinite(contribution) || contribution <= 0) return { policy, premiumReviewNeeded: true };
+      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const next = Math.max(0, oldPremium - contribution).toFixed(2);
+      const updated = await storage.updatePolicy(policy.id, { premiumAmount: next }, orgId);
+      return { policy: updated || { ...policy, premiumAmount: next }, premiumReviewNeeded: false };
+    }
+    return { policy: await recalculatePolicyPremiumIfNeeded(policy, orgId), premiumReviewNeeded: false };
+  }
+
+  /**
    * An approved death claim ends that covered life's cover: the dependant is taken off the policy
    * (same path as "Remove member" — premium recalculated, the difference reconciled from today,
    * audit-logged). The policyholder is never removed here; a deceased policyholder is replaced
    * through POST /api/policies/:id/change-policyholder, which keeps the original on record.
    * Best effort — the claim decision has already committed; a failure is logged, not thrown.
    */
-  async function endDeceasedMemberCover(req: any, claim: any): Promise<{ ended: boolean; oldPremium?: string; newPremium?: string } | null> {
+  async function endDeceasedMemberCover(req: any, claim: any): Promise<{ ended: boolean; oldPremium?: string; newPremium?: string; premiumReviewNeeded?: boolean } | null> {
     try {
       if (claim?.status !== "approved" || !claim.policyMemberId) return null;
-      if (!["death", "accidental_death", "group_service", "cash_in_lieu"].includes(claim.claimType)) return null;
+      if (!isDeathClaimType(claim.claimType)) return null;
       const orgId = claim.organizationId;
       const policy = await storage.getPolicy(claim.policyId, orgId);
       if (!policy) return null;
@@ -285,7 +311,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!target || target.isActive === false || target.role !== "dependent") return { ended: false };
       const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
       const removed = await storage.deactivatePolicyMember(target.id, policy.id, orgId);
-      const recalced = await recalculatePolicyPremiumIfNeeded(policy, orgId);
+      const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, orgId);
       const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
       let reconciliation: any = null;
       if (Math.abs(newPremium - oldPremium) >= 0.01) {
@@ -298,8 +324,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
       await auditLog(req, "END_MEMBER_COVER_DECEASED", "PolicyMember", target.id, target,
-        { ...removed, claimId: claim.id, claimNumber: claim.claimNumber, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), reconciliation }, orgId);
-      return { ended: true, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2) };
+        { ...removed, claimId: claim.id, claimNumber: claim.claimNumber, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), reconciliation, premiumReviewNeeded }, orgId);
+      return { ended: true, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), premiumReviewNeeded };
     } catch (err: any) {
       structuredLog("error", "Ending deceased member's cover failed", { claimId: claim?.id, error: err?.message });
       return null;
@@ -1129,7 +1155,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/agent-content-posts", requireAuth, requireTenantScope, requirePermission("manage:settings"), async (req, res) => {
     const user = req.user as any;
     try {
-      const data = insertAgentContentPostSchema.parse({ ...req.body, organizationId: user.organizationId, createdByUserId: user.id });
+      // createdByUserId is a users FK on the tenant DB — the registry id differs on a dedicated-DB tenant.
+      await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id);
+      const data = insertAgentContentPostSchema.parse({ ...req.body, organizationId: user.organizationId, createdByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id) });
       const post = await storage.createAgentContentPost(data);
       await auditLog(req, "CREATE_AGENT_CONTENT_POST", "AgentContentPost", post.id, null, post);
       return res.status(201).json(post);
@@ -5133,7 +5161,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
     const removed = await storage.deactivatePolicyMember(target.id, policy.id, user.organizationId);
-    const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
+    const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, user.organizationId);
     const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
     let reconciliation: any = null;
     if (Math.abs(newPremium - oldPremium) >= 0.01) {
@@ -5151,8 +5179,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         actorId: user.id,
       });
     }
-    await auditLog(req, "REMOVE_POLICY_MEMBER", "PolicyMember", target.id, target, { ...removed, reconciliation });
-    return res.json({ ...removed, reconciliation });
+    await auditLog(req, "REMOVE_POLICY_MEMBER", "PolicyMember", target.id, target, { ...removed, reconciliation, premiumReviewNeeded });
+    return res.json({ ...removed, reconciliation, premiumReviewNeeded });
   });
 
   // Preview the premium + arrears/credit impact of a prospective change (product
@@ -7502,9 +7530,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         [memberToLink] = await tdb.select().from(policyMembers)
           .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, claim.policyId))).limit(1);
         if (!memberToLink) return res.status(400).json({ message: "That member isn't on this claim's policy." });
-        const [other] = await tdb.select({ claimNumber: claims.claimNumber }).from(claims)
-          .where(and(eq(claims.organizationId, orgId), eq(claims.policyMemberId, memberToLink.id), sql`${claims.status} <> 'rejected'`, sql`${claims.id} <> ${claim.id}`)).limit(1);
-        if (other) return res.status(409).json({ message: `This member already has claim ${other.claimNumber}.` });
+        const other = await findConflictingMemberClaim(tdb, orgId, memberToLink.id, claim.claimType, claim.id);
+        if (other) return res.status(409).json({ message: `This member already has claim ${other.claimNumber} (${other.claimType.replace(/_/g, " ")}).` });
         patch.policyMemberId = memberToLink.id;
       }
       let quotationToLink: any = null;
@@ -7516,9 +7543,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       const updated = await withOrgTransaction(orgId, async (tx) => {
+        // Re-check under a lock: a decision committed since the check above must not have its
+        // amount changed underneath it.
+        await tx.execute(sql`SELECT id FROM claims WHERE id = ${claim.id} FOR UPDATE`);
+        const [current] = await tx.select({ status: claims.status }).from(claims).where(eq(claims.id, claim.id)).limit(1);
+        if (!current || !UNDECIDED_CLAIM_STATUSES.includes(current.status)) {
+          throw Object.assign(new Error("This claim has just been decided and can no longer be changed."), { httpStatus: 409 });
+        }
         let row = claim;
         if (Object.keys(patch).length) {
           [row] = await tx.update(claims).set(patch).where(and(eq(claims.id, claim.id), eq(claims.organizationId, orgId))).returning();
+        }
+        // The Approvals queue shows the amount captured when the claim was submitted — keep it in
+        // step so the approver decides on what the claim says now, not what it said then.
+        if (patch.cashInLieuAmount !== undefined || patch.currency !== undefined || quotationToLink) {
+          const refreshed = {
+            amount: row.cashInLieuAmount ?? null,
+            currency: row.currency ?? null,
+            ...(quotationToLink ? { quotationNumber: quotationToLink.quotationNumber, quotationTotal: quotationToLink.grandTotal ?? quotationToLink.total ?? null } : {}),
+          };
+          await tx.update(approvalRequests)
+            .set({ requestData: sql`coalesce(${approvalRequests.requestData}, '{}'::jsonb) || ${JSON.stringify(refreshed)}::jsonb` } as any)
+            .where(and(
+              eq(approvalRequests.organizationId, orgId),
+              eq(approvalRequests.requestType, "CLAIM_REVIEW"),
+              eq(approvalRequests.entityId, claim.id),
+              inArray(approvalRequests.status, ["pending", "on_hold"]),
+            ));
         }
         if (memberToLink) {
           if (claim.policyMemberId) {
@@ -7542,6 +7593,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       return res.json(updated);
     } catch (err: any) {
+      if (err?.httpStatus === 409) return res.status(409).json({ message: err.message });
       structuredLog("error", "PATCH /api/claims/:id failed", { claimId: claim.id, error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
@@ -7584,7 +7636,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // product (i.e. every real product today) is completely unaffected.
       let hospitalCashPatch: Record<string, any> = {};
       let claimPolicy: any = null;
-      if (req.body.policyId) {
+      if (!req.body.policyId) return res.status(400).json({ message: "Pick the policy this claim is on." });
+      {
         claimPolicy = await storage.getPolicy(req.body.policyId, user.organizationId);
         if (!claimPolicy) return res.status(404).json({ message: "Policy not found" });
         const wp = await checkWaitingPeriodViolation(claimPolicy, user.organizationId, caseFillPatch.dateOfDeath ?? req.body.dateOfDeath);
@@ -7625,14 +7678,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         [claimedMember] = await tdb.select().from(policyMembers)
           .where(and(eq(policyMembers.id, req.body.policyMemberId), eq(policyMembers.policyId, req.body.policyId))).limit(1);
         if (!claimedMember) return res.status(400).json({ message: "That member isn't on this policy." });
-        const [openClaim] = await tdb.select({ claimNumber: claims.claimNumber, status: claims.status }).from(claims)
-          .where(and(
-            eq(claims.organizationId, user.organizationId),
-            eq(claims.policyMemberId, claimedMember.id),
-            sql`${claims.status} <> 'rejected'`,
-          )).limit(1);
+        // Only one death claim per person; a living member's claim (e.g. disability) doesn't
+        // block a later death claim.
+        const openClaim = await findConflictingMemberClaim(tdb, user.organizationId, claimedMember.id, req.body.claimType);
         if (openClaim) {
-          return res.status(409).json({ message: `This member already has claim ${openClaim.claimNumber} (${openClaim.status.replace(/_/g, " ")}). A person can only be claimed for once.` });
+          return res.status(409).json({ message: `This member already has claim ${openClaim.claimNumber} (${openClaim.claimType.replace(/_/g, " ")}, ${openClaim.status.replace(/_/g, " ")}).${isDeathClaimType(req.body.claimType) ? " A person's death can only be claimed for once." : ""}` });
         }
       }
 
@@ -7662,12 +7712,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ message: "Say what needs investigating and what the next steps are." });
       }
 
-      const {
-        quotationId: _quotationId, recommendation: _recommendation, investigationReason: _ir, investigationNextSteps: _ins,
-        ...bodyWithoutQuotationId
-      } = req.body;
+      // Only the fields a claim form captures. Everything else on a claim (who approved or decided
+      // it, ex gratia, ledger amount, fraud flags, waiting-period waiver) is set by the workflow,
+      // never by the submitter — spreading req.body let a submitter pre-fill those. The client is
+      // always the policy's own holder, so claim SMSes can't be pointed at another client.
+      const pick = (k: string) => (req.body[k] === "" ? undefined : req.body[k]);
+      const submittedFields = {
+        policyId: claimPolicy.id,
+        clientId: claimPolicy.clientId,
+        branchId: claimPolicy.branchId ?? undefined,
+        claimType: pick("claimType"),
+        deceasedName: pick("deceasedName"),
+        deceasedRelationship: pick("deceasedRelationship"),
+        dateOfDeath: pick("dateOfDeath"),
+        causeOfDeath: pick("causeOfDeath"),
+        admissionDate: pick("admissionDate"),
+        dischargeDate: pick("dischargeDate"),
+        cashInLieuAmount: pick("cashInLieuAmount"),
+        currency: pick("currency"),
+        approvalNotes: pick("approvalNotes"),
+      };
       const parsed = insertClaimSchema.parse({
-        ...bodyWithoutQuotationId,
+        ...submittedFields,
         ...caseFillPatch,
         ...hospitalCashPatch,
         groupId: claimGroup?.id ?? null,
