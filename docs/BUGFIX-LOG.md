@@ -10,6 +10,32 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-26 — Dev server silently exited (code 1) whenever a page logged a React warning
+
+**Symptom:** while recording the product demo against a local dev server, the server died
+with no error every time the Groups page was opened. The only clue was the last log line: a
+forwarded browser warning, ``(client) [console.error] Each child in a list should have a
+unique "key" prop … StaffGroups``. The exit code was 1.
+
+**Root cause:** `server/vite.ts` passed a `customLogger` whose `error` called `process.exit(1)`.
+That is an old template default. Newer Vite forwards the browser's `console.error` to the server
+logger. So any client-side warning (here, a missing React key) became a fatal server exit.
+The trigger was a keyless `<>` fragment wrapping each group row in `client/src/pages/staff/groups.tsx`.
+The `key` sat on the inner `TableRow`, not on the fragment. Dev only: production serves the
+built bundle without Vite.
+
+**Fix:** `server/vite.ts` uses the plain Vite logger (logs errors, never exits).
+`groups.tsx` wraps each group row in `<Fragment key={group.id}>`.
+
+**Verified:** re-ran the Groups demo scene, which had crashed the server on every run before. The
+server stayed up and the rest of the scenes recorded.
+
+**Lesson for next time:** if the dev server dies with exit code 1 and no stack trace, grep for
+`process.exit` in logger or error hooks before anything else. Look at the last forwarded
+`(client) [console.error]` line. Never make a logger fatal.
+
+---
+
 ## 2026-09-26 — Float money maths under-counted multi-month payments and dropped cents; heavy CPU work froze the server
 
 **Symptom (found in a review, not reported by users):** several money paths did arithmetic

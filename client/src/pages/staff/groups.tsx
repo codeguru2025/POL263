@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, EmptyState } from "@/components/ds";
@@ -2062,9 +2062,8 @@ export default function StaffGroups() {
               </TableHeader>
               <TableBody>
                 {filteredGroups.map((group) => (
-                  <>
+                  <Fragment key={group.id}>
                     <TableRow
-                      key={group.id}
                       className={`hover:bg-muted/30 transition-colors cursor-pointer ${expandedGroupId === group.id ? "bg-muted/20" : ""}`}
                       onClick={() => setExpandedGroupId(expandedGroupId === group.id ? null : group.id)}
                       data-testid={`row-group-${group.id}`}
@@ -2120,7 +2119,7 @@ export default function StaffGroups() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </TableBody>
             </DataTable>
