@@ -3,6 +3,7 @@ import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
+import { toCents, fromCents, sumCents, mulCents, moneyString, roundMoney, subMoney } from "@shared/money";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import { isRevenueShareBillingForOrg } from "./platform-fee";
@@ -2393,7 +2394,7 @@ export class DatabaseStorage implements IStorage {
       map.set(r.policyId, {
         lastPaymentAt: r.lastIssuedAt ? new Date(r.lastIssuedAt).toISOString() : "",
         receiptCount: Number(r.receiptCount),
-        totalAmount: Number(r.totalAmount ?? 0).toFixed(2),
+        totalAmount: moneyString(r.totalAmount),
       });
     }
     return map;
@@ -2414,8 +2415,8 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => {
       const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
       const dueDate = r.currentCycleEnd ?? null;
-      const premium = parseFloat(r.premiumAmount || "0");
-      const totalReceived = parseFloat(agg.totalAmount || "0");
+      const premiumCents = toCents(r.premiumAmount);
+      const receivedCents = toCents(agg.totalAmount);
       const monthsPaid = agg.receiptCount;
       let graceDaysUsed = 0;
       let graceDaysRemaining: number | null = null;
@@ -2427,11 +2428,11 @@ export class DatabaseStorage implements IStorage {
         graceDaysUsed = Math.max(0, Math.min(graceDays, graceDays - graceDaysRemaining));
       }
       let outstandingPremium = "0";
-      if (dueDate && dueDate < today && premium > 0) {
+      if (dueDate && dueDate < today && premiumCents > 0) {
         outstandingPremium = r.premiumAmount;
       }
-      const expectedPaid = monthsPaid * premium;
-      const advancePremium = totalReceived > expectedPaid ? (totalReceived - expectedPaid).toFixed(2) : "0";
+      const expectedCents = monthsPaid * premiumCents;
+      const advancePremium = receivedCents > expectedCents ? fromCents(receivedCents - expectedCents) : "0";
       return {
         ...r,
         datePaid: agg.lastPaymentAt || null,
@@ -3277,12 +3278,13 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r: any) => {
       const issuedDate = r.issuedAt ? new Date(r.issuedAt) : null;
       const productName = r.productVersionId ? productMap[r.productVersionId] || null : null;
-      const periodPremium = parseFloat(String(r.premiumAmount ?? "0"));
-      const amountNum = parseFloat(String(r.amount ?? "0"));
+      // Integer cents so whole-period counts aren't misjudged by float division.
+      const periodPremiumCents = toCents(r.premiumAmount);
+      const amountCents = toCents(r.amount);
       const MonthsPaid =
-        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(1, Math.floor(amountNum / periodPremium)) : (amountNum > 0 ? 1 : 0);
+        periodPremiumCents > 0 ? Math.max(1, Math.floor(amountCents / periodPremiumCents)) : (amountCents > 0 ? 1 : 0);
       const MonthsPaidInAdvance =
-        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(0, Math.floor(amountNum / periodPremium) - 1) : 0;
+        periodPremiumCents > 0 ? Math.max(0, Math.floor(amountCents / periodPremiumCents) - 1) : 0;
       const meta = r.metadataJson as { internalReference?: string } | null;
       const internalRef =
         (meta?.internalReference && String(meta.internalReference)) ||
@@ -3307,7 +3309,7 @@ export class DatabaseStorage implements IStorage {
       const CapturedBy = CollectedBy || ManualUser;
       const inceptionStr = r.inceptionDate ? String(r.inceptionDate) : "";
       const ActualPen =
-        periodPremium > 0 && Number.isFinite(amountNum) ? (amountNum - periodPremium).toFixed(2) : "";
+        periodPremiumCents > 0 ? fromCents(amountCents - periodPremiumCents) : "";
       const agentsName = r.agentDisplayName || r.agentEmail || "";
       const ReceiptCount = receiptCountByPolicy.get(r.policyId) ?? 0;
       const DTSTAMP = issuedDate ? toICalDTSTAMP(issuedDate) : "";
@@ -4026,7 +4028,8 @@ export class DatabaseStorage implements IStorage {
       if (!agentId) continue;
       const name = (r.agentDisplayName || r.agentEmail || "").trim() || agentId;
       const a = getAgg(agentId, name);
-      const amt = parseFloat(String(r.amount ?? 0)) || 0;
+      // Sums are kept in integer cents; fmt() converts back.
+      const amt = toCents(r.amount);
       a.sumAll += amt;
       const et = String(r.entryType || "");
       if (et === "first_months" || et === "recurring") a.sumBasic += amt;
@@ -4047,7 +4050,7 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "0.00");
+    const fmt = (cents: number) => (Number.isFinite(cents) ? fromCents(cents) : "0.00");
 
     const out = Array.from(byAgent.entries()).map(([agentId, a]) => {
       const total = a.sumAll;
@@ -4988,11 +4991,10 @@ export class DatabaseStorage implements IStorage {
     const slips = await tdb.select().from(payslips)
       .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
       .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
-    const totalGross = slips.reduce((s, p) => s + parseFloat(p.payslips.grossAmount || "0"), 0);
-    const totalNet = slips.reduce((s, p) => s + parseFloat(p.payslips.netAmount || "0"), 0);
-    const totalDeductions = totalGross - totalNet;
+    const grossCents = sumCents(slips.map((p) => p.payslips.grossAmount));
+    const netCents = sumCents(slips.map((p) => p.payslips.netAmount));
     await tdb.update(payrollRuns)
-      .set({ totalGross: String(totalGross), totalDeductions: String(totalDeductions), totalNet: String(totalNet) })
+      .set({ totalGross: fromCents(grossCents), totalDeductions: fromCents(grossCents - netCents), totalNet: fromCents(netCents) })
       .where(and(eq(payrollRuns.id, runId), eq(payrollRuns.organizationId, orgId)));
   }
 
@@ -5054,8 +5056,7 @@ export class DatabaseStorage implements IStorage {
     for (const r of allRows) {
       const ch = (r.paymentChannel || "other").toLowerCase();
       const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
-      const prev = parseFloat(amountsByMethod[key] || "0");
-      amountsByMethod[key] = (prev + parseFloat(String(r.amount || "0"))).toFixed(2);
+      amountsByMethod[key] = fromCents(toCents(amountsByMethod[key]) + toCents(r.amount));
       const cur = r.currency || "USD";
       currencyCounts[cur] = (currencyCounts[cur] || 0) + 1;
     }
@@ -5822,13 +5823,13 @@ export class DatabaseStorage implements IStorage {
   async createPettyCashFloat(data: InsertPettyCashFloat, openingBalance?: string, performedByUserId?: string): Promise<PettyCashFloat> {
     const tdb = await getDbForOrg(data.organizationId);
     const [row] = await tdb.insert(pettyCashFloats).values(data).returning();
-    const opening = parseFloat(openingBalance || "0");
-    if (opening > 0 && performedByUserId) {
+    const openingCents = toCents(openingBalance);
+    if (openingCents > 0 && performedByUserId) {
       await this.postPettyCashTransaction({
         organizationId: data.organizationId,
         floatId: row.id,
         type: "opening",
-        amount: opening.toFixed(2),
+        amount: fromCents(openingCents),
         description: "Opening float",
         performedByUserId,
         transactionDate: await todayForOrg(data.organizationId),
@@ -5862,21 +5863,22 @@ export class DatabaseStorage implements IStorage {
   // audit-log entry that must commit/rollback with this write) can pass it through instead of the
   // balance UPDATE and ledger-row INSERT below committing as two separate, non-atomic statements.
   async postPettyCashTransactionInTx(tx: OrgDataDb, data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }> {
-    const amount = parseFloat(String(data.amount));
+    // Exact 2dp string; bound into SQL as numeric so Postgres does exact decimal maths.
+    const amount = moneyString(data.amount);
     const increases = ["opening", "replenishment", "adjustment_in"];
     const decreases = ["disbursement", "adjustment_out"];
     let float: PettyCashFloat;
     let discrepancyAmount: string | undefined;
     if (increases.includes(data.type)) {
       const [row] = await tx.update(pettyCashFloats)
-        .set({ balance: sql`${pettyCashFloats.balance} + ${amount}`, updatedAt: new Date() })
+        .set({ balance: sql`${pettyCashFloats.balance} + ${amount}::numeric`, updatedAt: new Date() })
         .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)))
         .returning();
       if (!row) throw new Error("Petty cash float not found");
       float = row;
     } else if (decreases.includes(data.type)) {
       const [row] = await tx.update(pettyCashFloats)
-        .set({ balance: sql`${pettyCashFloats.balance} - ${amount}`, updatedAt: new Date() })
+        .set({ balance: sql`${pettyCashFloats.balance} - ${amount}::numeric`, updatedAt: new Date() })
         .where(and(
           eq(pettyCashFloats.id, data.floatId),
           eq(pettyCashFloats.organizationId, data.organizationId),
@@ -5887,7 +5889,7 @@ export class DatabaseStorage implements IStorage {
         const [existing] = await tx.select().from(pettyCashFloats)
           .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
         if (!existing) throw new Error("Petty cash float not found");
-        throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount.toFixed(2)}`);
+        throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount}`);
       }
       float = row;
     } else {
@@ -5896,12 +5898,11 @@ export class DatabaseStorage implements IStorage {
         .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
       if (!existing) throw new Error("Petty cash float not found");
       float = existing;
-      const counted = parseFloat(String(data.countedAmount ?? "0"));
-      discrepancyAmount = (counted - parseFloat(String(existing.balance))).toFixed(2);
+      discrepancyAmount = fromCents(toCents(data.countedAmount) - toCents(existing.balance));
     }
     const [transaction] = await tx.insert(pettyCashTransactions).values({
       ...data,
-      amount: amount.toFixed(2),
+      amount,
       balanceAfter: float.balance,
       ...(discrepancyAmount !== undefined ? { discrepancyAmount } : {}),
     }).returning();
@@ -5983,13 +5984,13 @@ export class DatabaseStorage implements IStorage {
   // Split out so callers that also need to write an audit-log entry atomically with this payment
   // can pass through their open transaction instead of the two writes below committing separately.
   async recordTombstoneOrderPaymentInTx(tx: OrgDataDb, data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }> {
-    const amount = parseFloat(String(data.amount));
+    const amount = moneyString(data.amount);
     const [order] = await tx.update(tombstoneOrders)
-      .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}` })
+      .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}::numeric` })
       .where(and(eq(tombstoneOrders.id, data.orderId), eq(tombstoneOrders.organizationId, data.organizationId)))
       .returning();
     if (!order) throw new Error("Tombstone order not found");
-    const [payment] = await tx.insert(tombstoneOrderPayments).values({ ...data, amount: amount.toFixed(2) }).returning();
+    const [payment] = await tx.insert(tombstoneOrderPayments).values({ ...data, amount }).returning();
     return { payment, order };
   }
 
@@ -6025,12 +6026,12 @@ export class DatabaseStorage implements IStorage {
     const collected = new Map<string, { total: number; currency: string }>();
     for (const r of (cashupRows.rows ?? cashupRows) as any[]) {
       const key = `${r.user_id}:${r.currency}`;
-      collected.set(key, { total: parseFloat(r.total_collected ?? 0), currency: r.currency });
+      collected.set(key, { total: roundMoney(r.total_collected), currency: r.currency });
     }
     const deposited = new Map<string, { total: number; lastDate: string | null }>();
     for (const r of (depositRows.rows ?? depositRows) as any[]) {
       const key = `${r.user_id}:${r.currency}`;
-      deposited.set(key, { total: parseFloat(r.total_deposited ?? 0), lastDate: r.last_deposit_date });
+      deposited.set(key, { total: roundMoney(r.total_deposited), lastDate: r.last_deposit_date });
     }
 
     // Merge into per-user position
@@ -6039,7 +6040,7 @@ export class DatabaseStorage implements IStorage {
       const parts = key.split(":");
       const userId = parts[0]; const currency = parts[1];
       const dep = deposited.get(key) ?? { total: 0, lastDate: null };
-      const onHand = col.total - dep.total;
+      const onHand = subMoney(col.total, dep.total);
       positions[key] = { userId, totalCollected: col.total, totalDeposited: dep.total, onHand, lastDepositDate: dep.lastDate, currency };
     });
     // Include admins who only have deposits but no cashups (edge case)
@@ -6205,14 +6206,14 @@ export class DatabaseStorage implements IStorage {
       .offset(opts?.offset ?? 0);
   }
   private _computeQuotationTotals(items: { lineTotal: string | number }[], vatRate: number, discountAmount: number) {
-    const subtotal = items.reduce((s, it) => s + parseFloat(String(it.lineTotal || "0")), 0);
-    const vatAmount = subtotal * (vatRate / 100);
-    const grandTotal = subtotal + vatAmount - discountAmount;
+    const subtotalCents = sumCents(items.map((it) => it.lineTotal));
+    const vatCents = mulCents(subtotalCents, vatRate / 100);
+    const grandCents = subtotalCents + vatCents - toCents(discountAmount);
     return {
-      subtotal: subtotal.toFixed(2),
-      vatAmount: vatAmount.toFixed(2),
-      grandTotal: grandTotal.toFixed(2),
-      total: grandTotal.toFixed(2),
+      subtotal: fromCents(subtotalCents),
+      vatAmount: fromCents(vatCents),
+      grandTotal: fromCents(grandCents),
+      total: fromCents(grandCents),
     };
   }
   async upsertFuneralQuotation(
@@ -6717,14 +6718,14 @@ export class DatabaseStorage implements IStorage {
     // settlement overpayment (see approveSettlementWithAllocation) rather than leaving this
     // fee sitting unsettled while a credit for it is available. Conditional UPDATE avoids a
     // race against a concurrent draw-down of the same balance.
-    const amount = parseFloat(String(created.amount));
-    if (amount > 0.005) {
+    const amount = moneyString(created.amount);
+    if (toCents(amount) > 0) {
       const deduct = await tx.execute(sql`
         UPDATE platform_fee_credits
-        SET balance = balance - ${amount.toFixed(2)}::numeric, updated_at = now()
+        SET balance = balance - ${amount}::numeric, updated_at = now()
         WHERE organization_id = ${entry.organizationId}
           AND currency = ${created.currency}
-          AND balance >= ${amount.toFixed(2)}::numeric
+          AND balance >= ${amount}::numeric
         RETURNING id
       `);
       const deductedRows = (deduct as unknown as { rows?: { id: string }[] }).rows;
@@ -6755,12 +6756,12 @@ export class DatabaseStorage implements IStorage {
     )).groupBy(platformReceivables.currency);
 
     const totalDue: Record<string, string> = {};
-    for (const r of dueRows) totalDue[r.currency] = parseFloat(r.total).toFixed(2);
+    for (const r of dueRows) totalDue[r.currency] = moneyString(r.total);
     const totalSettled: Record<string, string> = {};
-    for (const r of settledRows) totalSettled[r.currency] = parseFloat(r.total).toFixed(2);
+    for (const r of settledRows) totalSettled[r.currency] = moneyString(r.total);
     const outstanding: Record<string, string> = {};
     for (const currency of Array.from(new Set([...Object.keys(totalDue), ...Object.keys(totalSettled)]))) {
-      outstanding[currency] = (parseFloat(totalDue[currency] || "0") - parseFloat(totalSettled[currency] || "0")).toFixed(2);
+      outstanding[currency] = fromCents(toCents(totalDue[currency]) - toCents(totalSettled[currency]));
     }
     return { totalDue, totalSettled, outstanding };
   }
@@ -6808,12 +6809,12 @@ export class DatabaseStorage implements IStorage {
     for (const r of allRows) {
       const uKey = `${r.user_id ?? "unattributed"}:${r.currency}`;
       const u = userTotals.get(uKey) ?? { userId: r.user_id, currency: r.currency, total: 0, count: 0 };
-      u.total += parseFloat(r.amount); u.count += 1;
+      u.total += toCents(r.amount); u.count += 1; // cents
       userTotals.set(uKey, u);
 
       const bKey = `${r.branch_id ?? "unattributed"}:${r.currency}`;
       const b = branchTotals.get(bKey) ?? { branchId: r.branch_id, currency: r.currency, total: 0, count: 0 };
-      b.total += parseFloat(r.amount); b.count += 1;
+      b.total += toCents(r.amount); b.count += 1; // cents
       branchTotals.set(bKey, b);
     }
 
@@ -6828,7 +6829,7 @@ export class DatabaseStorage implements IStorage {
     const legacyTotals = new Map<string, { currency: string; total: number; count: number }>();
     for (const r of legacyAll) {
       const l = legacyTotals.get(r.currency) ?? { currency: r.currency, total: 0, count: 0 };
-      l.total += parseFloat(r.amount); l.count += 1;
+      l.total += toCents(r.amount); l.count += 1; // cents
       legacyTotals.set(r.currency, l);
     }
 
@@ -6836,14 +6837,14 @@ export class DatabaseStorage implements IStorage {
       byUser: Array.from(userTotals.values()).map(u => ({
         userId: u.userId,
         displayName: u.userId ? (userNameMap.get(u.userId) ?? "Unknown user") : "Not recorded",
-        currency: u.currency, total: u.total.toFixed(2), count: u.count,
+        currency: u.currency, total: fromCents(u.total), count: u.count,
       })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
       byBranch: Array.from(branchTotals.values()).map(b => ({
         branchId: b.branchId,
         branchName: b.branchId ? (branchNameMap.get(b.branchId) ?? "Unknown branch") : "Not recorded",
-        currency: b.currency, total: b.total.toFixed(2), count: b.count,
+        currency: b.currency, total: fromCents(b.total), count: b.count,
       })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
-      legacyUnattributed: Array.from(legacyTotals.values()).map(l => ({ currency: l.currency, total: l.total.toFixed(2), count: l.count })),
+      legacyUnattributed: Array.from(legacyTotals.values()).map(l => ({ currency: l.currency, total: fromCents(l.total), count: l.count })),
     };
   }
 
@@ -6898,7 +6899,8 @@ export class DatabaseStorage implements IStorage {
       const fx: Record<string, number> = { USD: 1 };
       for (const r of fxRateRows) fx[r.currency.toUpperCase()] = parseFloat(String(r.rateToUsd));
 
-      let remaining = parseFloat(String(settlement.amount));
+      // All amounts in integer cents; FX conversion rounds once per allocation.
+      let remaining = toCents(settlement.amount);
       let receivablesSettled = 0;
       let totalAllocated = 0;
       const settlementCurrency = settlement.currency.toUpperCase();
@@ -6917,9 +6919,9 @@ export class DatabaseStorage implements IStorage {
       rows.sort((a, b) => currencyTier(a.currency) - currencyTier(b.currency));
 
       for (const r of rows) {
-        if (remaining <= 0.005) break;
-        const owed = parseFloat(r.amount) - parseFloat(r.alreadyAllocated || "0");
-        if (owed <= 0.005) continue;
+        if (remaining <= 0) break;
+        const owed = toCents(r.amount) - toCents(r.alreadyAllocated);
+        if (owed <= 0) continue;
         const receivableCurrency = r.currency.toUpperCase();
 
         // rate = units of settlement currency per 1 unit of the receivable's currency.
@@ -6933,18 +6935,20 @@ export class DatabaseStorage implements IStorage {
           rate = fx[receivableCurrency] / fx[settlementCurrency];
         }
 
-        const owedInSettlementCurrency = owed * rate;
-        const appliedInSettlementCurrency = Math.min(remaining, owedInSettlementCurrency);
-        const appliedInReceivableCurrency = appliedInSettlementCurrency / rate;
+        const owedInSettlementCurrency = mulCents(owed, rate);
+        const coversAll = remaining >= owedInSettlementCurrency;
+        const appliedInSettlementCurrency = coversAll ? owedInSettlementCurrency : remaining;
+        // When the whole receivable is covered, record exactly what was owed (no FX round-trip).
+        const appliedInReceivableCurrency = coversAll ? owed : Math.min(owed, mulCents(remaining, 1 / rate));
         await tx.insert(settlementAllocations).values({
           settlementId: settlement.id,
           receivableId: r.id,
-          amount: appliedInReceivableCurrency.toFixed(2),
+          amount: fromCents(appliedInReceivableCurrency),
           fxRateApplied: receivableCurrency !== settlementCurrency ? rate.toFixed(8) : null,
         });
         totalAllocated += appliedInSettlementCurrency;
         remaining -= appliedInSettlementCurrency;
-        if (appliedInReceivableCurrency >= owed - 0.005) {
+        if (appliedInReceivableCurrency >= owed) {
           await tx.update(platformReceivables).set({ isSettled: true }).where(eq(platformReceivables.id, r.id));
           receivablesSettled++;
         }
@@ -6953,18 +6957,18 @@ export class DatabaseStorage implements IStorage {
       // Settlement outlasted every currently-owed receivable — bank the true overpayment as a
       // per-currency credit rather than letting it vanish; createPlatformReceivable() draws it
       // down automatically the next time a same-currency fee is raised for this org.
-      if (remaining > 0.005) {
+      if (remaining > 0) {
         await tx.insert(platformFeeCredits)
-          .values({ organizationId: orgId, currency: settlementCurrency, balance: remaining.toFixed(2) })
+          .values({ organizationId: orgId, currency: settlementCurrency, balance: fromCents(remaining) })
           .onConflictDoUpdate({
             target: [platformFeeCredits.organizationId, platformFeeCredits.currency],
-            set: { balance: sql`${platformFeeCredits.balance} + ${remaining.toFixed(2)}::numeric`, updatedAt: new Date() },
+            set: { balance: sql`${platformFeeCredits.balance} + ${fromCents(remaining)}::numeric`, updatedAt: new Date() },
           });
       }
 
       const [updated] = await tx.update(settlements).set({ status: "approved", approvedBy })
         .where(eq(settlements.id, id)).returning();
-      return { settlement: updated, allocated: totalAllocated.toFixed(2), receivablesSettled };
+      return { settlement: updated, allocated: fromCents(totalAllocated), receivablesSettled };
     });
   }
 
@@ -7913,13 +7917,13 @@ export class DatabaseStorage implements IStorage {
 
         // Mirrors payment-service.ts's multi-month lump-sum inference exactly, so a payment
         // covering several premiums replays into several advanced cycles, same as it would live.
-        const premiumAmt = currentSnap.premiumAmount ? parseFloat(String(currentSnap.premiumAmount)) : 0;
-        const paidAmt = parseFloat(String(paymentFields.amount));
+        const premiumCents = toCents(currentSnap.premiumAmount);
+        const paidCents = toCents(paymentFields.amount);
         // Math.max(0, ...): a payment under one premium must NOT advance the cycle — it gets
         // banked below as credit instead. Flooring (not rounding) so an overpayment just under
         // 2x a premium doesn't grant a free extra cycle either. Mirrors payment-service.ts.
-        const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
-          ? Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))
+        const monthCount = premiumCents > 0
+          ? Math.min(12, Math.max(0, Math.floor(paidCents / premiumCents)))
           : 1;
 
         let periodFrom = paymentDate;
@@ -7936,10 +7940,10 @@ export class DatabaseStorage implements IStorage {
 
         // Mirrors payment-service.ts:758-766 — anything paid beyond the monthCount cycles just
         // advanced didn't buy another whole period; bank it as credit instead of dropping it.
-        if (premiumAmt > 0) {
-          const excess = paidAmt - monthCount * premiumAmt;
-          if (excess > 0.01) {
-            await this.addPolicyCreditBalanceInTx(tx, orgId, policyId, excess.toFixed(2), paymentFields.currency);
+        if (premiumCents > 0) {
+          const excessCents = paidCents - monthCount * premiumCents;
+          if (excessCents > 0) {
+            await this.addPolicyCreditBalanceInTx(tx, orgId, policyId, fromCents(excessCents), paymentFields.currency);
           }
         }
 

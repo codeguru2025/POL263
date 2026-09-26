@@ -8,6 +8,7 @@ import { resolveOrSyncTenantUserId } from "./tenant-db";
 import { currencyField } from "@shared/premium-currency";
 import type { AgeBand } from "@shared/schema";
 import type { OrgDataDb } from "./tenant-db";
+import { toCents, fromCents, sumCents, centsToNumber, moneyString, percentOf } from "@shared/money";
 
 export { currencyField };
 
@@ -589,15 +590,16 @@ export async function reconcilePremiumChange(params: {
   actorId?: string | null;
 }): Promise<{ reconciliation: number; periods: number; direction: "arrears" | "credit" | "none" }> {
   const { orgId, policy } = params;
-  const oldP = parseFloat(String(params.oldPremium)) || 0;
-  const newP = parseFloat(String(params.newPremium)) || 0;
+  const oldCents = toCents(params.oldPremium);
+  const newCents = toCents(params.newPremium);
   const currency = policy?.currency || "USD";
   const periods = periodsBetween(params.effectiveDate, new Date(), policy?.paymentSchedule);
-  const R = Number(((newP - oldP) * periods).toFixed(2)); // signed: + = arrears owed, - = overpaid
+  const rCents = (newCents - oldCents) * periods; // signed: + = arrears owed, - = overpaid (exact)
+  const R = centsToNumber(rCents);
 
-  if (Math.abs(R) >= 0.01) {
+  if (rCents !== 0) {
     // Post the inverse to the wallet: arrears (R>0) ⇒ wallet down (owed); advance (R<0) ⇒ wallet up (credit).
-    await storage.addPolicyCreditBalance(orgId, policy.id, (-R).toFixed(2), currency);
+    await storage.addPolicyCreditBalance(orgId, policy.id, fromCents(-rCents), currency);
   }
 
   try {
@@ -609,12 +611,12 @@ export async function reconcilePremiumChange(params: {
     await storage.createPolicyPremiumChange({
       organizationId: orgId,
       policyId: policy.id,
-      oldPremium: oldP.toFixed(2),
-      newPremium: newP.toFixed(2),
+      oldPremium: fromCents(oldCents),
+      newPremium: fromCents(newCents),
       currency,
       effectiveDate: params.effectiveDate,
       periods,
-      reconciliation: R.toFixed(2),
+      reconciliation: fromCents(rCents),
       changeType: params.changeType,
       reason: params.reason ?? null,
       actorId: resolvedActorId,
@@ -677,7 +679,7 @@ export async function recordAgentCommission(orgId: string, policy: any, transact
 
     if (rate <= 0) return;
 
-    const amount = (parseFloat(paymentAmount) * rate / 100).toFixed(2);
+    const amount = moneyString(percentOf(paymentAmount, rate));
     await storage.createCommissionLedgerEntry({
       organizationId: orgId,
       agentId: policy.agentId,
@@ -714,15 +716,15 @@ export async function recordClawback(orgId: string, policy: any, reason: string)
     const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
     if (clearedCount > clawbackThreshold) return;
     const earned = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
-    const unreversed = earned.filter((e: any) => e.status === "earned").reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
-    if (unreversed <= 0) return;
+    const unreversedCents = sumCents(earned.filter((e: any) => e.status === "earned").map((e: any) => e.amount));
+    if (unreversedCents <= 0) return;
     await storage.createCommissionLedgerEntry({
       organizationId: orgId,
       agentId: policy.agentId,
       policyId: policy.id,
       transactionId: undefined,
       entryType: "clawback",
-      amount: (-Math.abs(unreversed)).toFixed(2),
+      amount: fromCents(-Math.abs(unreversedCents)),
       currency: policy.currency || "USD",
       description: `Clawback — ${reason} within ${clawbackThreshold}-month threshold (${clearedCount} payments)`,
       status: "earned",
@@ -736,17 +738,17 @@ export async function rollbackClawbacks(orgId: string, policy: any) {
   if (!policy.agentId) return;
   try {
     const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
-    const unreversed = entries
+    const unreversedCents = sumCents(entries
       .filter((e: any) => e.entryType === "clawback" && e.status === "earned")
-      .reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
-    if (unreversed >= 0) return;
+      .map((e: any) => e.amount));
+    if (unreversedCents >= 0) return;
     await storage.createCommissionLedgerEntry({
       organizationId: orgId,
       agentId: policy.agentId,
       policyId: policy.id,
       transactionId: undefined,
       entryType: "clawback_reversal",
-      amount: Math.abs(unreversed).toFixed(2),
+      amount: fromCents(Math.abs(unreversedCents)),
       currency: policy.currency || "USD",
       description: `Rollback — policy reinstated, clawback reversed`,
       status: "earned",
@@ -761,16 +763,16 @@ export async function rollbackClawbacksInTx(txDb: any, orgId: string, policy: an
   try {
     const entries = await txDb.select().from(commissionLedgerEntries)
       .where(and(eq(commissionLedgerEntries.policyId, policy.id), eq(commissionLedgerEntries.organizationId, orgId)));
-    const unreversed = entries
+    const unreversedCents = sumCents(entries
       .filter((e: any) => e.entryType === "clawback" && e.status === "earned")
-      .reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
-    if (unreversed >= 0) return;
+      .map((e: any) => e.amount));
+    if (unreversedCents >= 0) return;
     await txDb.insert(commissionLedgerEntries).values({
       organizationId: orgId,
       agentId: policy.agentId,
       policyId: policy.id,
       entryType: "clawback_reversal",
-      amount: Math.abs(unreversed).toFixed(2),
+      amount: fromCents(Math.abs(unreversedCents)),
       currency: policy.currency || "USD",
       description: `Rollback — policy reinstated, clawback reversed`,
       status: "earned",

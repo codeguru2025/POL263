@@ -7,6 +7,7 @@
  * legacy_group_receipts ledger (server/routes.ts's /api/groups/legacy-receipts), which keeps
  * recording exactly as it does today.
  */
+import { tryToCents, centsToNumber, subMoney } from "@shared/money";
 
 export interface GroupPayoutRule {
   eventType: string;
@@ -32,18 +33,21 @@ export function computePoolBalance(
   contributions: LedgerContribution[],
   payouts: LedgerPayout[],
 ): Record<string, number> {
-  const balance: Record<string, number> = {};
+  // Integer cents so the pool balance is exact however many contributions it sums.
+  const cents: Record<string, number> = {};
   for (const c of contributions) {
-    const amt = parseFloat(String(c.amount));
-    if (!Number.isFinite(amt)) continue;
-    balance[c.currency] = (balance[c.currency] ?? 0) + amt;
+    const amt = tryToCents(c.amount);
+    if (amt == null) continue;
+    cents[c.currency] = (cents[c.currency] ?? 0) + amt;
   }
   for (const p of payouts) {
     if (p.status !== "paid") continue;
-    const amt = parseFloat(String(p.amount));
-    if (!Number.isFinite(amt)) continue;
-    balance[p.currency] = (balance[p.currency] ?? 0) - amt;
+    const amt = tryToCents(p.amount);
+    if (amt == null) continue;
+    cents[p.currency] = (cents[p.currency] ?? 0) - amt;
   }
+  const balance: Record<string, number> = {};
+  for (const [currency, c] of Object.entries(cents)) balance[currency] = centsToNumber(c);
   return balance;
 }
 
@@ -73,7 +77,7 @@ export function checkPoolPayoutAffordability(
   currentBalance: number,
   requestedAmount: number,
 ): PoolPayoutAffordability {
-  const shortfall = Math.max(0, requestedAmount - currentBalance);
+  const shortfall = Math.max(0, subMoney(requestedAmount, currentBalance));
   return {
     currentBalance,
     requestedAmount,

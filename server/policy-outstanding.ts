@@ -6,6 +6,7 @@
  * policy-status-on-payment). route-helpers.ts re-exports everything below unchanged so existing
  * callers importing from "./route-helpers" keep working as-is.
  */
+import { toCents, centsToNumber } from "@shared/money";
 
 // "yearly" is the value actually used for policies.paymentSchedule everywhere else (see
 // monthlyToScheduleFactor in route-helpers.ts) — this map used "annually" instead, so
@@ -58,24 +59,31 @@ export function computePolicyOutstanding(params: {
   walletBalance?: number;
 }): OutstandingResult {
   const { policy } = params;
-  const totalPaid = Number(params.totalPaid) || 0;
-  const walletBalance = Number(params.walletBalance) || 0;
-  const premium = parseFloat(String(policy?.premiumAmount ?? "0")) || 0;
+  // All arithmetic in integer cents so the figures are exact to the cent.
+  const paidCents = toCents(params.totalPaid);
+  const walletCents = toCents(params.walletBalance);
+  const premiumCents = toCents(policy?.premiumAmount);
   const startDate = policy?.inceptionDate || policy?.effectiveDate;
 
   let periodsElapsed = 0;
-  let totalDue = 0;
-  if (startDate && premium > 0) {
+  let dueCents = 0;
+  if (startDate && premiumCents > 0) {
     const start = new Date(startDate);
     const now = new Date();
     if (!Number.isNaN(start.getTime()) && start <= now) {
       const daysElapsed = (now.getTime() - start.getTime()) / (24 * 60 * 60 * 1000);
       periodsElapsed = Math.ceil(daysElapsed / periodDaysForSchedule(policy?.paymentSchedule));
-      totalDue = periodsElapsed * premium;
+      dueCents = periodsElapsed * premiumCents;
     }
   }
 
-  const balance = totalPaid + walletBalance - totalDue;
-  const outstanding = Math.max(0, -balance);
-  return { periodsElapsed, totalDue, totalPaid, walletBalance, outstanding, balance };
+  const balanceCents = paidCents + walletCents - dueCents;
+  return {
+    periodsElapsed,
+    totalDue: centsToNumber(dueCents),
+    totalPaid: centsToNumber(paidCents),
+    walletBalance: centsToNumber(walletCents),
+    outstanding: centsToNumber(Math.max(0, -balanceCents)),
+    balance: centsToNumber(balanceCents),
+  };
 }

@@ -15,6 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
+import { toCents, tryToCents, fromCents, centsToNumber, roundMoney, moneyString, moneyEquals, sumMoney, sumCents, subMoney, allocateProRata } from "@shared/money";
 import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
@@ -257,9 +258,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       { productVersion: pv, product: pvProduct ?? null },
     );
 
-    const current = parseFloat(String(policy.premiumAmount ?? "0"));
-    const next = parseFloat(String(recomputedPremium ?? "0"));
-    if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+    // Exact cents comparison — float subtraction misses 1-cent changes (2.01 - 2.00 < 0.01).
+    if (!moneyEquals(policy.premiumAmount, recomputedPremium)) {
       const updated = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
       return updated || { ...policy, premiumAmount: recomputedPremium };
     }
@@ -282,10 +282,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const pv = policy?.productVersionId ? await storage.getProductVersion(policy.productVersionId, orgId) : undefined;
     const product = pv ? await storage.getProduct(pv.productId, orgId) : undefined;
     if (product?.pricingModel === "individual_age_rated") {
-      const contribution = parseFloat(String(removedMember?.premiumContribution ?? ""));
-      if (!Number.isFinite(contribution) || contribution <= 0) return { policy, premiumReviewNeeded: true };
-      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
-      const next = Math.max(0, oldPremium - contribution).toFixed(2);
+      const contributionCents = tryToCents(removedMember?.premiumContribution);
+      if (contributionCents == null || contributionCents <= 0) return { policy, premiumReviewNeeded: true };
+      const next = fromCents(Math.max(0, toCents(policy.premiumAmount) - contributionCents));
       const updated = await storage.updatePolicy(policy.id, { premiumAmount: next }, orgId);
       return { policy: updated || { ...policy, premiumAmount: next }, premiumReviewNeeded: false };
     }
@@ -309,12 +308,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const members = await storage.getPolicyMembers(policy.id, orgId);
       const target = members.find((m: any) => m.id === claim.policyMemberId);
       if (!target || target.isActive === false || target.role !== "dependent") return { ended: false };
-      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const oldPremium = roundMoney(policy.premiumAmount);
       const removed = await storage.deactivatePolicyMember(target.id, policy.id, orgId);
       const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, orgId);
-      const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+      const newPremium = roundMoney(recalced?.premiumAmount ?? oldPremium);
       let reconciliation: any = null;
-      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      if (!moneyEquals(newPremium, oldPremium)) {
         reconciliation = await reconcilePremiumChange({
           orgId, policy: recalced, oldPremium, newPremium,
           effectiveDate: await todayForOrg(orgId),
@@ -394,9 +393,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         { productVersion: pv, product: product ?? null, orgAddOns },
       );
 
-      const current = parseFloat(String(policy.premiumAmount ?? "0"));
-      const next = parseFloat(String(recomputedPremium ?? "0"));
-      if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+      if (!moneyEquals(policy.premiumAmount, recomputedPremium)) {
         drifted.push({ policy, recomputedPremium });
       }
     }));
@@ -635,7 +632,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       await dispatchNotification(orgId, "premium_due", policy.clientId, {
         ...ctx,
-        outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+        outstanding: `${policy.currency} ${moneyString(policy.premiumAmount)}`,
       });
       if (settings.sendPushNotifications) {
         await notifyClientPush(
@@ -656,7 +653,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         methodType: null,
         message: "Premium due reminder sent.",
         metadata: {
-          outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+          outstanding: `${policy.currency} ${moneyString(policy.premiumAmount)}`,
         },
       } as any);
       await storage.updatePolicy(policy.id, { lastAutoReminderAt: now, lastAutoPaymentAttemptAt: now }, orgId);
@@ -3899,12 +3896,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const policyPayments = await storage.getPaymentsByPolicy(policy.id, user.organizationId);
-    const totalPaid = policyPayments
-      .filter((p: any) => p.status === "cleared")
-      .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
+    const totalPaid = sumMoney(policyPayments.filter((p: any) => p.status === "cleared").map((p: any) => p.amount));
 
     const wallet = await storage.getPolicyCreditBalance(user.organizationId, policy.id);
-    const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
+    const walletBalance = roundMoney(wallet?.balance);
     const { totalDue, balance, outstanding, periodsElapsed } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
 
     // Fire-and-forget — a view is worth recording on the policy's activity timeline, but must
@@ -4541,7 +4536,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (rawPremium != null && rawPremium !== "" && canEditPremium) {
       const parsed = parseFloat(String(rawPremium));
       const current = parseFloat(String(before.premiumAmount ?? "0"));
-      if (Number.isFinite(parsed) && parsed >= 0 && Math.abs(parsed - current) >= 0.01) {
+      if (Number.isFinite(parsed) && parsed >= 0 && !moneyEquals(parsed, current)) {
         manualPremium = parsed;
       }
     }
@@ -5112,7 +5107,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
     const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
     let reconciliation: any = null;
-    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+    if (!moneyEquals(newPremium, oldPremium)) {
       const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
         : await todayForOrg(user.organizationId);
@@ -5164,7 +5159,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, user.organizationId);
     const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
     let reconciliation: any = null;
-    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+    if (!moneyEquals(newPremium, oldPremium)) {
       const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
         : await todayForOrg(user.organizationId);
@@ -5215,7 +5210,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ? req.body.effectiveDate.trim()
       : await todayForOrg(user.organizationId);
     const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
-    const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
+    const reconciliation = centsToNumber((toCents(newPremium) - toCents(oldPremium)) * periods);
     const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
 
     return res.json({
@@ -5447,7 +5442,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const recalced = await recalculatePolicyPremiumIfNeeded(result.updatedPolicy, orgId);
       const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
       let reconciliation: any = null;
-      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      if (!moneyEquals(newPremium, oldPremium)) {
         reconciliation = await reconcilePremiumChange({
           orgId, policy: recalced, oldPremium, newPremium,
           effectiveDate: await todayForOrg(orgId),
@@ -5528,7 +5523,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (let i = 0; i < activePolicies.length; i++) {
       const before = parseFloat(String(activePolicies[i].premiumAmount ?? "0"));
       const after = parseFloat(String(recalced[i]?.premiumAmount ?? before));
-      if (Math.abs(after - before) >= 0.01) updated++;
+      if (!moneyEquals(after, before)) updated++;
     }
     const skipped = allPolicies.length - activePolicies.length;
     await auditLog(req, "BATCH_RECALCULATE_PREMIUMS", "ProductVersion", pvId, null, { pvId, total: allPolicies.length, updated, skipped });
@@ -5615,11 +5610,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // edit:premium holders may submit a mismatched amount at all; approval requires
     // approve:finance (see POST /api/payment-receipts/:id/approve).
     if (isClearedWithPolicy && policy && policy.clientId) {
-      const requestedAmount = parseFloat(String(req.body.amount ?? 0));
+      const requestedCents = tryToCents(req.body.amount ?? 0);
       const explicitMonths = req.body.months != null ? parseInt(String(req.body.months), 10) : 1;
       const monthsForCheck = Number.isFinite(explicitMonths) && explicitMonths >= 1 ? Math.min(12, explicitMonths) : 1;
-      const expectedAmount = parseFloat(String(policy.premiumAmount ?? "0")) * monthsForCheck;
-      const isOverridden = Number.isFinite(requestedAmount) && Math.abs(requestedAmount - expectedAmount) >= 0.01;
+      const expectedCents = toCents(policy.premiumAmount) * monthsForCheck;
+      const requestedAmount = requestedCents == null ? NaN : centsToNumber(requestedCents);
+      const expectedAmount = centsToNumber(expectedCents);
+      const isOverridden = requestedCents != null && requestedCents !== expectedCents;
 
       if (isOverridden) {
         const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
@@ -5687,9 +5684,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const explicit = req.body.months != null ? parseInt(String(req.body.months), 10) : null;
         if (explicit && Number.isFinite(explicit) && explicit >= 1) return Math.min(12, explicit);
         if (policy?.premiumAmount) {
-          const prem = parseFloat(String(policy.premiumAmount));
-          const amt = parseFloat(String(req.body.amount ?? 0));
-          if (prem > 0 && amt > 0 && Number.isFinite(amt)) {
+          // Integer cents: float division floors 3.30 / 1.10 to 2, under-counting periods.
+          const prem = toCents(policy.premiumAmount);
+          const amt = toCents(req.body.amount ?? 0);
+          if (prem > 0 && amt > 0) {
             // 0 is valid: a payment under one premium doesn't advance the cycle — it gets
             // banked as credit below instead of granting a free period.
             return Math.min(12, Math.max(0, Math.floor(amt / prem)));
@@ -5714,11 +5712,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // instead of silently dropping it. credit-apply.ts auto-spends this the next time a full
         // premium is due (manually via POST /api/apply-credit-balances, or on the automation tick).
         if (policy?.premiumAmount) {
-          const premiumForExcess = parseFloat(String(policy.premiumAmount));
-          const paidForExcess = parseFloat(String(parsed.amount ?? 0));
-          const excess = premiumForExcess > 0 ? paidForExcess - monthCount * premiumForExcess : 0;
-          if (excess > 0.01) {
-            await storage.addPolicyCreditBalanceInTx(txDb, user.organizationId, parsed.policyId, excess.toFixed(2), parsed.currency || policy.currency || "USD");
+          const premiumForExcess = toCents(policy.premiumAmount);
+          const paidForExcess = toCents(parsed.amount ?? 0);
+          const excessCents = premiumForExcess > 0 ? paidForExcess - monthCount * premiumForExcess : 0;
+          if (excessCents > 0) {
+            await storage.addPolicyCreditBalanceInTx(txDb, user.organizationId, parsed.policyId, fromCents(excessCents), parsed.currency || policy.currency || "USD");
           }
         }
       }
@@ -6556,36 +6554,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const addOnMap = new Map(addOnCatalog.map((a) => [a.id, a]));
       perPolicyAmount = {};
       perPolicyItems = {};
-      let sum = 0;
+      let sumCentsAll = 0;
       for (const item of items) {
         const policy = valid.find((p) => p.id === String(item.policyId));
         if (!policy) continue;
-        let amt = 0;
+        let amtCents = 0;
         const lineItems: { label: string; amount: string }[] = [];
         if (item.includeServicePremium !== false) {
-          const premiumAmt = parseFloat(String(policy.premiumAmount || 0));
-          amt += premiumAmt;
-          lineItems.push({ label: "Service premium", amount: premiumAmt.toFixed(2) });
+          const premiumCents = toCents(policy.premiumAmount);
+          amtCents += premiumCents;
+          lineItems.push({ label: "Service premium", amount: fromCents(premiumCents) });
         }
         const attachedIds = new Set((addOnsByPolicy[policy.id] || []).map((a) => a.addOnId));
         for (const addOnId of Array.isArray(item.addOnIds) ? item.addOnIds : []) {
           if (!attachedIds.has(addOnId)) continue;
           const ao = addOnMap.get(addOnId);
           if (!ao) continue;
-          const price = getAddOnPrice(ao, policy.paymentSchedule || "monthly");
-          amt += price;
-          lineItems.push({ label: ao.name, amount: price.toFixed(2) });
+          const priceCents = toCents(getAddOnPrice(ao, policy.paymentSchedule || "monthly"));
+          amtCents += priceCents;
+          lineItems.push({ label: ao.name, amount: fromCents(priceCents) });
         }
-        perPolicyAmount[policy.id] = amt;
+        perPolicyAmount[policy.id] = centsToNumber(amtCents);
         perPolicyItems[policy.id] = lineItems;
-        sum += amt;
+        sumCentsAll += amtCents;
       }
-      amountNum = sum;
+      amountNum = centsToNumber(sumCentsAll);
       if (amountNum <= 0) return res.status(400).json({ message: "No line items selected — nothing to receipt." });
     } else {
-      amountNum = parseFloat(String(totalAmount));
+      amountNum = roundMoney(totalAmount);
+      if (!(amountNum > 0)) return res.status(400).json({ message: "totalAmount must be a positive amount." });
     }
-    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
+    // Lump-sum mode: share the total across policies pro rata to premium so the per-policy
+    // amounts add back up to the receipt total exactly (rounding each share separately could
+    // gain or lose a cent — e.g. $100 over three equal premiums became 3 × $33.33 = $99.99).
+    const proRataCents: Record<string, number> = {};
+    if (!perPolicyAmount) {
+      const shares = allocateProRata(toCents(amountNum), valid.map((p) => toCents(p.premiumAmount)));
+      valid.forEach((p, i) => { proRataCents[p.id] = shares[i]; });
+    }
     const results: { id: string; policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap. Itemized mode
@@ -6611,10 +6617,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
       const recordedByForLedger = actorRow?.id ?? null;
       for (const policy of sortedPolicies) {
-        const premium = parseFloat(String(policy.premiumAmount || 0));
         const amount = perPolicyAmount
-          ? perPolicyAmount[policy.id].toFixed(2)
-          : totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+          ? moneyString(perPolicyAmount[policy.id])
+          : fromCents(proRataCents[policy.id] ?? 0);
         const polyCurrency = currency || policy.currency || "USD";
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
         const receiptNum = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
@@ -6966,8 +6971,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
     const valid = policies.filter((p) => p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
-    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
-    const amountNum = parseFloat(String(totalAmount));
+    const amountCents = tryToCents(totalAmount);
+    const amountNum = amountCents == null ? NaN : centsToNumber(amountCents);
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       return res.status(400).json({ message: "totalAmount must be greater than zero" });
     }
@@ -6999,17 +7004,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         initiatedByUserId: initiatedByResolved ?? undefined,
         updatedAt: new Date(),
       }).returning();
-      const allocations = valid.map((p) => {
-        const premium = parseFloat(String(p.premiumAmount || 0));
-        const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
-        return { groupPaymentIntentId: created.id, policyId: p.id, amount, currency: cur };
-      });
-      const allocSum = allocations.reduce((s, a) => s + parseFloat(a.amount), 0);
-      const remainder = Math.round((amountNum - allocSum) * 100) / 100;
-      if (allocations.length > 0 && Math.abs(remainder) >= 0.01) {
-        const last = allocations[allocations.length - 1];
-        last.amount = (parseFloat(last.amount) + remainder).toFixed(2);
-      }
+      // Pro rata to premium; shares always sum exactly to the intent total.
+      const shares = allocateProRata(amountCents!, valid.map((p) => toCents(p.premiumAmount)));
+      const allocations = valid.map((p, i) => ({
+        groupPaymentIntentId: created.id, policyId: p.id, amount: fromCents(shares[i]), currency: cur,
+      }));
       await txDb.insert(groupPaymentAllocations).values(allocations);
       return created;
     });
@@ -7279,16 +7278,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const preparerId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const body = req.body as any;
     const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
-    let totalAmount = 0;
-    for (const k of Object.keys(amountsByMethod)) {
-      totalAmount += parseFloat(String(amountsByMethod[k] || "0")) || 0;
-    }
+    const totalAmount = sumMoney(Object.values(amountsByMethod));
     const parsed = insertCashupSchema.parse({
       organizationId: user.organizationId,
       preparedBy: preparerId,
       branchId: body.branchId || undefined,
       cashupDate: body.cashupDate,
-      totalAmount: String(totalAmount.toFixed(2)),
+      totalAmount: moneyString(totalAmount),
       currency: body.currency || "USD",
       transactionCount: typeof body.transactionCount === "number" ? body.transactionCount : parseInt(String(body.transactionCount || "0"), 10) || 0,
       amountsByMethod,
@@ -7340,19 +7336,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     if (cashup.status === "submitted" && (body.action === "confirm" || body.action === "confirm_discrepancy")) {
       if (!hasFinance) return res.status(403).json({ message: "Only finance can confirm cashups" });
-      const countedTotal = body.countedTotal != null ? parseFloat(String(body.countedTotal)) : null;
+      const countedTotal = body.countedTotal != null ? roundMoney(body.countedTotal) : null;
       const countedAmountsByMethod = body.countedAmountsByMethod && typeof body.countedAmountsByMethod === "object" ? body.countedAmountsByMethod : undefined;
       let computedCountedTotal = countedTotal;
       if (computedCountedTotal == null && countedAmountsByMethod) {
-        computedCountedTotal = 0;
-        for (const k of Object.keys(countedAmountsByMethod)) {
-          computedCountedTotal += parseFloat(String(countedAmountsByMethod[k] || "0")) || 0;
-        }
+        computedCountedTotal = sumMoney(Object.values(countedAmountsByMethod));
       }
-      const expectedTotal = parseFloat(String(cashup.totalAmount || "0"));
+      const expectedTotal = roundMoney(cashup.totalAmount);
       const finalCounted = computedCountedTotal ?? expectedTotal;
-      const discrepancyAmount = finalCounted - expectedTotal;
-      const hasDiscrepancy = Math.abs(discrepancyAmount) > 0.005;
+      const discrepancyAmount = subMoney(finalCounted, expectedTotal);
+      const hasDiscrepancy = discrepancyAmount !== 0;
       const status = hasDiscrepancy ? "discrepancy" : "confirmed";
       const discrepancyNotes = body.discrepancyNotes || (hasDiscrepancy ? `Counted ${finalCounted.toFixed(2)} vs expected ${expectedTotal.toFixed(2)}` : undefined);
       const updated = await storage.updateCashup(cashup.id, {
@@ -9331,7 +9324,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     // Round all amounts to 2dp
-    const r2 = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, parseFloat(v.toFixed(2))]));
+    const r2 = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, roundMoney(v)]));
 
     return res.json({
       agentId,
@@ -10152,13 +10145,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM requisitions WHERE id = ${reqId} FOR UPDATE`);
         const [locked] = await txDb.select().from(requisitions).where(eq(requisitions.id, reqId)).limit(1);
         if (!locked) throw new Error("REQUISITION_NOT_FOUND");
-        const alreadyPaid = Number(locked.amountPaid ?? 0);
-        const remaining = Number(locked.amount) - alreadyPaid;
-        if (amount > remaining + 0.001) {
-          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        // Integer cents: exact balance checks, no float tolerance fudge.
+        const alreadyPaidCents = toCents(locked.amountPaid);
+        const remainingCents = toCents(locked.amount) - alreadyPaidCents;
+        if (toCents(amount) > remainingCents) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${moneyString(amount)} exceeds outstanding balance of ${fromCents(remainingCents)}`);
         }
-        const newAmountPaid = alreadyPaid + amount;
-        const fullyPaid = newAmountPaid >= Number(locked.amount) - 0.001;
+        const newAmountPaid = centsToNumber(alreadyPaidCents + toCents(amount));
+        const fullyPaid = toCents(newAmountPaid) >= toCents(locked.amount);
         const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -10241,14 +10235,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM expenditures WHERE id = ${expId} FOR UPDATE`);
         const [locked] = await txDb.select().from(expenditures).where(eq(expenditures.id, expId)).limit(1);
         if (!locked) throw new Error("EXPENDITURE_NOT_FOUND");
-        const alreadyPaid = Number(locked.amountPaid ?? 0);
-        const totalAmt = Number(locked.amount);
-        const remaining = totalAmt - alreadyPaid;
-        if (amount > remaining + 0.001) {
-          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        // Integer cents: exact balance checks, no float tolerance fudge.
+        const alreadyPaidCents = toCents(locked.amountPaid);
+        const totalCents = toCents(locked.amount);
+        const remainingCents = totalCents - alreadyPaidCents;
+        if (toCents(amount) > remainingCents) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${moneyString(amount)} exceeds outstanding balance of ${fromCents(remainingCents)}`);
         }
-        const newAmountPaid = alreadyPaid + amount;
-        const fullyPaid = newAmountPaid >= totalAmt - 0.001;
+        const newAmountPaid = centsToNumber(alreadyPaidCents + toCents(amount));
+        const fullyPaid = toCents(newAmountPaid) >= totalCents;
         const expVoucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -10916,10 +10911,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Auto-update quotation conversion status
     if (quote?.id) {
       const allReceipts = await storage.getServiceReceipts(user.organizationId, { funeralCaseId: fc.id });
-      const totalPaid = allReceipts
-        .filter(r => r.status === "issued")
-        .reduce((s, r) => s + parseFloat(String(r.amount)), 0);
-      const grandTotal = parseFloat(String(quote.grandTotal || quote.total || "0"));
+      // Exact cents — a float sum of several receipts can land a hair under the total
+      // and leave a fully-paid quote marked "partial".
+      const totalPaid = centsToNumber(sumCents(allReceipts.filter(r => r.status === "issued").map(r => r.amount)));
+      const grandTotal = roundMoney(quote.grandTotal || quote.total);
       if (grandTotal > 0 && totalPaid >= grandTotal) {
         await storage.markQuotationConverted(quote.id, user.organizationId);
       } else if (totalPaid > 0) {
@@ -13199,7 +13194,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           memberNumber: row.memberNumber || undefined,
           joinedDate: row.joinedDate || undefined,
           contributions: contributions.map((c: any) => ({
-            amount: parseFloat(String(c.amount)).toFixed(2),
+            amount: moneyString(c.amount),
             currency: c.currency,
             contributionDate: c.contributionDate,
             notes: c.notes || undefined,
@@ -13785,7 +13780,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!Number.isFinite(amount) || amount <= 0) {
         return res.status(400).json({ message: "A positive amount is required." });
       }
-      const shortfall = Math.max(0, amount - balance);
+      const shortfall = Math.max(0, subMoney(amount, balance));
       if (shortfall > 0 && !req.body.force) {
         return res.status(400).json({
           error: "Insufficient fund balance",
@@ -14093,7 +14088,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const day = new Date(p.receivedAt || p.createdAt).toISOString().slice(0, 10);
       daily[day] = (daily[day] || 0) + parseFloat(p.amount || "0");
     });
-    const trend = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, total]) => ({ date, total }));
+    const trend = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, total]) => ({ date, total: roundMoney(total) }));
     return res.json(trend);
   });
 
@@ -14191,7 +14186,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       totalPolicies: policyByProduct[prod.id]?.total || 0,
       activePolicies: policyByProduct[prod.id]?.active || 0,
       lapsedPolicies: policyByProduct[prod.id]?.lapsed || 0,
-      revenue: revenueByProduct[prod.id] || 0,
+      revenue: roundMoney(revenueByProduct[prod.id] || 0),
       currency: currencyByProduct[prod.id] || "USD",
     }));
 

@@ -12,6 +12,7 @@ import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { paymentTransactions, paymentReceipts, policyCreditBalances, users } from "@shared/schema";
 import { sql, eq, and } from "drizzle-orm";
 import { todayForOrg } from "./date-utils";
+import { toCents, sumCents, fromCents, centsToNumber } from "@shared/money";
 
 export async function runApplyCreditBalances(orgId: string, actorUserId: string | null = null): Promise<{ applied: number; errors: string[] }> {
   const rows = await storage.getPolicyCreditBalancesWithPositiveBalance(orgId);
@@ -22,9 +23,9 @@ export async function runApplyCreditBalances(orgId: string, actorUserId: string 
   for (const row of rows) {
     const policy = await storage.getPolicy(row.policyId, orgId);
     if (!policy) continue;
-    const premium = parseFloat(String(policy.premiumAmount || 0));
-    const balance = parseFloat(String(row.balance));
-    if (premium <= 0 || balance < premium) continue;
+    const premiumCents = toCents(policy.premiumAmount);
+    const balanceCents = toCents(row.balance);
+    if (premiumCents <= 0 || balanceCents < premiumCents) continue;
 
     const dueDate = policy.currentCycleEnd ? String(policy.currentCycleEnd) : null;
     const isDue = dueDate && dueDate <= today;
@@ -51,11 +52,12 @@ export async function applyCreditBalanceToPolicy(
   const policy = await storage.getPolicy(policyId, orgId);
   if (!policy) return { ok: false, error: "Policy not found" };
 
-  const premium = parseFloat(String(policy.premiumAmount || 0));
-  if (premium <= 0) return { ok: false, error: "Policy has no premium" };
+  const premiumCents = toCents(policy.premiumAmount);
+  if (premiumCents <= 0) return { ok: false, error: "Policy has no premium" };
+  const premium = centsToNumber(premiumCents);
 
   const currency = policy.currency || "USD";
-  const amount = premium.toFixed(2);
+  const amount = fromCents(premiumCents);
   const today = await todayForOrg(orgId);
 
   let receiptNumberForNotify: string | undefined;
@@ -153,16 +155,15 @@ export async function applyCreditBalanceToPolicy(
       const entries = await storage.getCommissionEntriesByPolicy(policyId, orgId);
       const clawbacks = entries.filter((e: any) => e.entryType === "clawback" && e.status === "earned");
       const existingRollbacks = entries.filter((e: any) => e.entryType === "rollback");
-      const clawbackTotal = clawbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
-      const rollbackTotal = existingRollbacks.reduce((sum: number, e: any) => sum + parseFloat(e.amount || "0"), 0);
-      const unreversed = clawbackTotal + rollbackTotal;
-      if (unreversed < 0) {
+      const unreversedCents =
+        sumCents(clawbacks.map((e: any) => e.amount)) + sumCents(existingRollbacks.map((e: any) => e.amount));
+      if (unreversedCents < 0) {
         await storage.createCommissionLedgerEntry({
           organizationId: orgId,
           agentId: policy.agentId,
           policyId,
           entryType: "rollback",
-          amount: Math.abs(unreversed).toFixed(2),
+          amount: fromCents(Math.abs(unreversedCents)),
           currency: policy.currency || "USD",
           description: `Rollback — policy reinstated, clawback reversed`,
           status: "earned",

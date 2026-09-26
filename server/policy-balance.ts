@@ -17,6 +17,7 @@
  */
 import { differenceInCalendarMonths } from "date-fns";
 import { storage } from "./storage";
+import { toCents, sumCents, fromCents } from "@shared/money";
 
 export interface EnrichedPolicyBalance {
   totalPaid: string;
@@ -40,14 +41,15 @@ export async function enrichPoliciesWithBalance<T extends Record<string, any>>(
   const enriched: (T & EnrichedPolicyBalance)[] = [];
   for (const p of policies) {
     const payments = await storage.getPaymentsByPolicy(p.id, orgId);
-    const totalPaid = payments
-      .filter((tx: any) => tx.status === "cleared")
-      .reduce((sum: number, tx: any) => sum + parseFloat(tx.amount || "0"), 0);
-    const premium = parseFloat(p.premiumAmount || "0");
+    // Integer cents throughout so balances are exact to the cent.
+    const paidCents = sumCents(
+      payments.filter((tx: any) => tx.status === "cleared").map((tx: any) => tx.amount),
+    );
+    const premiumCents = toCents(p.premiumAmount);
     const startDate = p.inceptionDate || p.effectiveDate;
-    let totalDue = 0;
+    let dueCents = 0;
     let periodsElapsed = 0;
-    if (startDate && premium > 0) {
+    if (startDate && premiumCents > 0) {
       const start = new Date(startDate);
       const now = new Date();
       if (!isNaN(start.getTime()) && start <= now) {
@@ -63,21 +65,21 @@ export async function enrichPoliciesWithBalance<T extends Record<string, any>>(
           const periodDays = schedule === "weekly" ? 7 : 14;
           periodsElapsed = Math.max(0, Math.ceil(daysElapsed / periodDays));
         }
-        totalDue = periodsElapsed * premium;
+        dueCents = periodsElapsed * premiumCents;
       }
     }
     // Fold in the signed credit-balance wallet (premium-change reconciliations + overpayments):
     // positive = credit/paid ahead, negative = arrears owed.
     const wallet = await storage.getPolicyCreditBalance(orgId, p.id);
-    const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
-    const balance = totalPaid + walletBalance - totalDue;
+    const walletCents = toCents(wallet?.balance);
+    const balanceCents = paidCents + walletCents - dueCents;
     enriched.push({
       ...p,
-      totalPaid: totalPaid.toFixed(2),
-      totalDue: totalDue.toFixed(2),
-      balance: balance.toFixed(2),
-      outstanding: Math.max(0, -balance).toFixed(2),
-      walletBalance: walletBalance.toFixed(2),
+      totalPaid: fromCents(paidCents),
+      totalDue: fromCents(dueCents),
+      balance: fromCents(balanceCents),
+      outstanding: fromCents(Math.max(0, -balanceCents)),
+      walletBalance: fromCents(walletCents),
       periodsElapsed,
     });
   }

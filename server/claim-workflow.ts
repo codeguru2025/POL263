@@ -28,6 +28,7 @@ import { auditLog, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { todayForOrg } from "./date-utils";
 import { computeGroupLedgerBalance } from "./group-ledger";
 import { structuredLog } from "./logger";
+import { roundMoney, moneyString, subMoney } from "@shared/money";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { notifyClientPush, dispatchNotification } from "./notifications";
 
@@ -118,8 +119,8 @@ export async function getLinkedQuotation(tx: OrgDataDb, orgId: string, claimId: 
 }
 
 function quotationAmount(q: { grandTotal?: string | null; total?: string | null }): number {
-  const grand = parseFloat(String(q.grandTotal ?? "0"));
-  return grand > 0 ? grand : parseFloat(String(q.total ?? "0"));
+  const grand = roundMoney(q.grandTotal);
+  return grand > 0 ? grand : roundMoney(q.total);
 }
 
 /**
@@ -374,18 +375,18 @@ export async function transitionClaim(input: TransitionClaimInput): Promise<{ cl
           organizationId: orgId,
           groupId: debit.group.id,
           entryType: "claim_debit",
-          amount: debit.amount.toFixed(2),
+          amount: moneyString(debit.amount),
           currency: debit.currency,
           description: `Claim ${claim.claimNumber} approved${claim.deceasedName ? ` — ${claim.deceasedName}` : ""}${debit.quotationNumber ? ` (quote ${debit.quotationNumber})` : ""}`,
           referenceType: "claim",
           referenceId: claim.id,
           createdBy: effectiveUserId,
         });
-        updateData.ledgerAmount = debit.amount.toFixed(2);
+        updateData.ledgerAmount = moneyString(debit.amount);
         updateData.groupId = debit.group.id;
         ledger = {
           groupId: debit.group.id, groupName: debit.group.name, currency: debit.currency,
-          amount: debit.amount, balanceBefore, balanceAfter: balanceBefore - debit.amount,
+          amount: debit.amount, balanceBefore, balanceAfter: subMoney(balanceBefore, debit.amount),
         };
       }
     }

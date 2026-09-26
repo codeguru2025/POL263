@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenantSubscriptions, billingPlans, billingSettings } from "@shared/control-plane-schema";
 import { structuredLog } from "./logger";
+import { percentOf, moneyString } from "@shared/money";
 
 const DEFAULT_PLATFORM_FEE_RATE_PERCENT = 2.5;
 
@@ -75,6 +76,7 @@ export async function getPlatformFeeRatePercent(orgId: string): Promise<number> 
 
 export async function computePlatformFee(orgId: string, amount: number | string): Promise<string> {
   const rate = await getPlatformFeeRatePercent(orgId);
-  const base = typeof amount === "string" ? parseFloat(amount) : amount;
-  return ((base * rate) / 100).toFixed(2);
+  // Exact cents with one half-up rounding (float `base * rate / 100` then toFixed
+  // rounds 0.505 inconsistently).
+  return moneyString(percentOf(amount, rate));
 }

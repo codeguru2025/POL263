@@ -14,6 +14,7 @@ import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { todayForOrg } from "./date-utils";
+import { roundMoney, subMoney } from "@shared/money";
 import {
   paymentReceipts,
   serviceReceipts,
@@ -67,11 +68,11 @@ function consolidate(map: AmountMap, fx: Record<string, number>): { usd: number;
     if (rate == null) { if (!unconvertible.includes(currency)) unconvertible.push(currency); continue; }
     usd += amount * rate;
   }
-  return { usd: Number(usd.toFixed(2)), unconvertible };
+  return { usd: roundMoney(usd), unconvertible };
 }
 
 const round2 = (m: AmountMap): AmountMap =>
-  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Number(v.toFixed(2))]));
+  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, roundMoney(v)]));
 
 // ─── Shared query helpers ──────────────────────────────────────────────────
 
@@ -266,7 +267,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     consolidatedUsd: {
       income: cIncome.usd,
       expenses: cExpense.usd,
-      net: Number((cIncome.usd - cExpense.usd).toFixed(2)),
+      net: subMoney(cIncome.usd, cExpense.usd),
       unconvertible: Array.from(new Set([...cIncome.unconvertible, ...cExpense.unconvertible])),
     },
   };
@@ -440,7 +441,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
     consolidatedUsd: {
       cashIn: cIn.usd,
       cashOut: cOut.usd,
-      netCash: Number((cIn.usd - cOut.usd).toFixed(2)),
+      netCash: subMoney(cIn.usd, cOut.usd),
       unconvertible: Array.from(new Set([...cIn.unconvertible, ...cOut.unconvertible])),
     },
     bankDeposits: {
@@ -1057,8 +1058,8 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
     net: is.net,
     consolidatedUsd: is.consolidatedUsd,
     cashPosition: {
-      totalOnHand: Object.fromEntries(Object.entries(totalOnHand).map(([c, v]) => [c, parseFloat(v.toFixed(2))])),
-      totalDeposited: Object.fromEntries(Object.entries(totalDeposited).map(([c, v]) => [c, parseFloat(v.toFixed(2))])),
+      totalOnHand: Object.fromEntries(Object.entries(totalOnHand).map(([c, v]) => [c, roundMoney(v)])),
+      totalDeposited: Object.fromEntries(Object.entries(totalDeposited).map(([c, v]) => [c, roundMoney(v)])),
       admins: positions.map((p) => ({
         ...p,
         displayName: findU(p.userId)?.displayName || findU(p.userId)?.email || p.userId,

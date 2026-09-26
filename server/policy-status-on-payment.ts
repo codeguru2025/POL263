@@ -8,6 +8,7 @@ import { eq, sql, and } from "drizzle-orm";
 import { policies, policyStatusHistory, productVersions, paymentTransactions, policyCreditBalances } from "@shared/schema";
 import type { Policy } from "@shared/schema";
 import { computePolicyOutstanding } from "./policy-outstanding";
+import { sumMoney, roundMoney } from "@shared/money";
 
 // ─── Cycle helpers ───────────────────────────────────────────
 
@@ -250,11 +251,11 @@ export async function applyPolicyStatusForClearedPayment(
         const paidRows = await (db as any).select({ amount: paymentTransactions.amount })
           .from(paymentTransactions)
           .where(and(eq(paymentTransactions.policyId, policyId), eq(paymentTransactions.status, "cleared")));
-        const totalPaid = paidRows.reduce((sum: number, r: any) => sum + (parseFloat(String(r.amount)) || 0), 0);
+        const totalPaid = sumMoney(paidRows.map((r: any) => r.amount));
         const [creditRow] = await (db as any).select({ balance: policyCreditBalances.balance })
           .from(policyCreditBalances)
           .where(and(eq(policyCreditBalances.organizationId, policy.organizationId), eq(policyCreditBalances.policyId, policyId)));
-        const walletBalance = parseFloat(String(creditRow?.balance ?? "0")) || 0;
+        const walletBalance = roundMoney(creditRow?.balance);
         const { outstanding } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
         if (outstanding > 0.01) {
           // Arrears remain outstanding — this payment isn't enough to reinstate cover yet.
