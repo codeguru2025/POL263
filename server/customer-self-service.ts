@@ -13,7 +13,7 @@
  */
 import { sql, eq } from "drizzle-orm";
 import { z } from "zod";
-import { withOrgTransaction } from "./tenant-db";
+import { withOrgTransaction, getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { claims, claimStatusHistory, policyMembers, insertClaimSchema, type Claim, type Policy } from "@shared/schema";
 
@@ -74,25 +74,24 @@ export async function submitClientClaim(
     causeOfDeath: causeOfDeath || null,
   };
 
+  // Link the claimed covered member by name when it matches exactly one member who doesn't
+  // already have a conflicting claim — so the verdict can be recorded against them later.
+  // Anything ambiguous stays unlinked for staff to pick on the claim. Looked up before the
+  // transaction, not inside it: a failed query inside a Postgres transaction aborts it, so
+  // swallowing the error there would have failed the whole claim.
+  let policyMemberId: string | null = null;
+  try {
+    const { findPolicyMemberByName, findConflictingMemberClaim } = await import("./claim-workflow");
+    const tdb = await getDbForOrg(orgId);
+    const match = await findPolicyMemberByName(tdb, policyId, deceasedName);
+    if (match && !(await findConflictingMemberClaim(tdb, orgId, match, claimType))) policyMemberId = match;
+  } catch {
+    policyMemberId = null;
+  }
+
   let created: Claim;
   try {
     created = await withOrgTransaction(orgId, async (txDb) => {
-      // Link the claimed covered member by name when it matches exactly one member who isn't
-      // already claimed for — so the verdict can be recorded against them later. Anything
-      // ambiguous stays unlinked for staff to pick on the claim.
-      let policyMemberId: string | null = null;
-      try {
-        const { findPolicyMemberByName } = await import("./claim-workflow");
-        const match = await findPolicyMemberByName(txDb, policyId, deceasedName);
-        if (match) {
-          const open = await txDb.execute(sql`
-            SELECT 1 FROM claims WHERE organization_id = ${orgId} AND policy_member_id = ${match} AND status <> 'rejected' LIMIT 1
-          `);
-          if ((((open as any).rows ?? open) as unknown[]).length === 0) policyMemberId = match;
-        }
-      } catch {
-        policyMemberId = null;
-      }
       const seqResult = await txDb.execute(sql`
         INSERT INTO org_policy_sequences (organization_id, claim_next) VALUES (${orgId}, 1)
         ON CONFLICT (organization_id) DO UPDATE SET claim_next = org_policy_sequences.claim_next + 1

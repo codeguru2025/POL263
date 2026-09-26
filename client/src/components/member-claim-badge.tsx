@@ -6,6 +6,8 @@ const MEMBER_CLAIM_LABEL: Record<string, { label: string; className: string }> =
   claim_pending: { label: "Claim pending", className: "bg-sky-500/10 text-sky-800 border-sky-200" },
   under_investigation: { label: "Under investigation", className: "bg-violet-500/10 text-violet-800 border-violet-200" },
   claimed: { label: "Claimed — approved", className: "bg-emerald-500/10 text-emerald-800 border-emerald-200" },
+  // A living member's approved claim (e.g. disability) — still covered.
+  claim_approved: { label: "Claim approved", className: "bg-emerald-500/10 text-emerald-800 border-emerald-200" },
   claim_declined: { label: "Claim declined", className: "bg-rose-500/10 text-rose-800 border-rose-200" },
 };
 

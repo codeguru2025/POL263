@@ -23,6 +23,13 @@ vi.mock("../../server/tenant-db", () => ({
   getDbForOrg: vi.fn(),
 }));
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
+// submitClientClaim imports claim-workflow dynamically for the member-name match; loading the real
+// module (route-helpers, notifications, …) took >5s under full-suite load and timed the test out.
+vi.mock("../../server/claim-workflow", () => ({
+  findPolicyMemberByName: vi.fn(async () => null),
+  findConflictingMemberClaim: vi.fn(async () => null),
+  notifyClientOfClaim: vi.fn(async () => {}),
+}));
 vi.mock("../../server/storage", () => ({
   storage: {
     getPolicy: h.getPolicy,

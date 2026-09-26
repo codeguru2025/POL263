@@ -41,13 +41,40 @@ export class ClaimWorkflowError extends Error {
  *  or member can still be changed. */
 export const UNDECIDED_CLAIM_STATUSES = ["submitted", "verified", "under_investigation"];
 
-/** Member claim_status values (policy_members.claim_status). */
+/** Member claim_status values (policy_members.claim_status). "claimed" means the person has died
+ *  (the rest of the app reads it as deceased); a living person's approved claim — e.g. disability
+ *  — is "claim_approved" instead. */
 export const MEMBER_CLAIM_STATUS = {
   pending: "claim_pending",
   investigating: "under_investigation",
   approved: "claimed",
+  approvedLiving: "claim_approved",
   declined: "claim_declined",
 } as const;
+
+/** Claim types that pay out on the covered person's death. A person can only have one of these;
+ *  approving one ends their cover. Anything else (disability, hospital cash) is a claim by a
+ *  living member and doesn't stop a later death claim. */
+export const DEATH_CLAIM_TYPES = ["death", "accidental_death", "repatriation", "cash_in_lieu", "group_service"];
+
+export function isDeathClaimType(claimType: string | null | undefined): boolean {
+  return DEATH_CLAIM_TYPES.includes(String(claimType ?? ""));
+}
+
+/**
+ * An existing claim on this member that the new one would duplicate: any non-declined death claim
+ * when the new one is also a death claim, otherwise a non-declined claim of the same type.
+ */
+export async function findConflictingMemberClaim(
+  tx: OrgDataDb, orgId: string, policyMemberId: string, claimType: string | null | undefined, excludeClaimId?: string,
+): Promise<{ claimNumber: string; status: string; claimType: string } | null> {
+  const rows = await tx.select({ id: claims.id, claimNumber: claims.claimNumber, status: claims.status, claimType: claims.claimType })
+    .from(claims)
+    .where(and(eq(claims.organizationId, orgId), eq(claims.policyMemberId, policyMemberId), sql`${claims.status} <> 'rejected'`));
+  const newIsDeath = isDeathClaimType(claimType);
+  const hit = rows.find((r) => r.id !== excludeClaimId && (newIsDeath ? isDeathClaimType(r.claimType) : r.claimType === claimType));
+  return hit ? { claimNumber: hit.claimNumber, status: hit.status, claimType: hit.claimType } : null;
+}
 
 export interface LedgerImpact {
   groupId: string;
@@ -155,9 +182,12 @@ async function setMemberClaimStatus(tx: OrgDataDb, claim: Claim, status: string 
   if (!before) return null;
   const patch: Record<string, unknown> = { claimStatus: status, claimVerdictNote: note };
   patch.claimVerdictAt = verdict ? new Date() : null;
-  // An approved death claim records the date of death on the member; a decline clears it.
-  if (status === MEMBER_CLAIM_STATUS.approved) patch.dateOfDeath = claim.dateOfDeath ?? null;
-  else if (status === MEMBER_CLAIM_STATUS.declined) patch.dateOfDeath = null;
+  // An approved death claim records the date of death on the member; a declined death claim
+  // clears it. A living member's claim never touches it.
+  if (isDeathClaimType(claim.claimType)) {
+    if (status === MEMBER_CLAIM_STATUS.approved) patch.dateOfDeath = claim.dateOfDeath ?? null;
+    else if (status === MEMBER_CLAIM_STATUS.declined) patch.dateOfDeath = null;
+  }
   const [after] = await tx.update(policyMembers).set(patch as any).where(eq(policyMembers.id, claim.policyMemberId)).returning();
   return { before, after };
 }
@@ -377,7 +407,8 @@ export async function transitionClaim(input: TransitionClaimInput): Promise<{ cl
     let member: { before: any; after: any } | null = null;
     if (toStatus === "approved") {
       const note = `Claim ${claim.claimNumber} approved${exGratia ? " (ex gratia)" : ""}${reason ? `: ${reason}` : ""}`;
-      member = await setMemberClaimStatus(tx, row, MEMBER_CLAIM_STATUS.approved, note, true);
+      const approvedStatus = isDeathClaimType(claim.claimType) ? MEMBER_CLAIM_STATUS.approved : MEMBER_CLAIM_STATUS.approvedLiving;
+      member = await setMemberClaimStatus(tx, row, approvedStatus, note, true);
     } else if (toStatus === "rejected") {
       member = await setMemberClaimStatus(tx, row, MEMBER_CLAIM_STATUS.declined, `Claim ${claim.claimNumber} declined: ${reason}`, true);
     } else if (toStatus === "under_investigation") {

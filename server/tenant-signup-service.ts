@@ -281,7 +281,9 @@ export async function pollPendingSignupStatus(pendingId: string): Promise<{ stat
       const { slug, domainCommissioned } = await getTenantSlugAndCommission(tenantId);
       return { status: "provisioned", provisioned: true, slug, domainCommissioned };
     }
-    if (isPaynowFailedStatus(status)) return { status: "failed" };
+    // "payment_failed", not "failed": pending.status is also "failed" when the payment cleared but
+    // provisioning broke, and the signup page must never tell someone who has paid to pay again.
+    if (isPaynowFailedStatus(status)) return { status: "payment_failed" };
     return { status: pending.status };
   } catch (err) {
     return { status: pending.status, error: (err as Error).message };

@@ -10,6 +10,85 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-26 — Review of the claims / change-of-policyholder / signup-retry work: 8 fixes
+
+Report-only review of commits 0d88d08, fe1beac, b7195e6 and the uncommitted signup fix below,
+then fixed what Augustus approved.
+
+1. **Signup retry showed "didn't go through" instantly on the second attempt.** The poll query key
+   was `[poll, polling]`, so the retry reused the cached `failed` answer from the first attempt and
+   stopped at once. *Also:* `pending.status` is `"failed"` when payment **cleared** but provisioning
+   broke, and the poll returned that same word, so the new message would have told a paying
+   customer to pay again. **Fix:** `tenant-signup.tsx` adds a `paymentAttempt` counter to the query
+   key; `tenant-signup-service.ts` returns `payment_failed` for a gateway failure and the page only
+   reacts to that.
+2. **`POST /api/claims` spread `req.body` into `insertClaimSchema`.** Someone with claim-entry
+   rights could create a claim pre-marked ex gratia, with `approvedBy`/`decidedBy`/`ledgerAmount`/
+   `fraudFlags`/`isWaitingPeriodWaived`, or with another client's `clientId` (so claim SMSes went to
+   them). **Fix:** explicit field list; `clientId`/`branchId` always come from the policy; a policy is
+   now required up front (it's `NOT NULL` anyway).
+3. **One-claim-per-person and the "claimed" member status applied to every claim type.** "claimed"
+   is read as *deceased* elsewhere (members list, change of policyholder). An approved disability
+   claim marked a living person dead, wrote a date of death, and blocked their later death claim.
+   **Fix:** `claim-workflow.ts` `DEATH_CLAIM_TYPES` / `isDeathClaimType` / `findConflictingMemberClaim`:
+   only one *death* claim per person, living-member claims only conflict with the same type, and a
+   living member's approval sets `claim_approved` (new badge) without touching `date_of_death`.
+   Used by POST/PATCH claims and client-portal claims.
+4. **Removing a member (or a death claim ending their cover) never lowered the premium on
+   age-rated or manually-priced policies.** `recalculatePolicyPremiumIfNeeded` deliberately skips
+   both. **Fix:** `repricePolicyAfterMemberRemoval` in `routes.ts`: age-rated subtracts the member's
+   stored `premium_contribution` (the premium is the sum of those); a `premiumOverride` policy is
+   left unchanged but returns `premiumReviewNeeded`, shown to staff on the claim and approval
+   screens. Before, the premium stayed the same with no warning.
+5. **Repatriation claims didn't end the deceased's cover.** Now uses `isDeathClaimType`.
+6. **Editing a claim's amount/quote left the Approvals queue showing the original amount**, and
+   the edit wasn't locked against a concurrent decision. **Fix:** PATCH re-checks the status under
+   `FOR UPDATE` (409 if just decided) and merges amount/currency/quote into the open CLAIM_REVIEW
+   request's `requestData`. The approval dialog now shows labelled rows instead of raw JSON.
+7. **Client-portal claim: the member-name lookup ran inside the transaction with a swallowing
+   try/catch.** A failed query there aborts the Postgres transaction, so the claim insert would
+   then fail. **Fix:** lookup moved before the transaction (read-only). The
+   customer-self-service test now stubs claim-workflow; importing the real module took >5s under
+   full-suite load and flaked.
+8. **`POST /api/agent-content-posts` wrote raw registry `user.id` into `created_by_user_id`**
+   (same FK class as 2026-09-01/09-08). Now `resolveOrSyncTenantUserId`.
+
+**Verified:** `tsc` clean; 766/766 tests incl. 4 new death-claim-rule tests. No live click-through.
+
+**Lesson:** a status value that means something specific ("claimed" = deceased) must only be
+written when that thing is true, so check every reader before reusing it for a broader case. And
+if a query key is cached, a retry needs a new key or the old answer comes back.
+
+---
+
+## 2026-09-25 — Signup page waited forever after a failed/cancelled $1 EcoCash payment
+
+**Symptom:** during a live tenant signup (Ubuntu Funeral Assurance, recording the product demo),
+no EcoCash prompt reached the phone. The page sat on "Waiting for payment confirmation…"
+indefinitely with no error and no way to retry, short of reloading and redoing the whole signup.
+
+**Root cause:** PayNow accepted the remote-transaction initiate (poll URL stored), then reported
+the transaction `cancelled`. `pollPendingSignupPaynow` correctly mapped that to
+`{ status: "failed" }`, and `pending_tenant_signups.paynow_status` was set to `cancelled`. But the
+client (`client/src/pages/public/tenant-signup.tsx`) only acted on `pollData.provisioned`, so it
+never noticed the failure. `polling` stayed true, so the spinner stayed up and the "Send payment
+prompt" button never came back. Why EcoCash didn't deliver the push is a separate
+gateway/network issue. The UI's job is to recover from that.
+
+**Fix:** `tenant-signup.tsx`: when a poll returns `status: "failed"`, stop polling, set
+`paymentFailed`, and show a plain-language message ("didn't go through — cancelled or no prompt
+reached your phone"). The send button comes back. `paymentFailed` clears on the next initiate. The
+server already allows re-initiating while the pending signup is `awaiting_payment`.
+**Verified:** confirmed the cancelled state in the control-plane DB (pending signup
+`SIGNUP-20260925-8c6594ad`, `paynow_status = cancelled`, `status = awaiting_payment`); `tsc` clean.
+Not live until deployed.
+
+**Lesson:** for every poll loop, check that the client handles *each* terminal status the server
+can return, not just success. A server that says "failed" to a client that only listens for
+"provisioned" is the same as a server that never answers.
+
+---
+
 ## 2026-09-25 — Removed members still showed as claimable; client claims left no audit trail
 
 **Symptom:** (1) On a policy's Members tab, a member who had been removed (`is_active = false`)

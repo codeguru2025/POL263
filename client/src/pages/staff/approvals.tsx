@@ -61,9 +61,10 @@ export default function StaffApprovals() {
       const verb = resolveAction === "approve" ? "approved" : resolveAction === "investigate" ? "sent for investigation" : "rejected";
       toast({
         title: result?.claim ? `Claim ${result.claim.claimNumber} ${verb}` : "Success",
-        description: ledger
+        description: (ledger
           ? `${ledger.currency} ${Number(ledger.amount).toFixed(2)} deducted from ${ledger.groupName}'s ledger. New balance: ${ledger.currency} ${Number(ledger.balanceAfter).toFixed(2)}.`
-          : result?.claim ? "The claim and the member on the policy have been updated." : `Request ${verb} successfully.`,
+          : result?.claim ? "The claim and the member on the policy have been updated." : `Request ${verb} successfully.`)
+          + (result?.coverEnded?.premiumReviewNeeded ? " This policy's premium was set by hand, so it was not changed — check whether it should now be lower." : ""),
       });
       setResolveAction(null);
       setSelectedApproval(null);
@@ -426,10 +427,17 @@ export default function StaffApprovals() {
               </div>
               {selectedApproval.requestData && (
                 <div>
-                  <Label className="text-xs text-muted-foreground">Request Data</Label>
-                  <pre className="mt-1 text-xs bg-muted/50 p-3 rounded-md overflow-auto max-h-40" data-testid="text-request-data">
-                    {JSON.stringify(selectedApproval.requestData, null, 2)}
-                  </pre>
+                  <Label className="text-xs text-muted-foreground">Details</Label>
+                  <dl className="mt-1 text-sm bg-muted/50 p-3 rounded-md overflow-auto max-h-48 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1" data-testid="text-request-data">
+                    {Object.entries(selectedApproval.requestData as Record<string, unknown>)
+                      .filter(([, v]) => v !== null && v !== undefined && v !== "")
+                      .map(([k, v]) => (
+                        <div key={k} className="contents">
+                          <dt className="text-muted-foreground">{k.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}</dt>
+                          <dd className="break-words">{typeof v === "object" ? JSON.stringify(v) : String(v).replace(/_/g, " ")}</dd>
+                        </div>
+                      ))}
+                  </dl>
                 </div>
               )}
               {selectedApproval.rejectionReason && (
