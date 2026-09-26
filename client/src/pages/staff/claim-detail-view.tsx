@@ -209,7 +209,7 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
       setMode(null);
       const ledger = row?.ledger;
       const parts: string[] = [];
-      if (ledger) parts.push(`${formatAmountWithCode(ledger.amount, ledger.currency)} deducted from ${ledger.groupName}'s ledger. New balance: ${formatAmountWithCode(ledger.balanceAfter, ledger.currency)}.`);
+      if (ledger) parts.push(`${formatAmountWithCode(ledger.amount, ledger.currency)} deducted from ${ledger.groupName}'s ${ledger.currency} balance. New ${ledger.currency} balance: ${formatAmountWithCode(ledger.balanceAfter, ledger.currency)}${Number(ledger.balanceAfter) < 0 ? ` — the group now owes ${formatAmountWithCode(Math.abs(Number(ledger.balanceAfter)), ledger.currency)}` : ""}.`);
       if (row?.coverEnded?.ended) parts.push(`The member's cover has ended${row.coverEnded.oldPremium !== row.coverEnded.newPremium ? `; premium ${row.coverEnded.oldPremium} → ${row.coverEnded.newPremium}` : ""}.`);
       if (row?.coverEnded?.premiumReviewNeeded) parts.push("This policy's premium was set by hand, so it was not changed — check whether it should now be lower.");
       if (row.status === "verified" && row.investigationFindings) parts.push("Sent back to the approvers.");

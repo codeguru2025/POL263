@@ -15,7 +15,7 @@ import { sql, eq } from "drizzle-orm";
 import { z } from "zod";
 import { withOrgTransaction, getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { claims, claimStatusHistory, policyMembers, insertClaimSchema, type Claim, type Policy } from "@shared/schema";
+import { claims, claimStatusHistory, policyMembers, approvalRequests, insertClaimSchema, type Claim, type Policy } from "@shared/schema";
 
 /** 400-class: bad/missing input from the customer. */
 export class CustomerInputError extends Error {
@@ -89,6 +89,27 @@ export async function submitClientClaim(
     policyMemberId = null;
   }
 
+  // Same checks a staff-logged claim gets at submission: flag (don't block) a death before the
+  // waiting period ends — the approver must override it explicitly — and link the policy's ledger
+  // group (legacy group / burial society) so approval debits the right ledger.
+  let fraudFlags: Record<string, unknown> | undefined;
+  try {
+    const { checkWaitingPeriodViolation } = await import("./claim-workflow");
+    const wp = await checkWaitingPeriodViolation(policy, orgId, dateOfDeath || null);
+    if (wp.violated) fraudFlags = { waitingPeriod: { violated: true, waitingPeriodEndDate: wp.waitingPeriodEndDate, checkedAt: new Date().toISOString() } };
+  } catch {
+    fraudFlags = undefined;
+  }
+  let groupId: string | null = null;
+  try {
+    if (policy.groupId) {
+      const group = await storage.getGroup(policy.groupId, orgId);
+      if (group?.hasLedger) groupId = group.id;
+    }
+  } catch {
+    groupId = null;
+  }
+
   let created: Claim;
   try {
     created = await withOrgTransaction(orgId, async (txDb) => {
@@ -99,7 +120,12 @@ export async function submitClientClaim(
       `);
       const nextVal = (seqResult as unknown as { rows?: { claim_next: number }[] }).rows?.[0]?.claim_next ?? 1;
       const claimNumber = `CLM-${String(nextVal).padStart(6, "0")}`;
-      const parsed = insertClaimSchema.parse({ ...parsedBase, claimNumber, ...(policyMemberId ? { policyMemberId } : {}) });
+      const parsed = insertClaimSchema.parse({
+        ...parsedBase, claimNumber,
+        ...(policyMemberId ? { policyMemberId } : {}),
+        ...(groupId ? { groupId } : {}),
+        ...(fraudFlags ? { fraudFlags } : {}),
+      });
       const [row] = await txDb.insert(claims).values(parsed).returning();
       await txDb.insert(claimStatusHistory).values({
         claimId: row.id,
@@ -107,6 +133,20 @@ export async function submitClientClaim(
         toStatus: "submitted",
         reason: `Submitted via ${source}`,
         changedBy: undefined,
+      });
+      // Into the Approvals queue in the same commit, exactly like a staff-logged claim. No staff
+      // user is behind it, so initiatedBy is empty and submittedVia records the channel.
+      await txDb.insert(approvalRequests).values({
+        organizationId: orgId,
+        requestType: "CLAIM_REVIEW",
+        entityType: "Claim",
+        entityId: row.id,
+        requestData: {
+          claimNumber, claimType: row.claimType, amount: row.cashInLieuAmount ?? null,
+          deceasedName: row.deceasedName ?? null, submittedVia: source,
+        },
+        status: "pending",
+        initiatedBy: null,
       });
       if (policyMemberId) {
         await txDb.update(policyMembers).set({
@@ -121,9 +161,8 @@ export async function submitClientClaim(
     }
     throw err;
   }
-  // Best effort, after commit: tell the client it was received (SMS per the tenant's
-  // claim_status_change template) and tell staff there's a claim to deal with — a client-submitted
-  // claim has no staff "initiator", so it never gets an Approvals-queue entry of its own.
+  // Best effort, after commit: tell the client it was received (always by SMS — see
+  // SMS_ALWAYS_EVENTS in notifications.ts) and tell staff and the approvers there's a claim.
   const submitted = created;
   // Audit trail — the actor is the client, not a staff user, so there's no actor_id; the email
   // column says who and through which channel.
@@ -149,6 +188,14 @@ export async function submitClientClaim(
       type: "CLAIM_SUBMITTED",
       title: "New claim from a client",
       body: `Claim ${submitted.claimNumber} was submitted via ${source} and needs to be reviewed on the Claims page.`,
+      metadata: { claimId: submitted.id, claimNumber: submitted.claimNumber },
+    }))
+    .catch(() => {});
+  import("./user-notifications")
+    .then((m) => m.notifyUsersWithPermission(orgId, "approve:requests", {
+      type: "APPROVAL_NEEDED",
+      title: "Claim Requires Approval",
+      body: `Claim ${submitted.claimNumber} was submitted by the client via ${source} and requires your approval.`,
       metadata: { claimId: submitted.id, claimNumber: submitted.claimNumber },
     }))
     .catch(() => {});

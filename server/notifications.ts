@@ -303,6 +303,53 @@ export async function notifyClientPush(orgId: string, clientId: string, subject:
   }
 }
 
+/** Events the client must always be texted about, even when the tenant hasn't set up an SMS
+ *  template for them: the built-in wording is sent instead. Claim updates are here because a
+ *  family dealing with a death should never have to phone in to find out where the claim is. */
+const SMS_ALWAYS_EVENTS = new Set(["claim_status_change"]);
+
+/** Text one rendered message to a client and record it in the notification log — the same
+ *  phone fallback, country-code, unfilled-merge-tag and retry rules as a templated SMS. */
+async function sendDefaultClientSms(orgId: string, clientId: string, eventType: string, subject: string, body: string, ctx: NotificationContext): Promise<void> {
+  const log = await storage.createNotificationLog(orgId, {
+    recipientType: "client",
+    recipientId: clientId,
+    channel: "sms",
+    subject,
+    body,
+    policyId: ctx.policyId ?? null,
+    status: "sent",
+  });
+  try {
+    const client = await storage.getClient(clientId, orgId);
+    const phone = client?.phone?.trim() || ctx.fallbackPhone?.trim() || null;
+    if (!phone) {
+      await storage.updateNotificationLogStatus(orgId, log.id, "skipped", "Client has no phone number on file");
+      return;
+    }
+    const unfilled = unfilledMergeTags(body);
+    if (unfilled.length) {
+      await storage.updateNotificationLogStatus(orgId, log.id, "skipped", `Missing details for: ${unfilled.join(", ")}`);
+      return;
+    }
+    const result = await sendSms(orgId, {
+      to: phone, message: body, kind: "transactional", countryCode: await resolveSmsCountryCode(orgId, ctx.policyId),
+      meta: { source: "notification", eventType, clientId, notificationLogId: log.id },
+    });
+    if (!result.ok) {
+      await storage.updateNotificationLogDelivery(orgId, log.id, {
+        status: "failed",
+        failureReason: result.message,
+        attempts: 1,
+        nextRetryAt: result.retryable ? nextSmsRetryAt(1) : null,
+      });
+    }
+  } catch (err) {
+    structuredLog("error", "Failed to send default notification SMS", { error: (err as Error).message, orgId, clientId, eventType });
+    await storage.updateNotificationLogStatus(orgId, log.id, "failed", (err as Error).message).catch(() => {});
+  }
+}
+
 /**
  * Dispatch a notification for a specific event.
  * Uses admin-configured templates if available, otherwise falls back to defaults.
@@ -485,6 +532,15 @@ export async function dispatchNotification(
             });
           }
         }
+      }
+    }
+
+    // Always text the client about these events: when the tenant has no active SMS template for
+    // one, send the built-in wording by SMS (templates for other channels still go out as above).
+    if (SMS_ALWAYS_EVENTS.has(eventType) && smsAllowed && !templates.some((t) => t.channel === "sms")) {
+      const defaults = DEFAULT_MESSAGES[eventType];
+      if (defaults) {
+        await sendDefaultClientSms(orgId, clientId, eventType, renderTemplate(defaults.subject, ctx), renderTemplate(defaults.body, ctx), ctx);
       }
     }
   } catch (err) {

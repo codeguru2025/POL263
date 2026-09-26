@@ -286,3 +286,58 @@ describe("unfilledMergeTags", () => {
     expect(unfilledMergeTags("Dear Jane, policy FLK1 is active.")).toEqual([]);
   });
 });
+
+describe("dispatchNotification — claim updates always go out by SMS", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHasModule.mockResolvedValue(true);
+    mockStorage.getOrganization.mockResolvedValue({ id: "org1", name: "Test Org" });
+    mockStorage.createNotificationLog.mockResolvedValue({ id: "log1" });
+    mockStorage.updateNotificationLogStatus.mockResolvedValue(undefined);
+    mockStorage.getCountryFlagSettings.mockResolvedValue({ isEnabled: false, homeCountryCode: "263", flagCountryCode: "27" });
+    mockStorage.getPolicy.mockResolvedValue({ id: "p1", isSouthAfrica: false });
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: "0771234567", email: null });
+    mockSendSms.mockResolvedValue({ ok: true, message: "sent" });
+  });
+  const ctx = { clientName: "Jane Doe", claimNumber: "CLM-000009", status: "Approved", policyId: "p1" };
+
+  it("texts the built-in wording when the tenant has no claim template at all", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
+    await dispatchNotification("org1", "claim_status_change", "c1", ctx);
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1].message).toBe("Dear Jane Doe, your claim CLM-000009 status has been changed to Approved.");
+  });
+
+  it("still texts when the tenant only set up an email template for claims", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([{ id: "t1", channel: "email", subject: "s", bodyTemplate: "b" }]);
+    await dispatchNotification("org1", "claim_status_change", "c1", ctx);
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the tenant's own SMS template instead of the built-in one (never texts twice)", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([{ id: "t1", channel: "sms", subject: "s", bodyTemplate: "Claim {claim_number}: {status}" }]);
+    await dispatchNotification("org1", "claim_status_change", "c1", ctx);
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+    expect(mockSendSms.mock.calls[0][1].message).toBe("Claim CLM-000009: Approved");
+  });
+
+  it("texts the fallback number (the informant) when the client has no phone", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
+    mockStorage.getClient.mockResolvedValue({ id: "c1", phone: null, email: null });
+    await dispatchNotification("org1", "claim_status_change", "c1", { ...ctx, fallbackPhone: "0779999999" });
+    expect(mockSendSms.mock.calls[0][1].to).toBe("0779999999");
+  });
+
+  it("doesn't text when the tenant's SMS module is off", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
+    mockHasModule.mockImplementation(async (_org: string, mod: string) => mod !== "sms_notifications");
+    await dispatchNotification("org1", "claim_status_change", "c1", ctx);
+    expect(mockSendSms).not.toHaveBeenCalled();
+  });
+
+  it("doesn't text by default for events outside the always-SMS list", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
+    await dispatchNotification("org1", "payment_received", "c1", { clientName: "Jane Doe", policyId: "p1" });
+    expect(mockSendSms).not.toHaveBeenCalled();
+  });
+});

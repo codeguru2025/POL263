@@ -29,6 +29,7 @@ vi.mock("../../server/claim-workflow", () => ({
   findPolicyMemberByName: vi.fn(async () => null),
   findConflictingMemberClaim: vi.fn(async () => null),
   notifyClientOfClaim: vi.fn(async () => {}),
+  checkWaitingPeriodViolation: vi.fn(async () => ({ violated: false, waitingPeriodEndDate: null })),
 }));
 vi.mock("../../server/storage", () => ({
   storage: {
@@ -66,7 +67,7 @@ describe("submitClientClaim", () => {
       dateOfDeath: "2026-08-01",
     });
     expect(claim.claimNumber).toBe("CLM-000007");
-    expect(h.tx.insert).toHaveBeenCalledTimes(2); // claims + claim_status_history
+    expect(h.tx.insert).toHaveBeenCalledTimes(3); // claims + claim_status_history + approval_requests
   });
 
   it("defaults the status-history reason to the client-portal wording (unchanged)", async () => {
@@ -81,6 +82,17 @@ describe("submitClientClaim", () => {
     await submitClientClaim(ORG, CLIENT, { policyId: POLICY_ID, claimType: "death" }, "customer service");
     const statusHistoryCall = h.tx.insert.mock.results[1].value.values.mock.calls[0][0];
     expect(statusHistoryCall.reason).toBe("Submitted via customer service");
+  });
+
+  it("puts the client's claim into the Approvals queue in the same commit, like a staff-logged claim", async () => {
+    vi.mocked(storage.getPolicy).mockResolvedValue(ownPolicy as any);
+    await submitClientClaim(ORG, CLIENT, { policyId: POLICY_ID, claimType: "death", deceasedName: "John Doe" }, "customer service");
+    const approval = h.tx.insert.mock.results[2].value.values.mock.calls[0][0];
+    expect(approval).toMatchObject({
+      organizationId: ORG, requestType: "CLAIM_REVIEW", entityType: "Claim", entityId: "claim-123",
+      status: "pending", initiatedBy: null,
+      requestData: expect.objectContaining({ claimNumber: "CLM-000007", submittedVia: "customer service" }),
+    });
   });
 
   it("throws CustomerInputError when policyId or claimType is missing", async () => {

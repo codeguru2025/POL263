@@ -263,7 +263,10 @@ export async function transitionClaim(input: TransitionClaimInput): Promise<{ cl
 
   const effectiveUserId = await resolveOrSyncTenantUserId(orgId, user.id);
   const isDecision = ["approved", "rejected", "under_investigation"].includes(toStatus);
-  if (["approved", "paid"].includes(toStatus) || (input.source === "approvals" && isDecision)) {
+  // Approving, declining, sending for investigation and marking paid are decisions: they need the
+  // claim approval permission wherever they're made — the same rule the Claims page buttons follow.
+  // (Declining and investigating used to need only write:claim when done from the Claims page.)
+  if (isDecision || toStatus === "paid") {
     const perms = await storage.getUserEffectivePermissions(user.id, orgId);
     if (!user.isPlatformOwner && !perms.includes("approve:claim")) {
       throw new ClaimWorkflowError(403, "You need the claim approval permission to decide on claims.");
@@ -397,7 +400,7 @@ export async function transitionClaim(input: TransitionClaimInput): Promise<{ cl
     if (concludingInvestigation) historyParts.push(`Investigation findings: ${investigationFindings}`, "Sent back for approval");
     if (waitingPeriodOverride) historyParts.push(`Waiting period override: ${waitingPeriodOverride.reason}`);
     if (exGratia) historyParts.push(`Ex gratia: ${exGratia.reason}`);
-    if (ledger) historyParts.push(`${ledger.currency} ${ledger.amount.toFixed(2)} deducted from ${ledger.groupName}'s ledger (balance ${ledger.balanceBefore.toFixed(2)} → ${ledger.balanceAfter.toFixed(2)})`);
+    if (ledger) historyParts.push(`${ledger.currency} ${ledger.amount.toFixed(2)} deducted from ${ledger.groupName}'s ${ledger.currency} balance (${ledger.balanceBefore.toFixed(2)} → ${ledger.balanceAfter.toFixed(2)})${ledger.balanceAfter < 0 ? ` — the group now owes ${ledger.currency} ${Math.abs(ledger.balanceAfter).toFixed(2)}` : ""}`);
     if (input.source === "approvals") historyParts.push("Decided from the Approvals queue");
     await tx.insert(claimStatusHistory).values({
       claimId: claim.id, fromStatus: claim.status, toStatus, reason: historyParts.join(" — ") || null, changedBy: effectiveUserId,

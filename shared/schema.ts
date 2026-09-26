@@ -3175,9 +3175,9 @@ export const approvalRequests = pgTable(
     entityId: text("entity_id").notNull(),
     requestData: jsonb("request_data"),
     status: text("status").default("pending").notNull(),
-    initiatedBy: uuid("initiated_by")
-      .notNull()
-      .references(() => users.id),
+    /** Null for a claim a client submitted themselves (client portal / customer service) —
+     *  there's no staff user behind it; requestData.submittedVia says where it came from. */
+    initiatedBy: uuid("initiated_by").references(() => users.id),
     approvedBy: uuid("approved_by").references(() => users.id),
     rejectionReason: text("rejection_reason"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

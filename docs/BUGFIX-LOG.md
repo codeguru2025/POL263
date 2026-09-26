@@ -10,6 +10,37 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-26 — Claim SMS only went out if the tenant had built an SMS template; client claims skipped approvals
+
+**Symptom / rules set by Augustus:** every claim change must reach the client by SMS; client-portal
+claims must follow the same approval flow; declining needs approval rights.
+
+**Root cause:** `dispatchNotification` with no per-tenant template sends in-app + email only.
+SMS went out only when a tenant had hand-built an SMS template for `claim_status_change`, so
+a tenant without one never texted any claim update. Client-portal / customer-service claims never
+created a CLAIM_REVIEW request (`approval_requests.initiated_by` was NOT NULL and a client has no
+staff user). `transitionClaim` required `approve:claim` for decline/investigate only from the
+Approvals queue.
+
+**Fix:** `server/notifications.ts` `SMS_ALWAYS_EVENTS` (`claim_status_change`): when the tenant has
+no active SMS template for it, the built-in wording is texted via `sendDefaultClientSms`. The
+same phone-fallback / country-code / merge-tag / retry rules apply, the SMS module must be on,
+and a tenant's own SMS template always wins, so the client is never texted twice. Migration
+`0131_approval_requests_client_initiated.sql` makes `initiated_by` nullable and queues existing
+undecided client claims. `customer-self-service.ts` `submitClientClaim` now inserts the
+CLAIM_REVIEW request in the claim's own transaction, notifies approvers, and flags a
+waiting-period violation and links the ledger group like the staff path does.
+`claim-workflow.ts`: approve / decline / investigate / paid all need `approve:claim` from any
+screen. Ledger messages now name the currency balance debited and say "the group now owes …"
+when it goes negative. Negative balances and debiting the quote's own currency in a
+multi-currency ledger were already the behaviour, and both are intended.
+**Verified:** `tsc` clean; 774/774 tests (8 new). **Needs `npm run db:migrate` (0131) on deploy.**
+
+**Lesson:** "no template configured" must not quietly mean "no SMS" for a message the business
+treats as mandatory. Check the default path's channels, not just the templated path.
+
+---
+
 ## 2026-09-26 — Review of the claims / change-of-policyholder / signup-retry work: 8 fixes
 
 Report-only review of commits 0d88d08, fe1beac, b7195e6 and the uncommitted signup fix below,

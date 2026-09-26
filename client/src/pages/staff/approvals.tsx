@@ -62,7 +62,7 @@ export default function StaffApprovals() {
       toast({
         title: result?.claim ? `Claim ${result.claim.claimNumber} ${verb}` : "Success",
         description: (ledger
-          ? `${ledger.currency} ${Number(ledger.amount).toFixed(2)} deducted from ${ledger.groupName}'s ledger. New balance: ${ledger.currency} ${Number(ledger.balanceAfter).toFixed(2)}.`
+          ? `${ledger.currency} ${Number(ledger.amount).toFixed(2)} deducted from ${ledger.groupName}'s ${ledger.currency} balance. New ${ledger.currency} balance: ${Number(ledger.balanceAfter).toFixed(2)}${Number(ledger.balanceAfter) < 0 ? ` — the group now owes ${ledger.currency} ${Math.abs(Number(ledger.balanceAfter)).toFixed(2)}` : ""}.`
           : result?.claim ? "The claim and the member on the policy have been updated." : `Request ${verb} successfully.`)
           + (result?.coverEnded?.premiumReviewNeeded ? " This policy's premium was set by hand, so it was not changed — check whether it should now be lower." : ""),
       });

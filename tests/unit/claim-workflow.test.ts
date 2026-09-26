@@ -102,6 +102,16 @@ describe("transitionClaim guard rails (checked before anything is written)", () 
     );
   });
 
+  it("needs the claim approval permission to decline or investigate from the Claims page too", async () => {
+    storageMock.getUserEffectivePermissions.mockResolvedValue(["write:claim"]);
+    await expectRejection(transitionClaim({ req: req(), claimId: "c1", toStatus: "rejected", reason: "Not covered", source: "claims" }), 403);
+    await expectRejection(
+      transitionClaim({ req: req(), claimId: "c1", toStatus: "under_investigation", investigationReason: "Dates", investigationNextSteps: "Call family", source: "claims" }),
+      403,
+    );
+    expect(withOrgTransaction).not.toHaveBeenCalled();
+  });
+
   it("proceeds to the transaction once the inputs are valid", async () => {
     withOrgTransaction.mockResolvedValue({ claim: { ...baseClaim, status: "rejected" }, ledger: null });
     const result = await transitionClaim({ req: req(), claimId: "c1", toStatus: "rejected", reason: "Not covered", source: "approvals" });
