@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PassThrough } from "stream";
 
 const h = vi.hoisted(() => ({
   due: [] as any[],
@@ -86,14 +85,10 @@ describe("SMS report export", () => {
   });
 
   it("PDF renders (incl. many rows across pages) without throwing", async () => {
-    const out = new PassThrough();
-    const chunks: Buffer[] = [];
-    out.on("data", (c) => chunks.push(c));
-    const done = new Promise((r) => out.on("end", r));
-    const res: any = Object.assign(out, { setHeader: vi.fn() });
-    streamSmsReportPdf(res, Array.from({ length: 120 }, (_, i) => row({ id: `m${i}`, message: "x".repeat(i * 3) })), ctx, "r.pdf");
-    await done;
-    const pdf = Buffer.concat(chunks);
+    const res: any = { setHeader: vi.fn(), send: vi.fn() };
+    await streamSmsReportPdf(res, Array.from({ length: 120 }, (_, i) => row({ id: `m${i}`, message: "x".repeat(i * 3) })), ctx, "r.pdf");
+    const pdf: Buffer = res.send.mock.calls[0][0];
+    expect(Buffer.isBuffer(pdf)).toBe(true);
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(res.setHeader).toHaveBeenCalledWith("Content-Disposition", 'attachment; filename="r.pdf"');
   });

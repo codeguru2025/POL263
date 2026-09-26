@@ -120,6 +120,8 @@ import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
 import { enqueueJob, getJobStats } from "./job-queue";
+import { getEventLoopStats } from "./event-loop-monitor";
+import { getCpuPoolStats } from "./cpu-pool";
 import {
   insertOutboxMessageInTx,
   requestOutboxDrain,
@@ -13316,7 +13318,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const uploadToken = cacheParsedUpload(user.organizationId, req.file.originalname, parsed);
       return res.json({ uploadToken, headers: parsed.headers, sampleRows: parsed.rows.slice(0, 20), totalRows: parsed.rows.length, suggestedMapping, fieldSpec });
     } catch (err: any) {
-      return res.status(400).json({ message: err?.message || "Failed to parse file" });
+      return res.status(err?.status === 503 ? 503 : 400).json({ message: err?.message || "Failed to parse file" });
     }
   });
   app.use("/api/groups/ledger/import/upload", handleGroupLedgerImportUploadError);
@@ -15669,6 +15671,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         tableCounts,
         tenantPools: getTenantPoolStats(),
         backgroundJobs: getJobStats(),
+        eventLoop: getEventLoopStats(),
+        cpuPool: getCpuPoolStats(),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {

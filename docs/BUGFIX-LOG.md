@@ -10,6 +10,68 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-26 — Float money maths under-counted multi-month payments and dropped cents; heavy CPU work froze the server
+
+**Symptom (found in a review, not reported by users):** several money paths did arithmetic
+on JavaScript floats, and a few heavy jobs ran on the single request thread.
+- Paying several premiums at once could advance the policy one cycle too few. `Math.floor(paid /
+  premium)` with floats gives `3.30 / 1.10 = 2.9999999999999996` and floors that to **2**. This
+  affects about 7.5% of premium values between $1 and $200 (for 2/3/4/6/12-month payments).
+  The "excess" premium was then banked as credit, not as the period the client paid for.
+- `Math.abs(a - b) >= 0.01` missed real 1-cent differences in 57% of cases (`2.01 - 2.00` is
+  `0.00999…`). So 1-cent premium changes skipped reconciliation and drift re-pricing, and a 1-cent
+  short receipt was not flagged as a premium override.
+- Lump-sum group receipts rounded each policy's pro-rata share on its own, so the shares
+  could add up to a cent more or less than the receipt. The same happened with the client-portal
+  group split ($100 over 3 = 3 × 33.33 = $99.99). The Paynow group intent patched the
+  last share, but the cash group receipt did not.
+- A funeral quote could stay "partial" after full payment, because a float sum of receipts
+  landed just under the grand total.
+- A lump-sum group receipt accepted a missing or non-positive `totalAmount` (it wrote `NaN`).
+- The SMS usage report PDF (up to 50,000 rows) blocked the event loop for its whole render,
+  about 12 s for 20k rows on a dev machine. A 30k-row Excel import stalled it for about 650 ms.
+  Every other request on that instance waited.
+
+**Root cause:** there was no shared money type, so each call site did `parseFloat` and float
+maths with its own tolerance (0.01, 0.005, 0.001). Node runs all request handling on one thread,
+and nothing moved long pure-CPU work off it.
+
+**Fix:**
+- `shared/money.ts` holds exact integer-cent helpers (`toCents`, `fromCents`, `sumMoney`,
+  `percentOf`, `moneyEquals`, `allocateProRata` (largest remainder), `splitCents`).
+  Payments, balances, arrears, credit apply, group ledger, pool/accumulation, platform fee,
+  commissions and clawbacks, settlement FX allocation, petty cash, tombstone payments, quotation
+  totals, cashups, requisition/expenditure payouts, tenant billing and statement rounding use it
+  (`payment-service.ts`, `routes.ts`, `storage.ts`, `route-helpers.ts`, `credit-apply.ts`,
+  billing modules, and others). Commit `fdb1d41`.
+- `server/cpu-pool.ts` is a worker-thread pool: lazy start, idle exit, a heap cap per worker, a
+  bounded queue (503 when busy), per-task timeouts, and a fallback to running inline.
+  `server/workers/cpu-tasks.ts` is the registry of pure tasks. Spreadsheet import parsing
+  (`spreadsheet-parse.ts`) and the SMS report PDF (`sms-report-pdf.ts`) now run on it.
+  `script/build.ts` also emits `dist/cpu-worker.cjs`.
+- `server/event-loop-monitor.ts` logs a warning when the loop stalls ≥ `EVENT_LOOP_WARN_MS`.
+  Its stats and the pool stats appear in `GET /api/diagnostics/health`.
+
+**Verified:** `tsc` clean; 792/792 tests (`money.test.ts`, `cpu-pool.test.ts` new). The
+responsiveness test fails with `CPU_POOL_DISABLED=true` (2,969 ms stall) and passes on the pool,
+so it really proves the offload. The compiled `dist/cpu-worker.cjs` was exercised directly.
+
+**Deliberately not changed:** premium *calculation* rounding (`computePolicyPremium` still
+ends in float `toFixed(2)`). `recalculatePolicyPremiumIfNeeded` auto-persists any drift, so
+switching it to half-up would silently re-price every policy whose premium lands on a
+half-cent (weekly or loaded premiums) by 1 cent. That needs Augustus's decision and a dry run
+against real policies first. Report CSV totals were also left alone: they sum 2dp values and
+round once at output, which is already exact.
+
+**Lesson for next time:** never `parseFloat` money into arithmetic. Use `toCents` / `sumMoney`,
+and compare with `moneyEquals`, never `Math.abs(a - b) >= 0.01`. When splitting a total, use
+`allocateProRata` / `splitCents` so the shares add back up. For slow endpoints, check the
+"Event loop stalled" warnings first. A long synchronous block (one big pdfkit render, a
+spreadsheet parse) belongs in `cpu-tasks.ts`. Generators that `await` a DB read between pages
+(member-card batches) already yield and don't need moving.
+
+---
+
 ## 2026-09-26 — Claim SMS only went out if the tenant had built an SMS template; client claims skipped approvals
 
 **Symptom / rules set by Augustus:** every claim change must reach the client by SMS; client-portal

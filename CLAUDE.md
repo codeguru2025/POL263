@@ -90,6 +90,14 @@ PayNow is a Zimbabwean payment gateway. Key behaviors:
 - On confirmation, `applyPaymentToPolicy()` transitions policy status
 - `PAYNOW_INTEGRATION_KEY` must never be exposed to the client
 
+### Money Arithmetic
+
+Never do float maths on money (`parseFloat(a) + parseFloat(b)`, `Math.abs(a - b) >= 0.01`). Use `shared/money.ts`: `toCents`/`fromCents`, `sumMoney`, `subMoney`, `percentOf`, `moneyEquals`, and `allocateProRata`/`splitCents` when splitting a total across policies (shares must add back up exactly). Numeric DB columns take `fromCents(...)`/`moneyString(...)` strings.
+
+### CPU-Heavy Work
+
+Long synchronous CPU work (big spreadsheet parses, PDFs with thousands of rows) freezes every request on the instance. Put it in `server/workers/cpu-tasks.ts` (pure: data in, data/Buffer out, no DB imports) and call `runCpuTask()` from `server/cpu-pool.ts`. `server/event-loop-monitor.ts` logs "Event loop stalled" warnings that point to the next candidate.
+
 ### Audit Logging
 
 Every data mutation calls `auditLog(action, entityType, entityId, before, after)`. Before/after states are stored as JSONB. The staff UI has an audit viewer. Include audit logging in any new mutation routes.

@@ -676,7 +676,7 @@ export function registerPlatformRoutes(app: Express): void {
         fieldSpec,
       });
     } catch (err: any) {
-      return res.status(400).json({ message: err?.message || "Failed to parse file" });
+      return res.status(err?.status === 503 ? 503 : 400).json({ message: err?.message || "Failed to parse file" });
     }
   });
   app.use("/api/platform/tenants/:id/import/upload", handleUploadError);

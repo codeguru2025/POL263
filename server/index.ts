@@ -13,6 +13,8 @@ import cookieParser from "cookie-parser";
 import { pool } from "./db";
 import { startOutboxBackgroundDrain } from "./outbox";
 import { drainActiveJobs } from "./job-queue";
+import { startEventLoopMonitor, stopEventLoopMonitor } from "./event-loop-monitor";
+import { shutdownCpuPool } from "./cpu-pool";
 import csurf from "csurf";
 import cors from "cors";
 import { createRedisStore } from "./rate-limit-redis-store";
@@ -456,6 +458,7 @@ if (enableCsrf) {
     () => {
       structuredLog("info", `POL263 serving on ${host}:${port}`);
       startOutboxBackgroundDrain();
+      startEventLoopMonitor();
 
       // Start daily backup sync to Supabase (if SUPABASE_BACKUP_URL is configured)
       import("./backup-sync").then(({ startBackupScheduler }) => startBackupScheduler()).catch(() => {});
@@ -514,6 +517,8 @@ if (enableCsrf) {
     import("./client-notification-sweep").then(({ stopClientNotificationSweepScheduler }) => stopClientNotificationSweepScheduler()).catch(() => {});
     import("./sms-retry-sweep").then(({ stopSmsRetryScheduler }) => stopSmsRetryScheduler()).catch(() => {});
     await drainActiveJobs(30_000);
+    stopEventLoopMonitor();
+    await shutdownCpuPool();
     structuredLog("info", "Graceful shutdown complete");
     process.exit(0);
   }
