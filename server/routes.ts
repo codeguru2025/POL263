@@ -1297,7 +1297,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // "quote_request" analytics event — all in one call.
   app.post("/api/public/agent-vcard/:refCode/quote-lead", async (req, res) => {
     const refCode = req.params.refCode as string;
-    const { firstName, lastName, phone, email, productInterest, quote } = req.body;
+    const { firstName, lastName, phone, email, productInterest, quote, message, source: formSource } = req.body;
     if (typeof firstName !== "string" || !firstName.trim() || typeof lastName !== "string" || !lastName.trim()) {
       return res.status(400).json({ message: "First and last name are required" });
     }
@@ -1320,6 +1320,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       source: "vcard_quote",
       stage: "captured",
       productInterest: typeof productInterest === "string" ? productInterest : null,
+      // Website forms (e.g. the DFS site) send the enquiry text as `message` and the form it
+      // came from as `source` — keep both so staff can see what the visitor actually asked.
+      notes: [
+        typeof formSource === "string" && formSource.trim() ? `Form: ${formSource.trim().slice(0, 60)}` : null,
+        typeof message === "string" && message.trim() ? message.trim().slice(0, 5000) : null,
+      ].filter(Boolean).join("\n") || null,
     });
     let quoteId: string | null = null;
     if (quote && typeof quote === "object" && quote.policyholderName && quote.policyholderDateOfBirth) {
