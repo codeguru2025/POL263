@@ -18,13 +18,9 @@ export async function setupVite(server: Server, app: Express) {
   const vite = await createViteServer({
     ...viteConfig,
     configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      },
-    },
+    // Log errors only — Vite forwards browser console.error (e.g. React key warnings) to this
+    // logger, so exiting here let any client-side warning kill the whole dev server.
+    customLogger: viteLogger,
     server: serverOptions,
     appType: "custom",
   });

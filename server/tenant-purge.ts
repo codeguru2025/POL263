@@ -10,9 +10,8 @@
  *      to tenants.id, so that one delete removes branding / feature flags / domains / integrations
  *      / subscription / invoices / db+storage routing / customer-service registry with it
  *
- * Never called automatically unless billingSettings.hardDeleteEnabled is on — otherwise the
- * deletion sweep parks the tenant at licenseStatus='pending_deletion' and a platform owner runs
- * this by hand (POST /api/platform/tenants/:id/purge with a typed confirmation).
+ * Never called automatically. The deletion sweep only parks the tenant at
+ * licenseStatus='pending_deletion'; the platform owner runs this by hand (POST /api/platform/tenants/:id/purge with a typed confirmation).
  */
 import { eq, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";

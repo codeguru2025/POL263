@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanizeAction, humanizeEntityType, summarizeChanges, summarizeAuditEntry } from "../../client/src/lib/audit-format";
+import { humanizeAction, humanizeEntityType, summarizeChanges, summarizeAuditEntry, renderChange } from "../../client/src/lib/audit-format";
 
 describe("humanizeAction", () => {
   it("turns a simple CREATE_ action into a readable past-tense phrase", () => {
@@ -93,6 +93,16 @@ describe("summarizeChanges", () => {
       refs
     );
     expect(changes).toEqual([{ field: "Removal driver", kind: "diff", from: "—", to: "Tendai Moyo" }]);
+  });
+});
+
+describe("renderChange", () => {
+  it("renders a diff as 'old → new'", () => {
+    expect(renderChange({ field: "Status", kind: "diff", from: "unpaid", to: "paid" })).toBe("unpaid → paid");
+  });
+
+  it("renders a create/delete snapshot with an em-dash on the 'from' side, not the value alone", () => {
+    expect(renderChange({ field: "Policy number", kind: "snapshot", from: "", to: "FLK00123" })).toBe("— → FLK00123");
   });
 });
 

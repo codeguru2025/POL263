@@ -29,11 +29,9 @@ import { getFxToUsdMap, getUnsettledPlatformFeesByCurrency } from "./tenant-bill
 import { resolveEffectivePricing, computeRevenueShareInvoiceFromFees } from "./billing-model-math";
 import { structuredLog } from "./logger";
 import crypto from "crypto";
+import { moneyString, roundMoney, subMoney, addMoney } from "@shared/money";
 
-const money = (v: unknown) => {
-  const n = parseFloat(String(v ?? "0"));
-  return (Math.round((Number.isFinite(n) ? n : 0) * 100 + Number.EPSILON) / 100).toFixed(2);
-};
+const money = (v: unknown) => moneyString(v);
 
 function generateMerchantReference(orgId: string): string {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -50,7 +48,7 @@ async function openFeeInvoiceTotalUsd(subscriptionId: string): Promise<number> {
       eq(tenantInvoices.status, "open"),
       inArray(tenantInvoices.kind, ["revenue_share", "subscription"]),
     ));
-  return parseFloat(row?.total ?? "0");
+  return roundMoney(row?.total);
 }
 
 /** True if a cap invoice was already raised for this tenant within the last `withinDays` days and
@@ -123,12 +121,12 @@ export async function enforceOutstandingFeeCap(
       tenantId: sub.tenantId, skippedCurrencies: rawAccrual.skippedCurrencies,
     });
   }
-  const accruedUsd = parseFloat(rawAccrual.amountUsd);
+  const accruedUsd = roundMoney(rawAccrual.amountUsd);
   const openInvoicedUsd = await openFeeInvoiceTotalUsd(sub.id);
   // The unsettled ledger already includes whatever an open invoice covers (receivables settle
   // only on payment), so the not-yet-invoiced part is the excess over what's already billed.
-  const uninvoicedAccrualUsd = Math.max(0, accruedUsd - openInvoicedUsd);
-  const exposureUsd = openInvoicedUsd + uninvoicedAccrualUsd;
+  const uninvoicedAccrualUsd = Math.max(0, subMoney(accruedUsd, openInvoicedUsd));
+  const exposureUsd = addMoney(openInvoicedUsd, uninvoicedAccrualUsd);
 
   if (exposureUsd <= cap || uninvoicedAccrualUsd < 0.01) return null;
 
@@ -248,7 +246,7 @@ export async function reconcileRevenueShareSettlement(invoice: TenantInvoice): P
     if (unsettled.length === 0) { await markSettled(); return; }
 
     const byCurrency: Record<string, number> = {};
-    for (const r of unsettled) byCurrency[r.currency] = (byCurrency[r.currency] ?? 0) + parseFloat(r.amount);
+    for (const r of unsettled) byCurrency[r.currency] = addMoney(byCurrency[r.currency], r.amount);
 
     await tdb.update(platformReceivables)
       .set({ isSettled: true })

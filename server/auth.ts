@@ -152,6 +152,18 @@ async function resolveTenantAccess(orgId: string): Promise<TenantAccess> {
   }
 }
 
+/** The message to show a suspended tenant's staff at login, or null if the tenant may log in. */
+async function tenantDenialMessage(orgId: string): Promise<string | null> {
+  if ((await resolveTenantAccess(orgId)) !== "denied") return null;
+  try {
+    const [row] = await cpDb.select({ suspendReason: cpTenants.suspendReason })
+      .from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
+    return row?.suspendReason?.trim() || "Your account has been suspended. Pay your bill to regain access.";
+  } catch {
+    return "Your account has been suspended. Pay your bill to regain access.";
+  }
+}
+
 function baseUrlFromEnv() {
   return (process.env.APP_BASE_URL || "").replace(/\/$/, "");
 }
@@ -731,7 +743,7 @@ export function setupAuth(app: Express) {
     });
 
     app.get("/api/auth/google/callback", (req, res, next) => {
-      passport.authenticate("google", (err: Error | null, user: any, info?: { message?: string }) => {
+      passport.authenticate("google", async (err: Error | null, user: any, info?: { message?: string }) => {
         if (err) return next(err);
 
         if (!user) {
@@ -742,6 +754,18 @@ export function setupAuth(app: Express) {
             ? `${baseUrl}${loginPath}?error=${encodeURIComponent(message)}`
             : `${loginPath}?error=${encodeURIComponent(message)}`;
           return res.redirect(redirectUrl);
+        }
+
+        // A fully suspended tenant's staff would otherwise "log in" and be silently bounced back
+        // to the login page on the next request (deserializeUser drops them). Stop them here and
+        // show why — the platform owner's suspend reason, or a pay-your-bill default.
+        if (user.organizationId && !isPlatformOwnerEmail(user.email)) {
+          const denial = await tenantDenialMessage(user.organizationId);
+          if (denial) {
+            const baseUrl = baseUrlFromEnv();
+            const loginPath = `/staff/login?error=${encodeURIComponent(denial)}`;
+            return res.redirect(baseUrl ? `${baseUrl}${loginPath}` : loginPath);
+          }
         }
 
         if (user.mfaEnabled) {

@@ -19,6 +19,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { fxMapFor, consolidateToUsd } from "./financial-statements";
 import { paymentReceipts, policies, productVersions, claims } from "@shared/schema";
+import { roundMoney } from "@shared/money";
 
 type AmountMap = Record<string, number>;
 
@@ -28,7 +29,7 @@ function add(map: AmountMap, currency: string, amount: number) {
 }
 
 const round2 = (m: AmountMap): AmountMap =>
-  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Number(v.toFixed(2))]));
+  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, roundMoney(v)]));
 
 /** Normalizes a DATE-column value (which may come back as a Date or an already-'YYYY-MM-DD'
  *  string depending on driver config — other modules in this codebase have the same ambiguity,

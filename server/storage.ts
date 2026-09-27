@@ -3,6 +3,7 @@ import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { getDbForOrg, withOrgTransaction, resolveUserIdForOrgDatabase, ensureRegistryUserMirroredToOrgDataDb, orgUsesDedicatedDatabase, type OrgDataDb } from "./tenant-db";
+import { toCents, fromCents, sumCents, mulCents, moneyString, roundMoney, subMoney } from "@shared/money";
 import { PLATFORM_SUPERUSER_EMAIL } from "./constants";
 import { structuredLog } from "./logger";
 import { isRevenueShareBillingForOrg } from "./platform-fee";
@@ -39,7 +40,7 @@ import {
   accumulationAccounts, accumulationContributions, accumulationWithdrawals,
   clientFeedback,
   fxRates, requisitions, requisitionItems, paymentDisbursements,
-  bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
+  bankAccounts, safes, bankDeposits, bankStatementBalances, balanceSheetEntries, budgets, debitOrders, funeralQuotations, funeralQuotationItems, serviceReceipts,
   pettyCashFloats, pettyCashTransactions,
   tombstoneCatalogItems, tombstoneOrders, tombstoneOrderPayments,
   quotationGuarantors, quotationCollateral, receiptAdverts, reminders, agentContentPosts, agentCardEvents,
@@ -64,6 +65,7 @@ import {
   type TombstoneCatalogItem, type InsertTombstoneCatalogItem, type TombstoneOrder, type InsertTombstoneOrder, type TombstoneOrderPayment, type InsertTombstoneOrderPayment,
   type ParlourPersonnel, type InsertParlourPersonnel,
   type BalanceSheetEntry, type InsertBalanceSheetEntry,
+  type Budget, type InsertBudget,
   type DebitOrder, type InsertDebitOrder,
   type FuneralQuotation, type InsertFuneralQuotation, type FuneralQuotationItem, type InsertFuneralQuotationItem,
   type QuotationGuarantor, type InsertQuotationGuarantor,
@@ -265,6 +267,7 @@ export interface UnderwriterPayableRow {
   policyId: string;
   policyNumber: string;
   status: string;
+  currency: string;
   clientId: string;
   clientFirstName: string;
   clientLastName: string;
@@ -285,7 +288,12 @@ export interface UnderwriterPayableRow {
 
 export interface UnderwriterPayableReportResult {
   rows: UnderwriterPayableRow[];
-  summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number };
+  summary: {
+    totalMonthlyPayable: number;
+    totalPayableIncludingAdvance: number;
+    policyCount: number;
+    byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }>;
+  };
 }
 
 export interface ActivationEntry {
@@ -427,6 +435,32 @@ export interface IStorage {
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
   /** All-policies report: 45-column spreadsheet export matching the standard template. */
   getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
+  /** Records that are internally inconsistent and need a human — the data-integrity exception report. */
+  getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
+  /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
+  getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
+  /** Persistency by inception-month cohort (as-of-now survivorship). */
+  getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]>;
+  /** Lapse & reinstatement analysis for a period, by month, from policy_status_history. */
+  getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }>;
+  /** Member / dependant additions and removals over a period, from the audit trail. */
+  getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]>;
+  /** Open claims by days-open bucket, with branch, payout amount and SLA-overdue flag. */
+  getClaimsAgingReport(organizationId: string): Promise<{ claimNumber: string; policyNumber: string; deceased: string; status: string; branch: string; daysOpen: number; bucket: string; currency: string; amount: number; overdue: boolean }[]>;
+  /** Claims loss ratio (per currency) + repudiation breakdown by claim type, for a period. */
+  getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{ lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[]; repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[] }>;
+  /** Active/grace policies whose inception anniversary falls within the next `withinDays` days. */
+  getAnniversaryReport(organizationId: string, withinDays: number): Promise<{ policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number }[]>;
+  /** Per-policy reinsurance premium bordereau for a period. */
+  getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
+  /** Per-claim reinsurance claims bordereau for a period. */
+  getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
+  /** Bank reconciliation for a period — statement balances vs system-recorded deposits, per account. */
+  getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
+    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
+    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    note: string;
+  }>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
   getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   /**
@@ -647,6 +681,9 @@ export interface IStorage {
   getPayrollRuns(orgId: string): Promise<PayrollRun[]>;
   createPayrollRun(run: InsertPayrollRun): Promise<PayrollRun>;
   getPayslipsForRun(runId: string, orgId: string): Promise<(Payslip & { employee: PayrollEmployee })[]>;
+  /** All payslips whose payroll run's period starts in the given calendar (tax) year, with the
+   *  employee's display name + number attached — for the payroll-tax (ITF16) reconciliation. */
+  getPayslipsForTaxYear(orgId: string, year: number): Promise<(Payslip & { employeeName: string; employeeIdNumber: string })[]>;
   upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip>;
   updatePayrollRunTotals(runId: string, orgId: string): Promise<void>;
   getVehicleTripLogs(orgId: string, filters?: { vehicleId?: string; funeralCaseId?: string }): Promise<VehicleTripLog[]>;
@@ -764,6 +801,10 @@ export interface IStorage {
   createBalanceSheetEntry(data: InsertBalanceSheetEntry): Promise<BalanceSheetEntry>;
   updateBalanceSheetEntry(id: string, orgId: string, data: Partial<BalanceSheetEntry>): Promise<BalanceSheetEntry | undefined>;
   deleteBalanceSheetEntry(id: string, orgId: string): Promise<void>;
+  getBudgets(orgId: string, filters?: { from?: string; to?: string; category?: string }): Promise<Budget[]>;
+  upsertBudget(data: InsertBudget): Promise<Budget>;
+  deleteBudget(id: string, orgId: string): Promise<void>;
+  getBudgetForRange(orgId: string, from: string, to: string, category: string): Promise<Record<string, number>>;
 
   getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]>;
   getDebitOrder(id: string, orgId: string): Promise<DebitOrder | undefined>;
@@ -1972,6 +2013,7 @@ export class DatabaseStorage implements IStorage {
         currency: policies.currency,
         premiumAmount: policies.premiumAmount,
         inceptionDate: policies.inceptionDate,
+        graceEndDate: policies.graceEndDate,
         policyCreatedAt: policies.createdAt,
         agentUserId: users.id,
         agentDisplayName: users.displayName,
@@ -2036,6 +2078,30 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => {
       const do_ = debitOrderMap[r.policyId];
       return {
+        // Friendly camelCase keys — the active-policies / awaiting-payments / overdue /
+        // pre-lapse / lapsed reports (screen + CSV) read these; they previously got undefined
+        // for every column because this method only returned the Easipol-format keys below.
+        policyId: r.policyId,
+        branchId: r.branchId ?? "",
+        policyNumber: r.policyNumber ?? "",
+        status: r.status ?? "",
+        currency: r.currency ?? "",
+        premiumAmount: r.premiumAmount ?? "",
+        inceptionDate: r.inceptionDate ? String(r.inceptionDate) : "",
+        graceEndDate: r.graceEndDate ? String(r.graceEndDate) : "",
+        policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
+        branchName: r.branchName ?? "",
+        productName: r.productName ?? "",
+        groupName: r.groupName ?? "",
+        agentDisplayName: r.agentDisplayName ?? "",
+        agentEmail: r.agentEmail ?? "",
+        clientTitle: r.clientTitle ?? "",
+        clientFirstName: r.clientFirstName ?? "",
+        clientLastName: r.clientLastName ?? "",
+        clientNationalId: r.clientNationalId ?? "",
+        clientPhone: r.clientPhone ?? "",
+        clientEmail: r.clientEmail ?? "",
+        // ── Easipol-format keys (policies / agent-portfolio / broker-policies / new-joinings) ──
         Branch_ID: r.branchId ?? "",
         BranchName: r.branchName ?? "",
         Member_ID: memberMap[r.policyId] ?? "",
@@ -2085,6 +2151,458 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  /**
+   * Data-integrity / exception report — records that are internally inconsistent and need a
+   * human to look at them. Read-only; each check is a small independent query, unioned in JS.
+   */
+  async getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const out: { category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[] = [];
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const name = (r: any) => [r.first_name, r.last_name].filter(Boolean).join(" ") || "—";
+
+    const [noAgent, badPremium, noBeneficiary, noNationalId, noPrincipal, dupIds, dupPhones] = await Promise.all([
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace') AND p.agent_id IS NULL`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name, p.premium_amount FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace') AND (p.premium_amount IS NULL OR p.premium_amount::numeric <= 0)`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND (p.beneficiary_first_name IS NULL OR p.beneficiary_first_name = '')`),
+      tdb.execute(sql`SELECT DISTINCT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND (c.national_id IS NULL OR c.national_id = '')`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name FROM policies p JOIN clients c ON c.id = p.client_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+          AND NOT EXISTS (SELECT 1 FROM policy_members pm WHERE pm.policy_id = p.id AND pm.is_active = true AND pm.role IN ('principal','policy_holder'))`),
+      tdb.execute(sql`SELECT national_id, COUNT(*) AS n, string_agg(DISTINCT (first_name || ' ' || last_name), ' | ') AS names
+        FROM clients WHERE organization_id = ${organizationId} AND national_id IS NOT NULL AND national_id <> ''
+        GROUP BY national_id HAVING COUNT(*) > 1`),
+      tdb.execute(sql`SELECT phone, COUNT(*) AS n, string_agg(DISTINCT (first_name || ' ' || last_name), ' | ') AS names
+        FROM clients WHERE organization_id = ${organizationId} AND phone IS NOT NULL AND length(regexp_replace(phone, '\\D', '', 'g')) >= 7
+        GROUP BY phone HAVING COUNT(*) > 1`),
+    ]);
+
+    for (const r of rowsOf(noAgent)) out.push({ category: "No agent assigned", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no agent — commission and follow-up have no owner." });
+    for (const r of rowsOf(badPremium)) out.push({ category: "Zero / missing premium", severity: "high", policyNumber: r.policy_number, client: name(r), detail: `Premium is ${r.premium_amount ?? "null"} on an active/grace policy.` });
+    for (const r of rowsOf(noBeneficiary)) out.push({ category: "No beneficiary", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no beneficiary recorded — a claim payout has no payee." });
+    for (const r of rowsOf(noNationalId)) out.push({ category: "Client missing national ID", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: "Policyholder has no national ID — blocks KYC and claims verification." });
+    for (const r of rowsOf(noPrincipal)) out.push({ category: "No principal member", severity: "high", policyNumber: r.policy_number, client: name(r), detail: "Active/grace policy with no active principal/policy-holder member row." });
+    for (const r of rowsOf(dupIds)) out.push({ category: "Duplicate national ID", severity: "high", policyNumber: "—", client: r.names, detail: `${r.n} client records share national ID ${r.national_id}.` });
+    for (const r of rowsOf(dupPhones)) out.push({ category: "Duplicate phone number", severity: "low", policyNumber: "—", client: r.names, detail: `${r.n} client records share phone ${r.phone}.` });
+
+    const sevRank = { high: 0, medium: 1, low: 2 };
+    return out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || a.category.localeCompare(b.category));
+  }
+
+  /**
+   * Premium-collection efficiency for a period: expected premium (active + grace policies whose
+   * cycle falls in the window) vs collected (issued receipts in the window), and the collection
+   * rate, grouped by branch. Cash basis, per currency.
+   */
+  async getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+
+    const [expectedRows, collectedRows] = await Promise.all([
+      // Expected = one premium per active/grace policy in the period (a single billing cycle).
+      tdb.execute(sql`
+        SELECT COALESCE(b.name, '(No branch)') AS branch, p.currency,
+               COALESCE(SUM(p.premium_amount::numeric), 0) AS expected, COUNT(*) AS policy_count
+        FROM policies p LEFT JOIN branches b ON b.id = p.branch_id
+        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
+        GROUP BY COALESCE(b.name, '(No branch)'), p.currency`),
+      tdb.execute(sql`
+        SELECT COALESCE(b.name, '(No branch)') AS branch, pr.currency,
+               COALESCE(SUM(pr.amount::numeric), 0) AS collected
+        FROM payment_receipts pr LEFT JOIN branches b ON b.id = pr.branch_id
+        WHERE pr.organization_id = ${organizationId} AND pr.status = 'issued'
+          AND pr.issued_at >= ${fromTs} AND pr.issued_at <= ${toTs}
+        GROUP BY COALESCE(b.name, '(No branch)'), pr.currency`),
+    ]);
+
+    const map = new Map<string, { branch: string; currency: string; expected: number; collected: number; policyCount: number }>();
+    for (const r of rowsOf(expectedRows)) {
+      const k = `${r.branch}|${r.currency}`;
+      map.set(k, { branch: r.branch, currency: r.currency, expected: parseFloat(r.expected), collected: 0, policyCount: parseInt(r.policy_count) });
+    }
+    for (const r of rowsOf(collectedRows)) {
+      const k = `${r.branch}|${r.currency}`;
+      const e = map.get(k) ?? { branch: r.branch, currency: r.currency, expected: 0, collected: 0, policyCount: 0 };
+      e.collected += parseFloat(r.collected);
+      map.set(k, e);
+    }
+    return Array.from(map.values())
+      .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
+      .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
+  }
+
+  /**
+   * Persistency by inception-month cohort. "Persistency %" here is as-of-now survivorship
+   * ((active + grace) / incepted) rather than a snapshot at exactly month 13/25 — the system
+   * doesn't retain enough status history to reconstruct the latter. Cohorts <2 months old are
+   * dropped as not yet meaningful.
+   */
+  async getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT to_char(inception_date, 'YYYY-MM') AS cohort,
+             COUNT(*) AS incepted,
+             COUNT(*) FILTER (WHERE status = 'active') AS active,
+             COUNT(*) FILTER (WHERE status = 'grace') AS grace,
+             COUNT(*) FILTER (WHERE status = 'lapsed') AS lapsed,
+             COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+      FROM policies
+      WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND inception_date IS NOT NULL
+      GROUP BY cohort ORDER BY cohort DESC`);
+    const now = new Date();
+    return rowsOf(res).map((r: any) => {
+      const [y, m] = String(r.cohort).split("-").map(Number);
+      const monthsElapsed = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+      const incepted = parseInt(r.incepted);
+      const active = parseInt(r.active), grace = parseInt(r.grace);
+      return {
+        cohort: r.cohort, monthsElapsed, incepted, active, grace,
+        lapsed: parseInt(r.lapsed), cancelled: parseInt(r.cancelled),
+        persistency: incepted > 0 ? Number((((active + grace) / incepted) * 100).toFixed(1)) : 0,
+      };
+    }).filter((r) => r.monthsElapsed >= 2);
+  }
+
+  /**
+   * Lapse & reinstatement analysis for a period, by month, from policy_status_history. The
+   * period lapse rate is approximate: lapses in period / (currently active + grace + lapses in
+   * period) — the system has no point-in-time in-force count to use as a clean denominator.
+   */
+  async getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const [monthRows, inForceRows] = await Promise.all([
+      tdb.execute(sql`
+        SELECT to_char(psh.created_at, 'YYYY-MM') AS month,
+               COUNT(*) FILTER (WHERE psh.to_status = 'lapsed') AS lapses,
+               COUNT(*) FILTER (WHERE psh.to_status = 'active' AND psh.from_status = 'lapsed') AS reinstatements
+        FROM policy_status_history psh JOIN policies p ON p.id = psh.policy_id
+        WHERE p.organization_id = ${organizationId} AND psh.created_at >= ${fromTs} AND psh.created_at <= ${toTs}
+        GROUP BY month ORDER BY month`),
+      tdb.execute(sql`SELECT COUNT(*) AS n FROM policies WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND status IN ('active','grace')`),
+    ]);
+    const months = rowsOf(monthRows).map((r: any) => ({ month: r.month, lapses: parseInt(r.lapses), reinstatements: parseInt(r.reinstatements) }));
+    const totalLapses = months.reduce((s, m) => s + m.lapses, 0);
+    const totalReinstatements = months.reduce((s, m) => s + m.reinstatements, 0);
+    const inForceNow = parseInt(rowsOf(inForceRows)[0]?.n ?? "0");
+    const denom = inForceNow + totalLapses;
+    return { months, totalLapses, totalReinstatements, inForceNow, approxLapseRate: denom > 0 ? Number(((totalLapses / denom) * 100).toFixed(1)) : 0 };
+  }
+
+  /**
+   * Member / dependant movement over a period — additions and removals of lives on policies,
+   * from the audit trail (ADD_POLICY_MEMBER / REMOVE_POLICY_MEMBER).
+   */
+  async getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const res = await tdb.execute(sql`
+      SELECT al.timestamp, al.action, al.actor_email, al.before, al.after,
+             COALESCE((al.after->>'policyId'), (al.before->>'policyId')) AS policy_id
+      FROM audit_logs al
+      WHERE al.organization_id = ${organizationId}
+        AND al.action IN ('ADD_POLICY_MEMBER','REMOVE_POLICY_MEMBER')
+        AND al.timestamp >= ${fromTs} AND al.timestamp <= ${toTs}
+      ORDER BY al.timestamp DESC`);
+    const rows = rowsOf(res);
+    const policyIds = Array.from(new Set(rows.map((r: any) => r.policy_id).filter(Boolean)));
+    const polNums = new Map<string, string>();
+    if (policyIds.length) {
+      const found = await tdb.select({ id: policies.id, policyNumber: policies.policyNumber })
+        .from(policies).where(inArray(policies.id, policyIds as string[]));
+      for (const p of found) polNums.set(p.id, p.policyNumber);
+    }
+    return rows.map((r: any) => {
+      const payload = (r.after || r.before || {}) as any;
+      const member = payload.memberName || [payload.firstName, payload.lastName].filter(Boolean).join(" ") || payload.dependentName || "—";
+      return {
+        date: r.timestamp ? new Date(r.timestamp).toISOString() : "",
+        action: r.action === "ADD_POLICY_MEMBER" ? "Added" as const : "Removed" as const,
+        policyNumber: r.policy_id ? (polNums.get(r.policy_id) || "—") : "—",
+        member,
+        actor: r.actor_email || "System",
+      };
+    });
+  }
+
+  /**
+   * Claims aging — open claims (not paid / rejected / closed / settled) by days-open bucket,
+   * with the branch and payout amount. "Overdue" is > 14 days open (mirrors claims-sla.ts).
+   */
+  async getClaimsAgingReport(organizationId: string): Promise<{ claimNumber: string; policyNumber: string; deceased: string; status: string; branch: string; daysOpen: number; bucket: string; currency: string; amount: number; overdue: boolean }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT cl.claim_number, cl.deceased_name, cl.status, cl.currency,
+             COALESCE(cl.cash_in_lieu_amount::numeric, 0) AS amount,
+             EXTRACT(DAY FROM (now() - cl.created_at))::int AS days_open,
+             p.policy_number, COALESCE(b.name, '(No branch)') AS branch
+      FROM claims cl
+      JOIN policies p ON p.id = cl.policy_id
+      LEFT JOIN branches b ON b.id = cl.branch_id
+      WHERE cl.organization_id = ${organizationId} AND cl.status NOT IN ('paid','rejected','closed','settled')
+      ORDER BY days_open DESC`);
+    const bucket = (d: number) => d <= 7 ? "0–7" : d <= 14 ? "8–14" : d <= 30 ? "15–30" : d <= 60 ? "31–60" : "60+";
+    return rowsOf(res).map((r: any) => ({
+      claimNumber: r.claim_number,
+      policyNumber: r.policy_number || "—",
+      deceased: r.deceased_name || "—",
+      status: r.status,
+      branch: r.branch,
+      daysOpen: parseInt(r.days_open),
+      bucket: bucket(parseInt(r.days_open)),
+      currency: r.currency || "USD",
+      amount: parseFloat(r.amount),
+      overdue: parseInt(r.days_open) > 14,
+    }));
+  }
+
+  /**
+   * Claims analytics for a period: loss ratio (claim payout value for claims raised in the
+   * period ÷ premium collected in the period, per currency, cash basis) and a repudiation
+   * (declinature) breakdown by claim type.
+   */
+  async getClaimsAnalyticsReport(organizationId: string, from: string, to: string): Promise<{
+    lossRatio: { currency: string; claimsIncurred: number; premiumCollected: number; ratio: number }[];
+    repudiation: { claimType: string; submitted: number; approved: number; rejected: number; repudiationRate: number }[];
+  }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const fromTs = new Date(from + "T00:00:00.000Z");
+    const toTs = new Date(to + "T23:59:59.999Z");
+    const [claimRows, premiumRows, typeRows] = await Promise.all([
+      tdb.execute(sql`SELECT currency, COALESCE(SUM(cash_in_lieu_amount::numeric), 0) AS incurred
+        FROM claims WHERE organization_id = ${organizationId} AND created_at >= ${fromTs} AND created_at <= ${toTs}
+          AND status IN ('approved','paid','settled','closed') GROUP BY currency`),
+      tdb.execute(sql`SELECT currency, COALESCE(SUM(amount::numeric), 0) AS collected
+        FROM payment_receipts WHERE organization_id = ${organizationId} AND status = 'issued'
+          AND issued_at >= ${fromTs} AND issued_at <= ${toTs} GROUP BY currency`),
+      tdb.execute(sql`SELECT claim_type,
+             COUNT(*) AS submitted,
+             COUNT(*) FILTER (WHERE status IN ('approved','paid','settled','closed')) AS approved,
+             COUNT(*) FILTER (WHERE status = 'rejected') AS rejected
+        FROM claims WHERE organization_id = ${organizationId} AND created_at >= ${fromTs} AND created_at <= ${toTs}
+        GROUP BY claim_type ORDER BY submitted DESC`),
+    ]);
+    const collectedByCur = new Map(rowsOf(premiumRows).map((r: any) => [r.currency, parseFloat(r.collected)]));
+    const currencies = new Set<string>([...rowsOf(claimRows).map((r: any) => r.currency), ...Array.from(collectedByCur.keys())]);
+    const lossRatio = Array.from(currencies).map((cur) => {
+      const claimsIncurred = parseFloat(rowsOf(claimRows).find((r: any) => r.currency === cur)?.incurred ?? "0");
+      const premiumCollected = collectedByCur.get(cur) ?? 0;
+      return { currency: cur, claimsIncurred, premiumCollected, ratio: premiumCollected > 0 ? Number(((claimsIncurred / premiumCollected) * 100).toFixed(1)) : 0 };
+    }).sort((a, b) => a.currency.localeCompare(b.currency));
+    const repudiation = rowsOf(typeRows).map((r: any) => {
+      const submitted = parseInt(r.submitted), rejected = parseInt(r.rejected);
+      return { claimType: r.claim_type, submitted, approved: parseInt(r.approved), rejected, repudiationRate: submitted > 0 ? Number(((rejected / submitted) * 100).toFixed(1)) : 0 };
+    });
+    return { lossRatio, repudiation };
+  }
+
+  /**
+   * Policy anniversary / review list — active & grace policies whose inception-date anniversary
+   * falls within the next `withinDays` days. Forward-looking book management (annual review,
+   * CPI escalation conversation, sum-assured check) — funeral cover doesn't formally "renew"
+   * but the anniversary is still the natural review point.
+   */
+  async getAnniversaryReport(organizationId: string, withinDays: number): Promise<{ policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number }[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT p.policy_number, p.currency, p.premium_amount, p.inception_date,
+             c.first_name, c.last_name, c.phone,
+             prod.name AS product, b.name AS branch
+      FROM policies p
+      JOIN clients c ON c.id = p.client_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      LEFT JOIN branches b ON b.id = p.branch_id
+      WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL
+        AND p.status IN ('active','grace') AND p.inception_date IS NOT NULL`);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const out = rowsOf(res).map((r: any) => {
+      const inc = new Date(r.inception_date);
+      let next = new Date(today.getFullYear(), inc.getMonth(), inc.getDate());
+      if (next < today) next = new Date(today.getFullYear() + 1, inc.getMonth(), inc.getDate());
+      const daysUntil = Math.round((next.getTime() - today.getTime()) / 86400000);
+      return {
+        policyNumber: r.policy_number,
+        client: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+        phone: r.phone || "—",
+        product: r.product || "—",
+        branch: r.branch || "(No branch)",
+        currency: r.currency || "USD",
+        premium: r.premium_amount ?? "",
+        inceptionDate: String(r.inception_date),
+        nextAnniversary: next.toISOString().slice(0, 10),
+        daysUntil,
+        yearsInForce: Math.max(0, Math.floor((today.getTime() - inc.getTime()) / (365.25 * 86400000))),
+      };
+    }).filter((r) => r.daysUntil <= withinDays).sort((a, b) => a.daysUntil - b.daysUntil);
+    return out;
+  }
+
+  /**
+   * Reinsurance premium bordereau — per-policy detail of premium ceded to the underwriter /
+   * reinsurer for a period. Standard proportional-treaty layout; the cession is the configured
+   * per-adult / per-child underwriter amount (product_versions), the same basis as the
+   * underwriter-payable report. Active + grace policies on products that carry an underwriter
+   * amount.
+   */
+  async getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT p.policy_number, p.currency, p.premium_amount, p.inception_date, p.status,
+             c.first_name, c.last_name, c.national_id,
+             prod.name AS product, prod.cover_amount, prod.cover_currency,
+             b.name AS branch,
+             pv.underwriter_amount_adult, pv.underwriter_amount_child, pv.underwriter_advance_months,
+             (SELECT COUNT(*) FROM policy_members pm WHERE pm.policy_id = p.id AND pm.is_active = true) AS lives
+      FROM policies p
+      JOIN clients c ON c.id = p.client_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      LEFT JOIN branches b ON b.id = p.branch_id
+      WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL
+        AND p.status IN ('active','grace')
+        AND (pv.underwriter_amount_adult IS NOT NULL OR pv.underwriter_amount_child IS NOT NULL)
+      ORDER BY p.policy_number`);
+    return rowsOf(res).map((r: any) => {
+      const lives = parseInt(r.lives) || 1;
+      const adultAmt = parseFloat(r.underwriter_amount_adult ?? "0") || 0;
+      const childAmt = parseFloat(r.underwriter_amount_child ?? r.underwriter_amount_adult ?? "0") || 0;
+      // Without a per-member adult/child split here, approximate cession as principal (adult) +
+      // (lives-1) at the child rate — matches the underwriter-payable report's fallback.
+      const cededMonthly = adultAmt + Math.max(0, lives - 1) * childAmt;
+      const grossPremium = parseFloat(r.premium_amount ?? "0") || 0;
+      return {
+        policyNumber: r.policy_number,
+        insured: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+        nationalId: r.national_id || "",
+        product: r.product || "",
+        branch: r.branch || "(No branch)",
+        inceptionDate: r.inception_date ? String(r.inception_date) : "",
+        sumInsured: r.cover_amount ? parseFloat(r.cover_amount) : null,
+        sumInsuredCurrency: r.cover_currency || r.currency || "USD",
+        currency: r.currency || "USD",
+        grossPremium,
+        lives,
+        cededPremiumMonthly: Number(cededMonthly.toFixed(2)),
+        retainedPremiumMonthly: Number(Math.max(0, grossPremium - cededMonthly).toFixed(2)),
+        periodFrom: from,
+        periodTo: to,
+      };
+    });
+  }
+
+  /**
+   * Reinsurance claims bordereau — per-claim detail for a period, for the reinsurer to apply the
+   * treaty cession. The recoverable amount depends on the treaty and is applied by the reinsurer,
+   * so this reports the gross claim; it does not compute a ceded share.
+   */
+  async getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const res = await tdb.execute(sql`
+      SELECT cl.claim_number, cl.claim_type, cl.status, cl.currency, cl.deceased_name,
+             cl.date_of_death, cl.created_at,
+             COALESCE(cl.cash_in_lieu_amount::numeric, 0) AS gross_claim,
+             p.policy_number, prod.cover_amount, prod.name AS product,
+             c.first_name, c.last_name
+      FROM claims cl
+      JOIN policies p ON p.id = cl.policy_id
+      JOIN product_versions pv ON pv.id = p.product_version_id
+      JOIN products prod ON prod.id = pv.product_id
+      JOIN clients c ON c.id = cl.client_id
+      WHERE cl.organization_id = ${organizationId}
+        AND cl.created_at >= ${new Date(from + "T00:00:00.000Z")} AND cl.created_at <= ${new Date(to + "T23:59:59.999Z")}
+      ORDER BY cl.created_at DESC`);
+    return rowsOf(res).map((r: any) => ({
+      claimNumber: r.claim_number,
+      policyNumber: r.policy_number,
+      insured: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
+      deceased: r.deceased_name || "",
+      product: r.product || "",
+      claimType: r.claim_type,
+      dateOfDeath: r.date_of_death ? String(r.date_of_death) : "",
+      dateReported: r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : "",
+      status: r.status,
+      currency: r.currency || "USD",
+      sumInsured: r.cover_amount ? parseFloat(r.cover_amount) : null,
+      grossClaim: parseFloat(r.gross_claim),
+      periodFrom: from,
+      periodTo: to,
+    }));
+  }
+
+  async getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
+    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
+    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    note: string;
+  }> {
+    const tdb = await getDbForOrg(organizationId);
+    const rowsOf = (r: any): any[] => r.rows ?? r;
+    const accts = (await this.getBankAccounts(organizationId)).filter((a) => a.isActive);
+    const accountResults: any[] = [];
+    for (const a of accts) {
+      const balances = await this.getBankStatementBalances(organizationId, a.id); // desc by date
+      const opening = balances.find((b) => String(b.statementDate) < from) ?? balances[balances.length - 1];
+      const closing = balances.find((b) => String(b.statementDate) <= to);
+      const dep = await tdb.execute(sql`
+        SELECT COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
+        FROM bank_deposits
+        WHERE organization_id = ${organizationId} AND bank_account_id = ${a.id}
+          AND deposit_date >= ${from} AND deposit_date <= ${to}`);
+      const depRow = rowsOf(dep)[0] || {};
+      const depositsRecorded = parseFloat(depRow.total ?? "0");
+      const openingBalance = opening ? parseFloat(String(opening.closingBalance)) : null;
+      const closingBalance = closing ? parseFloat(String(closing.closingBalance)) : null;
+      const statementMovement = openingBalance != null && closingBalance != null ? Number((closingBalance - openingBalance).toFixed(2)) : null;
+      // What the statement moved that is NOT explained by recorded deposits — i.e. payments out,
+      // bank charges, interest, and any unrecorded transaction. This is the amount to reconcile.
+      const unreconciledMovement = statementMovement != null ? Number((statementMovement - depositsRecorded).toFixed(2)) : null;
+      accountResults.push({
+        accountName: a.accountName, bankName: a.bankName, currency: a.currency,
+        openingBalance, openingDate: opening ? String(opening.statementDate) : null,
+        closingBalance, closingDate: closing ? String(closing.statementDate) : null,
+        statementMovement, depositsRecorded: Number(depositsRecorded.toFixed(2)), depositCount: parseInt(depRow.n ?? "0"),
+        unreconciledMovement,
+      });
+    }
+
+    // Bank-method payments recorded in the system in the period — not linked to a specific
+    // account, so reported once for the finance team to match against the accounts above.
+    const payRows = await tdb.execute(sql`
+      SELECT currency, COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
+      FROM payment_disbursements
+      WHERE organization_id = ${organizationId}
+        AND payment_method IN ('bank_transfer', 'cheque', 'eft')
+        AND paid_date >= ${from} AND paid_date <= ${to}
+      GROUP BY currency`);
+    const bankPaymentsRecorded: Record<string, { total: number; count: number }> = {};
+    for (const r of rowsOf(payRows)) {
+      bankPaymentsRecorded[(r.currency || "USD").toUpperCase()] = { total: Number(parseFloat(r.total).toFixed(2)), count: parseInt(r.n) };
+    }
+
+    return {
+      accounts: accountResults,
+      bankPaymentsRecorded,
+      note: "The system stores periodic bank-statement closing balances, not individual statement lines, and disbursements are not linked to a specific bank account. This reconciliation compares each account's statement movement against recorded deposits; the 'unreconciled movement' is the amount to explain from bank-method payments (shown below), bank charges, interest and any unrecorded items.",
+    };
+  }
 
   async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);
@@ -2393,7 +2911,7 @@ export class DatabaseStorage implements IStorage {
       map.set(r.policyId, {
         lastPaymentAt: r.lastIssuedAt ? new Date(r.lastIssuedAt).toISOString() : "",
         receiptCount: Number(r.receiptCount),
-        totalAmount: Number(r.totalAmount ?? 0).toFixed(2),
+        totalAmount: moneyString(r.totalAmount),
       });
     }
     return map;
@@ -2414,8 +2932,8 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r) => {
       const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
       const dueDate = r.currentCycleEnd ?? null;
-      const premium = parseFloat(r.premiumAmount || "0");
-      const totalReceived = parseFloat(agg.totalAmount || "0");
+      const premiumCents = toCents(r.premiumAmount);
+      const receivedCents = toCents(agg.totalAmount);
       const monthsPaid = agg.receiptCount;
       let graceDaysUsed = 0;
       let graceDaysRemaining: number | null = null;
@@ -2427,11 +2945,11 @@ export class DatabaseStorage implements IStorage {
         graceDaysUsed = Math.max(0, Math.min(graceDays, graceDays - graceDaysRemaining));
       }
       let outstandingPremium = "0";
-      if (dueDate && dueDate < today && premium > 0) {
+      if (dueDate && dueDate < today && premiumCents > 0) {
         outstandingPremium = r.premiumAmount;
       }
-      const expectedPaid = monthsPaid * premium;
-      const advancePremium = totalReceived > expectedPaid ? (totalReceived - expectedPaid).toFixed(2) : "0";
+      const expectedCents = monthsPaid * premiumCents;
+      const advancePremium = receivedCents > expectedCents ? fromCents(receivedCents - expectedCents) : "0";
       return {
         ...r,
         datePaid: agg.lastPaymentAt || null,
@@ -2466,6 +2984,7 @@ export class DatabaseStorage implements IStorage {
         policyId: policies.id,
         policyNumber: policies.policyNumber,
         status: policies.status,
+        currency: policies.currency,
         clientId: clients.id,
         clientFirstName: clients.firstName,
         clientLastName: clients.lastName,
@@ -2526,6 +3045,7 @@ export class DatabaseStorage implements IStorage {
     const rows: UnderwriterPayableRow[] = [];
     let totalMonthlyPayable = 0;
     let totalPayableIncludingAdvance = 0;
+    const byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> = {};
 
     for (const r of baseRows) {
       const advanceMonths = Number(r.underwriterAdvanceMonths ?? 0);
@@ -2553,11 +3073,17 @@ export class DatabaseStorage implements IStorage {
       const totalPayable = monthlyPayable * (1 + advanceMonths);
       totalMonthlyPayable += monthlyPayable;
       totalPayableIncludingAdvance += totalPayable;
+      const cur = (r.currency || "USD").toUpperCase();
+      if (!byCurrency[cur]) byCurrency[cur] = { monthlyPayable: 0, totalPayable: 0, policyCount: 0 };
+      byCurrency[cur].monthlyPayable += monthlyPayable;
+      byCurrency[cur].totalPayable += totalPayable;
+      byCurrency[cur].policyCount += 1;
 
       rows.push({
         policyId: r.policyId,
         policyNumber: r.policyNumber,
         status: r.status,
+        currency: cur,
         clientId: r.clientId,
         clientFirstName: r.clientFirstName,
         clientLastName: r.clientLastName,
@@ -2583,6 +3109,7 @@ export class DatabaseStorage implements IStorage {
         totalMonthlyPayable,
         totalPayableIncludingAdvance,
         policyCount: rows.length,
+        byCurrency,
       },
     };
   }
@@ -3277,12 +3804,13 @@ export class DatabaseStorage implements IStorage {
     return rows.map((r: any) => {
       const issuedDate = r.issuedAt ? new Date(r.issuedAt) : null;
       const productName = r.productVersionId ? productMap[r.productVersionId] || null : null;
-      const periodPremium = parseFloat(String(r.premiumAmount ?? "0"));
-      const amountNum = parseFloat(String(r.amount ?? "0"));
+      // Integer cents so whole-period counts aren't misjudged by float division.
+      const periodPremiumCents = toCents(r.premiumAmount);
+      const amountCents = toCents(r.amount);
       const MonthsPaid =
-        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(1, Math.floor(amountNum / periodPremium)) : (amountNum > 0 ? 1 : 0);
+        periodPremiumCents > 0 ? Math.max(1, Math.floor(amountCents / periodPremiumCents)) : (amountCents > 0 ? 1 : 0);
       const MonthsPaidInAdvance =
-        periodPremium > 0 && Number.isFinite(amountNum) ? Math.max(0, Math.floor(amountNum / periodPremium) - 1) : 0;
+        periodPremiumCents > 0 ? Math.max(0, Math.floor(amountCents / periodPremiumCents) - 1) : 0;
       const meta = r.metadataJson as { internalReference?: string } | null;
       const internalRef =
         (meta?.internalReference && String(meta.internalReference)) ||
@@ -3307,7 +3835,7 @@ export class DatabaseStorage implements IStorage {
       const CapturedBy = CollectedBy || ManualUser;
       const inceptionStr = r.inceptionDate ? String(r.inceptionDate) : "";
       const ActualPen =
-        periodPremium > 0 && Number.isFinite(amountNum) ? (amountNum - periodPremium).toFixed(2) : "";
+        periodPremiumCents > 0 ? fromCents(amountCents - periodPremiumCents) : "";
       const agentsName = r.agentDisplayName || r.agentEmail || "";
       const ReceiptCount = receiptCountByPolicy.get(r.policyId) ?? 0;
       const DTSTAMP = issuedDate ? toICalDTSTAMP(issuedDate) : "";
@@ -4026,7 +4554,8 @@ export class DatabaseStorage implements IStorage {
       if (!agentId) continue;
       const name = (r.agentDisplayName || r.agentEmail || "").trim() || agentId;
       const a = getAgg(agentId, name);
-      const amt = parseFloat(String(r.amount ?? 0)) || 0;
+      // Sums are kept in integer cents; fmt() converts back.
+      const amt = toCents(r.amount);
       a.sumAll += amt;
       const et = String(r.entryType || "");
       if (et === "first_months" || et === "recurring") a.sumBasic += amt;
@@ -4047,7 +4576,7 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "0.00");
+    const fmt = (cents: number) => (Number.isFinite(cents) ? fromCents(cents) : "0.00");
 
     const out = Array.from(byAgent.entries()).map(([agentId, a]) => {
       const total = a.sumAll;
@@ -4972,6 +5501,22 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
     return rows.map((r) => ({ ...r.payslips, employee: r.payroll_employees }));
   }
+  async getPayslipsForTaxYear(orgId: string, year: number): Promise<(Payslip & { employeeName: string; employeeIdNumber: string })[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.select().from(payslips)
+      .innerJoin(payrollRuns, eq(payslips.payrollRunId, payrollRuns.id))
+      .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
+      .where(and(
+        eq(payrollEmployees.organizationId, orgId),
+        gte(payrollRuns.periodStart, `${year}-01-01`),
+        lte(payrollRuns.periodStart, `${year}-12-31`),
+      ));
+    return rows.map((r) => ({
+      ...r.payslips,
+      employeeName: `${r.payroll_employees.firstName} ${r.payroll_employees.lastName}`.trim(),
+      employeeIdNumber: r.payroll_employees.employeeNumber,
+    }));
+  }
   async upsertPayslip(runId: string, employeeId: string, orgId: string, data: Omit<InsertPayslip, "payrollRunId" | "employeeId">): Promise<Payslip> {
     const tdb = await getDbForOrg(orgId);
     const [existing] = await tdb.select().from(payslips)
@@ -4988,11 +5533,10 @@ export class DatabaseStorage implements IStorage {
     const slips = await tdb.select().from(payslips)
       .innerJoin(payrollEmployees, eq(payslips.employeeId, payrollEmployees.id))
       .where(and(eq(payslips.payrollRunId, runId), eq(payrollEmployees.organizationId, orgId)));
-    const totalGross = slips.reduce((s, p) => s + parseFloat(p.payslips.grossAmount || "0"), 0);
-    const totalNet = slips.reduce((s, p) => s + parseFloat(p.payslips.netAmount || "0"), 0);
-    const totalDeductions = totalGross - totalNet;
+    const grossCents = sumCents(slips.map((p) => p.payslips.grossAmount));
+    const netCents = sumCents(slips.map((p) => p.payslips.netAmount));
     await tdb.update(payrollRuns)
-      .set({ totalGross: String(totalGross), totalDeductions: String(totalDeductions), totalNet: String(totalNet) })
+      .set({ totalGross: fromCents(grossCents), totalDeductions: fromCents(grossCents - netCents), totalNet: fromCents(netCents) })
       .where(and(eq(payrollRuns.id, runId), eq(payrollRuns.organizationId, orgId)));
   }
 
@@ -5054,8 +5598,7 @@ export class DatabaseStorage implements IStorage {
     for (const r of allRows) {
       const ch = (r.paymentChannel || "other").toLowerCase();
       const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
-      const prev = parseFloat(amountsByMethod[key] || "0");
-      amountsByMethod[key] = (prev + parseFloat(String(r.amount || "0"))).toFixed(2);
+      amountsByMethod[key] = fromCents(toCents(amountsByMethod[key]) + toCents(r.amount));
       const cur = r.currency || "USD";
       currencyCounts[cur] = (currencyCounts[cur] || 0) + 1;
     }
@@ -5822,13 +6365,13 @@ export class DatabaseStorage implements IStorage {
   async createPettyCashFloat(data: InsertPettyCashFloat, openingBalance?: string, performedByUserId?: string): Promise<PettyCashFloat> {
     const tdb = await getDbForOrg(data.organizationId);
     const [row] = await tdb.insert(pettyCashFloats).values(data).returning();
-    const opening = parseFloat(openingBalance || "0");
-    if (opening > 0 && performedByUserId) {
+    const openingCents = toCents(openingBalance);
+    if (openingCents > 0 && performedByUserId) {
       await this.postPettyCashTransaction({
         organizationId: data.organizationId,
         floatId: row.id,
         type: "opening",
-        amount: opening.toFixed(2),
+        amount: fromCents(openingCents),
         description: "Opening float",
         performedByUserId,
         transactionDate: await todayForOrg(data.organizationId),
@@ -5862,21 +6405,22 @@ export class DatabaseStorage implements IStorage {
   // audit-log entry that must commit/rollback with this write) can pass it through instead of the
   // balance UPDATE and ledger-row INSERT below committing as two separate, non-atomic statements.
   async postPettyCashTransactionInTx(tx: OrgDataDb, data: Omit<InsertPettyCashTransaction, "balanceAfter">): Promise<{ transaction: PettyCashTransaction; float: PettyCashFloat }> {
-    const amount = parseFloat(String(data.amount));
+    // Exact 2dp string; bound into SQL as numeric so Postgres does exact decimal maths.
+    const amount = moneyString(data.amount);
     const increases = ["opening", "replenishment", "adjustment_in"];
     const decreases = ["disbursement", "adjustment_out"];
     let float: PettyCashFloat;
     let discrepancyAmount: string | undefined;
     if (increases.includes(data.type)) {
       const [row] = await tx.update(pettyCashFloats)
-        .set({ balance: sql`${pettyCashFloats.balance} + ${amount}`, updatedAt: new Date() })
+        .set({ balance: sql`${pettyCashFloats.balance} + ${amount}::numeric`, updatedAt: new Date() })
         .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)))
         .returning();
       if (!row) throw new Error("Petty cash float not found");
       float = row;
     } else if (decreases.includes(data.type)) {
       const [row] = await tx.update(pettyCashFloats)
-        .set({ balance: sql`${pettyCashFloats.balance} - ${amount}`, updatedAt: new Date() })
+        .set({ balance: sql`${pettyCashFloats.balance} - ${amount}::numeric`, updatedAt: new Date() })
         .where(and(
           eq(pettyCashFloats.id, data.floatId),
           eq(pettyCashFloats.organizationId, data.organizationId),
@@ -5887,7 +6431,7 @@ export class DatabaseStorage implements IStorage {
         const [existing] = await tx.select().from(pettyCashFloats)
           .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
         if (!existing) throw new Error("Petty cash float not found");
-        throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount.toFixed(2)}`);
+        throw new Error(`Insufficient petty cash balance: float has ${existing.balance}, tried to disburse ${amount}`);
       }
       float = row;
     } else {
@@ -5896,12 +6440,11 @@ export class DatabaseStorage implements IStorage {
         .where(and(eq(pettyCashFloats.id, data.floatId), eq(pettyCashFloats.organizationId, data.organizationId)));
       if (!existing) throw new Error("Petty cash float not found");
       float = existing;
-      const counted = parseFloat(String(data.countedAmount ?? "0"));
-      discrepancyAmount = (counted - parseFloat(String(existing.balance))).toFixed(2);
+      discrepancyAmount = fromCents(toCents(data.countedAmount) - toCents(existing.balance));
     }
     const [transaction] = await tx.insert(pettyCashTransactions).values({
       ...data,
-      amount: amount.toFixed(2),
+      amount,
       balanceAfter: float.balance,
       ...(discrepancyAmount !== undefined ? { discrepancyAmount } : {}),
     }).returning();
@@ -5983,13 +6526,13 @@ export class DatabaseStorage implements IStorage {
   // Split out so callers that also need to write an audit-log entry atomically with this payment
   // can pass through their open transaction instead of the two writes below committing separately.
   async recordTombstoneOrderPaymentInTx(tx: OrgDataDb, data: InsertTombstoneOrderPayment): Promise<{ payment: TombstoneOrderPayment; order: TombstoneOrder }> {
-    const amount = parseFloat(String(data.amount));
+    const amount = moneyString(data.amount);
     const [order] = await tx.update(tombstoneOrders)
-      .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}` })
+      .set({ amountPaid: sql`${tombstoneOrders.amountPaid} + ${amount}::numeric` })
       .where(and(eq(tombstoneOrders.id, data.orderId), eq(tombstoneOrders.organizationId, data.organizationId)))
       .returning();
     if (!order) throw new Error("Tombstone order not found");
-    const [payment] = await tx.insert(tombstoneOrderPayments).values({ ...data, amount: amount.toFixed(2) }).returning();
+    const [payment] = await tx.insert(tombstoneOrderPayments).values({ ...data, amount }).returning();
     return { payment, order };
   }
 
@@ -6025,12 +6568,12 @@ export class DatabaseStorage implements IStorage {
     const collected = new Map<string, { total: number; currency: string }>();
     for (const r of (cashupRows.rows ?? cashupRows) as any[]) {
       const key = `${r.user_id}:${r.currency}`;
-      collected.set(key, { total: parseFloat(r.total_collected ?? 0), currency: r.currency });
+      collected.set(key, { total: roundMoney(r.total_collected), currency: r.currency });
     }
     const deposited = new Map<string, { total: number; lastDate: string | null }>();
     for (const r of (depositRows.rows ?? depositRows) as any[]) {
       const key = `${r.user_id}:${r.currency}`;
-      deposited.set(key, { total: parseFloat(r.total_deposited ?? 0), lastDate: r.last_deposit_date });
+      deposited.set(key, { total: roundMoney(r.total_deposited), lastDate: r.last_deposit_date });
     }
 
     // Merge into per-user position
@@ -6039,7 +6582,7 @@ export class DatabaseStorage implements IStorage {
       const parts = key.split(":");
       const userId = parts[0]; const currency = parts[1];
       const dep = deposited.get(key) ?? { total: 0, lastDate: null };
-      const onHand = col.total - dep.total;
+      const onHand = subMoney(col.total, dep.total);
       positions[key] = { userId, totalCollected: col.total, totalDeposited: dep.total, onHand, lastDepositDate: dep.lastDate, currency };
     });
     // Include admins who only have deposits but no cashups (edge case)
@@ -6128,6 +6671,47 @@ export class DatabaseStorage implements IStorage {
     await tdb.delete(balanceSheetEntries).where(and(eq(balanceSheetEntries.id, id), eq(balanceSheetEntries.organizationId, orgId)));
   }
 
+  // ── Finance: budgets (monthly targets by category) ──
+  async getBudgets(orgId: string, filters?: { from?: string; to?: string; category?: string }): Promise<Budget[]> {
+    const tdb = await getDbForOrg(orgId);
+    const conds: any[] = [eq(budgets.organizationId, orgId)];
+    if (filters?.from) conds.push(sql`${budgets.periodMonth} >= ${filters.from}`);
+    if (filters?.to) conds.push(sql`${budgets.periodMonth} <= ${filters.to}`);
+    if (filters?.category) conds.push(eq(budgets.category, filters.category));
+    return tdb.select().from(budgets).where(and(...conds)).orderBy(budgets.periodMonth, budgets.category);
+  }
+  /** Insert or update the target for one org / month / category / currency. */
+  async upsertBudget(data: InsertBudget): Promise<Budget> {
+    const tdb = await getDbForOrg(data.organizationId);
+    const [row] = await tdb.insert(budgets).values(data)
+      .onConflictDoUpdate({
+        target: [budgets.organizationId, budgets.periodMonth, budgets.category, budgets.currency],
+        set: { amount: data.amount, notes: data.notes ?? null, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
+  async deleteBudget(id: string, orgId: string): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.delete(budgets).where(and(eq(budgets.id, id), eq(budgets.organizationId, orgId)));
+  }
+  /** Total budgeted amount for a category across the months overlapping [from, to], per currency. */
+  async getBudgetForRange(orgId: string, from: string, to: string, category: string): Promise<Record<string, number>> {
+    const tdb = await getDbForOrg(orgId);
+    const fromMonth = from.slice(0, 7) + "-01";
+    const toMonth = to.slice(0, 7) + "-01";
+    const rows = await tdb.select({ currency: budgets.currency, total: sql<string>`COALESCE(SUM(${budgets.amount}::numeric), 0)` })
+      .from(budgets)
+      .where(and(
+        eq(budgets.organizationId, orgId), eq(budgets.category, category),
+        sql`${budgets.periodMonth} >= ${fromMonth}`, sql`${budgets.periodMonth} <= ${toMonth}`,
+      ))
+      .groupBy(budgets.currency);
+    const out: Record<string, number> = {};
+    for (const r of rows) { const v = parseFloat(r.total); if (Math.abs(v) > 0.004) out[(r.currency || "USD").toUpperCase()] = v; }
+    return out;
+  }
+
   // ── Finance: debit orders (recurring premium-collection mandates) ──
   async getDebitOrders(orgId: string, filters?: { status?: string; policyId?: string }): Promise<DebitOrder[]> {
     const tdb = await getDbForOrg(orgId);
@@ -6205,14 +6789,14 @@ export class DatabaseStorage implements IStorage {
       .offset(opts?.offset ?? 0);
   }
   private _computeQuotationTotals(items: { lineTotal: string | number }[], vatRate: number, discountAmount: number) {
-    const subtotal = items.reduce((s, it) => s + parseFloat(String(it.lineTotal || "0")), 0);
-    const vatAmount = subtotal * (vatRate / 100);
-    const grandTotal = subtotal + vatAmount - discountAmount;
+    const subtotalCents = sumCents(items.map((it) => it.lineTotal));
+    const vatCents = mulCents(subtotalCents, vatRate / 100);
+    const grandCents = subtotalCents + vatCents - toCents(discountAmount);
     return {
-      subtotal: subtotal.toFixed(2),
-      vatAmount: vatAmount.toFixed(2),
-      grandTotal: grandTotal.toFixed(2),
-      total: grandTotal.toFixed(2),
+      subtotal: fromCents(subtotalCents),
+      vatAmount: fromCents(vatCents),
+      grandTotal: fromCents(grandCents),
+      total: fromCents(grandCents),
     };
   }
   async upsertFuneralQuotation(
@@ -6717,14 +7301,14 @@ export class DatabaseStorage implements IStorage {
     // settlement overpayment (see approveSettlementWithAllocation) rather than leaving this
     // fee sitting unsettled while a credit for it is available. Conditional UPDATE avoids a
     // race against a concurrent draw-down of the same balance.
-    const amount = parseFloat(String(created.amount));
-    if (amount > 0.005) {
+    const amount = moneyString(created.amount);
+    if (toCents(amount) > 0) {
       const deduct = await tx.execute(sql`
         UPDATE platform_fee_credits
-        SET balance = balance - ${amount.toFixed(2)}::numeric, updated_at = now()
+        SET balance = balance - ${amount}::numeric, updated_at = now()
         WHERE organization_id = ${entry.organizationId}
           AND currency = ${created.currency}
-          AND balance >= ${amount.toFixed(2)}::numeric
+          AND balance >= ${amount}::numeric
         RETURNING id
       `);
       const deductedRows = (deduct as unknown as { rows?: { id: string }[] }).rows;
@@ -6755,12 +7339,12 @@ export class DatabaseStorage implements IStorage {
     )).groupBy(platformReceivables.currency);
 
     const totalDue: Record<string, string> = {};
-    for (const r of dueRows) totalDue[r.currency] = parseFloat(r.total).toFixed(2);
+    for (const r of dueRows) totalDue[r.currency] = moneyString(r.total);
     const totalSettled: Record<string, string> = {};
-    for (const r of settledRows) totalSettled[r.currency] = parseFloat(r.total).toFixed(2);
+    for (const r of settledRows) totalSettled[r.currency] = moneyString(r.total);
     const outstanding: Record<string, string> = {};
     for (const currency of Array.from(new Set([...Object.keys(totalDue), ...Object.keys(totalSettled)]))) {
-      outstanding[currency] = (parseFloat(totalDue[currency] || "0") - parseFloat(totalSettled[currency] || "0")).toFixed(2);
+      outstanding[currency] = fromCents(toCents(totalDue[currency]) - toCents(totalSettled[currency]));
     }
     return { totalDue, totalSettled, outstanding };
   }
@@ -6808,12 +7392,12 @@ export class DatabaseStorage implements IStorage {
     for (const r of allRows) {
       const uKey = `${r.user_id ?? "unattributed"}:${r.currency}`;
       const u = userTotals.get(uKey) ?? { userId: r.user_id, currency: r.currency, total: 0, count: 0 };
-      u.total += parseFloat(r.amount); u.count += 1;
+      u.total += toCents(r.amount); u.count += 1; // cents
       userTotals.set(uKey, u);
 
       const bKey = `${r.branch_id ?? "unattributed"}:${r.currency}`;
       const b = branchTotals.get(bKey) ?? { branchId: r.branch_id, currency: r.currency, total: 0, count: 0 };
-      b.total += parseFloat(r.amount); b.count += 1;
+      b.total += toCents(r.amount); b.count += 1; // cents
       branchTotals.set(bKey, b);
     }
 
@@ -6828,7 +7412,7 @@ export class DatabaseStorage implements IStorage {
     const legacyTotals = new Map<string, { currency: string; total: number; count: number }>();
     for (const r of legacyAll) {
       const l = legacyTotals.get(r.currency) ?? { currency: r.currency, total: 0, count: 0 };
-      l.total += parseFloat(r.amount); l.count += 1;
+      l.total += toCents(r.amount); l.count += 1; // cents
       legacyTotals.set(r.currency, l);
     }
 
@@ -6836,14 +7420,14 @@ export class DatabaseStorage implements IStorage {
       byUser: Array.from(userTotals.values()).map(u => ({
         userId: u.userId,
         displayName: u.userId ? (userNameMap.get(u.userId) ?? "Unknown user") : "Not recorded",
-        currency: u.currency, total: u.total.toFixed(2), count: u.count,
+        currency: u.currency, total: fromCents(u.total), count: u.count,
       })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
       byBranch: Array.from(branchTotals.values()).map(b => ({
         branchId: b.branchId,
         branchName: b.branchId ? (branchNameMap.get(b.branchId) ?? "Unknown branch") : "Not recorded",
-        currency: b.currency, total: b.total.toFixed(2), count: b.count,
+        currency: b.currency, total: fromCents(b.total), count: b.count,
       })).sort((a, b) => b.total.localeCompare(a.total, undefined, { numeric: true })),
-      legacyUnattributed: Array.from(legacyTotals.values()).map(l => ({ currency: l.currency, total: l.total.toFixed(2), count: l.count })),
+      legacyUnattributed: Array.from(legacyTotals.values()).map(l => ({ currency: l.currency, total: fromCents(l.total), count: l.count })),
     };
   }
 
@@ -6898,7 +7482,8 @@ export class DatabaseStorage implements IStorage {
       const fx: Record<string, number> = { USD: 1 };
       for (const r of fxRateRows) fx[r.currency.toUpperCase()] = parseFloat(String(r.rateToUsd));
 
-      let remaining = parseFloat(String(settlement.amount));
+      // All amounts in integer cents; FX conversion rounds once per allocation.
+      let remaining = toCents(settlement.amount);
       let receivablesSettled = 0;
       let totalAllocated = 0;
       const settlementCurrency = settlement.currency.toUpperCase();
@@ -6917,9 +7502,9 @@ export class DatabaseStorage implements IStorage {
       rows.sort((a, b) => currencyTier(a.currency) - currencyTier(b.currency));
 
       for (const r of rows) {
-        if (remaining <= 0.005) break;
-        const owed = parseFloat(r.amount) - parseFloat(r.alreadyAllocated || "0");
-        if (owed <= 0.005) continue;
+        if (remaining <= 0) break;
+        const owed = toCents(r.amount) - toCents(r.alreadyAllocated);
+        if (owed <= 0) continue;
         const receivableCurrency = r.currency.toUpperCase();
 
         // rate = units of settlement currency per 1 unit of the receivable's currency.
@@ -6933,18 +7518,20 @@ export class DatabaseStorage implements IStorage {
           rate = fx[receivableCurrency] / fx[settlementCurrency];
         }
 
-        const owedInSettlementCurrency = owed * rate;
-        const appliedInSettlementCurrency = Math.min(remaining, owedInSettlementCurrency);
-        const appliedInReceivableCurrency = appliedInSettlementCurrency / rate;
+        const owedInSettlementCurrency = mulCents(owed, rate);
+        const coversAll = remaining >= owedInSettlementCurrency;
+        const appliedInSettlementCurrency = coversAll ? owedInSettlementCurrency : remaining;
+        // When the whole receivable is covered, record exactly what was owed (no FX round-trip).
+        const appliedInReceivableCurrency = coversAll ? owed : Math.min(owed, mulCents(remaining, 1 / rate));
         await tx.insert(settlementAllocations).values({
           settlementId: settlement.id,
           receivableId: r.id,
-          amount: appliedInReceivableCurrency.toFixed(2),
+          amount: fromCents(appliedInReceivableCurrency),
           fxRateApplied: receivableCurrency !== settlementCurrency ? rate.toFixed(8) : null,
         });
         totalAllocated += appliedInSettlementCurrency;
         remaining -= appliedInSettlementCurrency;
-        if (appliedInReceivableCurrency >= owed - 0.005) {
+        if (appliedInReceivableCurrency >= owed) {
           await tx.update(platformReceivables).set({ isSettled: true }).where(eq(platformReceivables.id, r.id));
           receivablesSettled++;
         }
@@ -6953,18 +7540,18 @@ export class DatabaseStorage implements IStorage {
       // Settlement outlasted every currently-owed receivable — bank the true overpayment as a
       // per-currency credit rather than letting it vanish; createPlatformReceivable() draws it
       // down automatically the next time a same-currency fee is raised for this org.
-      if (remaining > 0.005) {
+      if (remaining > 0) {
         await tx.insert(platformFeeCredits)
-          .values({ organizationId: orgId, currency: settlementCurrency, balance: remaining.toFixed(2) })
+          .values({ organizationId: orgId, currency: settlementCurrency, balance: fromCents(remaining) })
           .onConflictDoUpdate({
             target: [platformFeeCredits.organizationId, platformFeeCredits.currency],
-            set: { balance: sql`${platformFeeCredits.balance} + ${remaining.toFixed(2)}::numeric`, updatedAt: new Date() },
+            set: { balance: sql`${platformFeeCredits.balance} + ${fromCents(remaining)}::numeric`, updatedAt: new Date() },
           });
       }
 
       const [updated] = await tx.update(settlements).set({ status: "approved", approvedBy })
         .where(eq(settlements.id, id)).returning();
-      return { settlement: updated, allocated: totalAllocated.toFixed(2), receivablesSettled };
+      return { settlement: updated, allocated: fromCents(totalAllocated), receivablesSettled };
     });
   }
 
@@ -7913,13 +8500,13 @@ export class DatabaseStorage implements IStorage {
 
         // Mirrors payment-service.ts's multi-month lump-sum inference exactly, so a payment
         // covering several premiums replays into several advanced cycles, same as it would live.
-        const premiumAmt = currentSnap.premiumAmount ? parseFloat(String(currentSnap.premiumAmount)) : 0;
-        const paidAmt = parseFloat(String(paymentFields.amount));
+        const premiumCents = toCents(currentSnap.premiumAmount);
+        const paidCents = toCents(paymentFields.amount);
         // Math.max(0, ...): a payment under one premium must NOT advance the cycle — it gets
         // banked below as credit instead. Flooring (not rounding) so an overpayment just under
         // 2x a premium doesn't grant a free extra cycle either. Mirrors payment-service.ts.
-        const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
-          ? Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))
+        const monthCount = premiumCents > 0
+          ? Math.min(12, Math.max(0, Math.floor(paidCents / premiumCents)))
           : 1;
 
         let periodFrom = paymentDate;
@@ -7936,10 +8523,10 @@ export class DatabaseStorage implements IStorage {
 
         // Mirrors payment-service.ts:758-766 — anything paid beyond the monthCount cycles just
         // advanced didn't buy another whole period; bank it as credit instead of dropping it.
-        if (premiumAmt > 0) {
-          const excess = paidAmt - monthCount * premiumAmt;
-          if (excess > 0.01) {
-            await this.addPolicyCreditBalanceInTx(tx, orgId, policyId, excess.toFixed(2), paymentFields.currency);
+        if (premiumCents > 0) {
+          const excessCents = paidCents - monthCount * premiumCents;
+          if (excessCents > 0) {
+            await this.addPolicyCreditBalanceInTx(tx, orgId, policyId, fromCents(excessCents), paymentFields.currency);
           }
         }
 

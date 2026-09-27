@@ -3,16 +3,18 @@
  *
  * For every tenant the billing sweep has suspended (viewOnlyGraceUntil set):
  *   • ~7 days and ~1 day before the window closes → email the tenant admins a final warning
- *   • window elapsed:
- *       – billingSettings.hardDeleteEnabled ON  → purgeTenant() (irreversible)
- *       – OFF (default)                         → licenseStatus='pending_deletion' + notify the
- *                                                 platform owner to run the purge by hand
+ *   • window elapsed → licenseStatus='pending_deletion' + notify the platform owner
+ *
+ * This sweep NEVER deletes data. Tenant data is only ever deleted by hand by the platform owner
+ * (POST /api/platform/tenants/:id/purge with a typed confirmation). The billingSettings
+ * .hardDeleteEnabled auto-purge was removed on 2026-09-27 at the platform owner's request; the
+ * column remains but nothing reads it.
  *
  * Every step is guarded by a tenant_billing_events marker so it fires exactly once.
  */
 import { and, eq, gte, isNotNull } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
-import { tenants as cpTenants, billingSettings, tenantBillingEvents } from "@shared/control-plane-schema";
+import { tenants as cpTenants, tenantBillingEvents } from "@shared/control-plane-schema";
 import { resolveTenantBillingRecipients } from "./tenant-billing-email";
 import { sendEmail, isEmailConfigured } from "./email-service";
 import { structuredLog } from "./logger";
@@ -73,9 +75,6 @@ export async function processTenantDeletionLifecycle(): Promise<{ warningsSent: 
   const out = { warningsSent: 0, pendingDeletion: 0, purged: 0 };
   const now = Date.now();
 
-  const [settings] = await cpDb.select().from(billingSettings).where(eq(billingSettings.id, "global")).limit(1);
-  const hardDeleteEnabled = !!settings?.hardDeleteEnabled;
-
   const candidates = await cpDb.select().from(cpTenants)
     .where(and(eq(cpTenants.isActive, false), isNotNull(cpTenants.viewOnlyGraceUntil)));
 
@@ -100,13 +99,8 @@ export async function processTenantDeletionLifecycle(): Promise<{ warningsSent: 
         continue;
       }
 
-      // ── Window elapsed ──
-      if (hardDeleteEnabled) {
-        const { purgeTenant } = await import("./tenant-purge");
-        const res = await purgeTenant(t.id, { actorEmail: "system (auto-delete)" });
-        out.purged++;
-        structuredLog("warn", "Tenant auto-purged after view-only window", { tenantId: t.id, name: t.name, ...res });
-      } else if (t.licenseStatus !== "pending_deletion") {
+      // ── Window elapsed: flag for the platform owner's manual decision. Never purge here. ──
+      if (t.licenseStatus !== "pending_deletion") {
         await cpDb.update(cpTenants).set({ licenseStatus: "pending_deletion" }).where(eq(cpTenants.id, t.id));
         await markDone(t.id, "pending_deletion", { since: new Date().toISOString() });
         await notifyPlatformOwnerPendingDeletion(t.name, t.id);

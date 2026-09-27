@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { getApiBase } from "@/lib/queryClient";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { formatReceiptNumber } from "@/lib/assetUrl";
 import { CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, type EdtColumn, EmptyState, KpiStatCard, StatusBadge } from "@/components/ds";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield, BookOpen, Scale } from "lucide-react";
 import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
@@ -88,50 +90,23 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
   { id: "totalPayable", header: "Total payable", align: "right", accessor: (r) => r.totalPayable, cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.totalPayable.toFixed(2)}</span> },
 ];
 
+// Curated default columns for the on-screen receipts table. The CSV export carries the fuller
+// Easipol-format column set; the screen view is for scanning, not spreadsheet work.
 const receiptsColumns: EdtColumn<any>[] = [
-  { id: "dtstamp", header: "DTSTAMP", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
-  { id: "agentsName", header: "agentsName", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
-  { id: "monthsPaidInAdvance", header: "MonthsPaidInAdvance", accessor: (r) => r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaidInAdvance ?? "—"}</span> },
-  { id: "policyNumber", header: "policy_number", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
-  { id: "surname", header: "surname", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
-  { id: "internalReferenceNumber", header: "InternalReferenceNumber", accessor: (r) => r.InternalReferenceNumber || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.InternalReferenceNumber}>{r.InternalReferenceNumber || "—"}</span> },
-  { id: "productName", header: "Product_Name", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
-  { id: "inceptionDate", header: "Inception_Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
-  { id: "monthNumber", header: "MonthNumber", accessor: (r) => r.MonthNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthNumber ?? "—"}</span> },
-  { id: "yearNumber", header: "YearNumber", accessor: (r) => r.YearNumber ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.YearNumber ?? "—"}</span> },
-  { id: "receiptCount", header: "ReceiptCount", accessor: (r) => r.ReceiptCount ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptCount ?? "—"}</span> },
-  { id: "fdate", header: "fdate", accessor: (r) => r.fdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fdate || "—"}</span> },
-  { id: "tdate", header: "tdate", accessor: (r) => r.tdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.tdate || "—"}</span> },
-  { id: "paymentBy", header: "PaymentBy", accessor: (r) => r.PaymentBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.PaymentBy}>{r.PaymentBy || "—"}</span> },
-  { id: "receiptNumber", header: "ReceiptNumber", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
-  { id: "manualUser", header: "ManualUser", accessor: (r) => r.ManualUser || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.ManualUser}>{r.ManualUser || "—"}</span> },
-  { id: "datePaid", header: "DatePaid", accessor: (r) => r.DatePaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || "—"}</span> },
-  { id: "transaction", header: "Transaction", accessor: (r) => r.Transaction || "", cell: (r) => <span className="text-xs font-mono max-w-[160px] truncate block" title={r.Transaction}>{r.Transaction || "—"}</span> },
-  { id: "premiumDue", header: "PremiumDue", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.PremiumDue || "—"}</span> },
+  { id: "receiptNumber", header: "Receipt #", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
+  { id: "datePaid", header: "Date Paid", accessor: (r) => r.DatePaid || r.datepaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || r.datepaid || "—"}</span> },
+  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
+  { id: "surname", header: "Member", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
+  { id: "productName", header: "Product", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
   { id: "currency", header: "Currency", accessor: (r) => r.Currency || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Currency || "—"}</span> },
-  { id: "amountCollected", header: "AmountCollected", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
-  { id: "monthsPaid", header: "MonthsPaid", accessor: (r) => r.MonthsPaid ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? "—"}</span> },
-  { id: "remarks", header: "Remarks", accessor: (r) => r.Remarks || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.Remarks}>{r.Remarks || "—"}</span> },
-  { id: "paymentMethod", header: "PaymentMethod", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
-  { id: "defaultPay", header: "DefaultPay", accessor: (r) => r.DefaultPay || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DefaultPay || "—"}</span> },
-  { id: "debitMethod", header: "DebitMethod", accessor: (r) => r.DebitMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DebitMethod || "—"}</span> },
-  { id: "receiptMonth", header: "ReceiptMonth", accessor: (r) => r.ReceiptMonth ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptMonth ?? "—"}</span> },
-  { id: "receiptYear", header: "ReceiptYear", accessor: (r) => r.ReceiptYear ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptYear ?? "—"}</span> },
-  { id: "policyNum", header: "policy_num", accessor: (r) => r.policy_num || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_num || "—"}</span> },
-  { id: "policyBranch", header: "PolicyBranch", accessor: (r) => r.PolicyBranch || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.PolicyBranch}>{r.PolicyBranch || "—"}</span> },
-  { id: "inceptionUnderscore", header: "Inception_", accessor: (r) => r.Inception_ || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_ || "—"}</span> },
-  { id: "sstatus", header: "Sstatus", accessor: (r) => r.Sstatus || "", cell: (r) => <span className="text-xs"><Badge variant="outline" className="text-[10px]">{r.Sstatus || "—"}</Badge></span> },
-  { id: "internalRe", header: "InternalRe", accessor: (r) => r.InternalRe || "", cell: (r) => <span className="text-xs font-mono max-w-[100px] truncate block" title={r.InternalRe}>{r.InternalRe || "—"}</span> },
-  { id: "productN", header: "Product_N", accessor: (r) => r.Product_N || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.Product_N}>{r.Product_N || "—"}</span> },
-  { id: "collectedBy", header: "CollectedBy", accessor: (r) => r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CollectedBy}>{r.CollectedBy || "—"}</span> },
-  { id: "fromDate", header: "fromDate", accessor: (r) => r.fromDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.fromDate || "—"}</span> },
-  { id: "toDate", header: "toDate", accessor: (r) => r.toDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.toDate || "—"}</span> },
-  { id: "groupName", header: "GroupName", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
-  { id: "inceptionD", header: "InceptionD", accessor: (r) => r.InceptionD || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.InceptionD || "—"}</span> },
-  { id: "memberId", header: "MemberID", accessor: (r) => r.MemberID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.MemberID || "—"}</span> },
-  { id: "actualPen", header: "ActualPen", accessor: (r) => r.ActualPen || "", cell: (r) => <span className="text-xs tabular-nums">{r.ActualPen || "—"}</span> },
-  { id: "receiptId", header: "ReceiptID", accessor: (r) => r.ReceiptID || "", cell: (r) => <span className="text-xs font-mono max-w-[90px] truncate block" title={r.ReceiptID}>{r.ReceiptID || "—"}</span> },
-  { id: "capturedBy", header: "CapturedBy", accessor: (r) => r.CapturedBy || "", cell: (r) => <span className="text-xs max-w-[100px] truncate block" title={r.CapturedBy}>{r.CapturedBy || "—"}</span> },
+  { id: "amountCollected", header: "Amount Collected", align: "right", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap tabular-nums">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
+  { id: "premiumDue", header: "Premium Due", align: "right", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap tabular-nums">{r.PremiumDue || "—"}</span> },
+  { id: "monthsPaid", header: "Months Paid", align: "right", accessor: (r) => r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "—"}</span> },
+  { id: "paymentMethod", header: "Method", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
+  { id: "agentsName", header: "Agent", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
+  { id: "capturedBy", header: "Captured By", accessor: (r) => r.CapturedBy || r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.CapturedBy || r.CollectedBy}>{r.CapturedBy || r.CollectedBy || "—"}</span> },
+  { id: "groupName", header: "Group", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
+  { id: "dtstamp", header: "Timestamp (UTC)", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
 ];
 
 const paymentsColumns: EdtColumn<any>[] = [
@@ -237,6 +212,99 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("transactionLedger"),
   });
+  const { data: trialBalance, isLoading: loadingTrialBalance } = useQuery<any>({
+    queryKey: ["reports", "trial-balance", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/trial-balance" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("trialBalance"),
+  });
+  const { data: bankRec, isLoading: loadingBankRec } = useQuery<any>({
+    queryKey: ["reports", "bank-reconciliation", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/bank-reconciliation" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("bankReconciliation"),
+  });
+  const { data: ifrs17, isLoading: loadingIfrs17 } = useQuery<any>({
+    queryKey: ["reports", "ifrs17-movement", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/ifrs17-movement" + q, { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("ifrs17Movement"),
+  });
+  const [glAccount, setGlAccount] = useState<string>("");
+  const IPEC_MANUAL_KEYS = ["insurerClass", "investmentIncome", "technicalProvisions", "prescribedAssetsHeld", "otherLiabilities", "riskBasedCapitalRequirement"] as const;
+  const [ipecManual, setIpecManual] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem("ipec-return-manual") || "{}"); } catch { return {}; }
+  });
+  const setIpecField = (k: string, v: string) => {
+    setIpecManual((p) => { const next = { ...p, [k]: v }; try { localStorage.setItem("ipec-return-manual", JSON.stringify(next)); } catch { /* ignore */ } return next; });
+  };
+  const ipecQs = () => {
+    const p = new URLSearchParams();
+    if (filters.fromDate) p.set("fromDate", filters.fromDate);
+    if (filters.toDate) p.set("toDate", filters.toDate);
+    if (filters.branchId) p.set("branchId", filters.branchId);
+    for (const k of IPEC_MANUAL_KEYS) if (ipecManual[k]) p.set(k, ipecManual[k]);
+    return p.toString();
+  };
+  const { data: ipecReturn, isLoading: loadingIpec } = useQuery<any>({
+    queryKey: ["reports", "ipec-return", runKey, ...fk, ipecManual],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/ipec-return?" + ipecQs(), { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("ipecReturn"),
+  });
+  const qc = useQueryClient();
+  const budgetYear = (filters.toDate || new Date().toISOString().slice(0, 10)).slice(0, 4);
+  const { data: budgetRows = [] } = useQuery<any[]>({
+    queryKey: ["budgets", budgetYear],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + `/api/budgets?from=${budgetYear}-01-01&to=${budgetYear}-12-31`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("budget"),
+  });
+  const saveBudget = useMutation({
+    mutationFn: async (b: { periodMonth: string; category: string; amount: string }) =>
+      apiRequest("POST", "/api/budgets", { ...b, currency: "USD" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["budgets", budgetYear] }),
+  });
+
+  const { data: premiumBordereau = [], isLoading: loadingPremBd } = useQuery<any[]>({
+    queryKey: ["reports", "premium-bordereau", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/premium-bordereau" + q, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("premiumBordereau"),
+  });
+  const { data: claimsBordereau = [], isLoading: loadingClaimsBd } = useQuery<any[]>({
+    queryKey: ["reports", "claims-bordereau", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/claims-bordereau" + q, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: need("claimsBordereau"),
+  });
+  const { data: chartOfAccounts = [] } = useQuery<any[]>({
+    queryKey: ["reports", "chart-of-accounts"],
+    queryFn: async () => (await fetch(getApiBase() + "/api/reports/chart-of-accounts", { credentials: "include" })).json().catch(() => []),
+    enabled: need("generalLedger"),
+  });
+  const { data: generalLedger, isLoading: loadingGeneralLedger } = useQuery<any>({
+    queryKey: ["reports", "general-ledger", runKey, ...fk, glAccount],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/general-ledger" + (q ? `${q}&` : "?") + (glAccount ? `account=${glAccount}` : ""), { credentials: "include" });
+      return res.ok ? res.json() : null;
+    },
+    enabled: need("generalLedger"),
+  });
   const asOfParam = filters.toDate ? `?asOf=${filters.toDate}${filters.branchId ? `&branchId=${filters.branchId}` : ""}` : `?asOf=${new Date().toISOString().slice(0, 10)}${filters.branchId ? `&branchId=${filters.branchId}` : ""}`;
   const { data: balanceSheet, isLoading: loadingBalanceSheet } = useQuery<any>({
     queryKey: ["reports", "balance-sheet", runKey, filters.toDate, filters.branchId],
@@ -257,11 +325,11 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("insuranceContractSummary"),
   });
-  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number } }>({
+  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number; byCurrency?: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/underwriter-payable?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0 } };
+      if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0, byCurrency: {} } };
       return res.json();
     },
     enabled: need("underwriterPayable"),
@@ -427,6 +495,225 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         </CardSection>
       </TabsContent>
 
+      <TabsContent value="trial-balance">
+        <CardSection
+          title="Trial Balance & Financial Position"
+          description="The income statement and balance sheet re-expressed in debit/credit form on a standard funeral/life-insurer chart of accounts. Derived from the subsidiary ledgers (receipts, disbursements, commission, claims) + manual balance-sheet entries — it re-presents the existing statements, it is not a second set of books."
+          icon={Scale}
+          headerRight={<ExportButton reportType="trial-balance" filters={filters} />}
+          flush
+        >
+          {loadingTrialBalance ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !trialBalance ? (
+            <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+          ) : (() => {
+            const tb = trialBalance.trialBalance;
+            const pos = trialBalance.position;
+            const curs: string[] = tb.currencies?.length ? tb.currencies : ["USD"];
+            const m = (obj: any, c: string) => Number(obj?.[c] || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const tbl = (title: string, rowsIn: any[], totals: any, balanced: any) => (
+              <div className="mb-6">
+                <p className="text-sm font-semibold mb-2">{title}</p>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border rounded-md min-w-[560px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow><TableHead>Code</TableHead><TableHead>Account</TableHead>{curs.map((c) => <TableHead key={`d${c}`} className="text-right">Dr ({c})</TableHead>)}{curs.map((c) => <TableHead key={`c${c}`} className="text-right">Cr ({c})</TableHead>)}</TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rowsIn.map((r: any, i: number) => (
+                        <TableRow key={i}>
+                          <TableCell className="font-mono text-xs">{r.code}</TableCell>
+                          <TableCell>{r.name}{r.source === "manual" ? <span className="text-[10px] text-muted-foreground"> (manual)</span> : null}</TableCell>
+                          {curs.map((c) => <TableCell key={`d${c}`} className="text-right tabular-nums">{r.debit?.[c] ? m(r.debit, c) : "—"}</TableCell>)}
+                          {curs.map((c) => <TableCell key={`c${c}`} className="text-right tabular-nums">{r.credit?.[c] ? m(r.credit, c) : "—"}</TableCell>)}
+                        </TableRow>
+                      ))}
+                      <TableRow className="font-semibold border-t-2">
+                        <TableCell colSpan={2}>Total</TableCell>
+                        {curs.map((c) => <TableCell key={`d${c}`} className="text-right tabular-nums">{m(totals.debit, c)}</TableCell>)}
+                        {curs.map((c) => <TableCell key={`c${c}`} className="text-right tabular-nums">{m(totals.credit, c)}</TableCell>)}
+                      </TableRow>
+                    </TableBody>
+                  </DataTable>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+                  {curs.map((c) => (
+                    <span key={c} className={balanced?.[c] ? "text-emerald-600" : "text-amber-600"}>
+                      {c}: {balanced?.[c] ? "balanced" : "out of balance — check manual balance-sheet entries"}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+            return (
+              <div className="p-4">
+                {tbl("Trial balance — movements for the period", tb.rows, tb.totals, tb.balanced)}
+                {tbl(`Statement of financial position — as of ${pos.asOf}`, pos.rows, pos.totals, pos.balanced)}
+                <p className="text-[11px] text-muted-foreground">{tb.note}</p>
+              </div>
+            );
+          })()}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="general-ledger">
+        <CardSection
+          title="General Ledger"
+          description="Every subsidiary-ledger transaction for a chart-of-accounts account, in the selected period. Pick an account, or view all."
+          icon={BookOpen}
+          headerRight={<ExportButton reportType="general-ledger" filters={filters} />}
+          flush
+        >
+          <div className="p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Select value={glAccount || "__all__"} onValueChange={(v) => setGlAccount(v === "__all__" ? "" : v)}>
+                <SelectTrigger className="w-72 h-9"><SelectValue placeholder="All accounts" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All accounts</SelectItem>
+                  {(chartOfAccounts as any[]).map((a: any) => <SelectItem key={a.code} value={a.code}>{a.code} — {a.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {loadingGeneralLedger ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            ) : !generalLedger || generalLedger.lines.length === 0 ? (
+              <EmptyState title="No transactions for the selected account and period" className="border-0 rounded-none bg-transparent py-8" />
+            ) : (
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm min-w-[720px]">
+                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                    <tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Debit</th><th className="text-right px-3 py-2">Credit</th></tr>
+                  </thead>
+                  <tbody>
+                    {generalLedger.lines.map((l: any, i: number) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-3 py-1.5 whitespace-nowrap">{l.date}</td>
+                        <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">{l.account} {l.accountName}</td>
+                        <td className="px-3 py-1.5 max-w-[280px] truncate" title={l.description}>{l.description}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs">{l.reference || "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{l.debit != null ? `${l.currency} ${Number(l.debit).toFixed(2)}` : ""}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{l.credit != null ? `${l.currency} ${Number(l.credit).toFixed(2)}` : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="bank-reconciliation">
+        <CardSection
+          title="Bank Reconciliation"
+          description="Each bank account's statement movement over the period vs deposits recorded in the system. The system stores periodic statement closing balances (not individual lines) and disbursements aren't linked to an account, so the 'unreconciled movement' is the amount for finance to explain from bank-method payments, charges and interest."
+          icon={Building}
+          headerRight={<ExportButton reportType="bank-reconciliation" filters={filters} />}
+          flush
+        >
+          {loadingBankRec ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !bankRec || bankRec.accounts.length === 0 ? (
+            <EmptyState title="No active bank accounts" description="Add bank accounts and statement balances under Finance to use this reconciliation." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="p-4 space-y-4">
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full text-sm min-w-[820px]">
+                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                    <tr>{["Account", "Currency", "Opening", "Closing", "Statement movement", "Deposits recorded", "Unreconciled"].map((h) => <th key={h} className="text-left px-3 py-2 whitespace-nowrap">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {bankRec.accounts.map((a: any, i: number) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-3 py-1.5 whitespace-nowrap">{a.accountName} <span className="text-xs text-muted-foreground">{a.bankName}</span></td>
+                        <td className="px-3 py-1.5">{a.currency}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.openingBalance != null ? a.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.openingDate || ""}</div></td>
+                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.closingBalance != null ? a.closingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.closingDate || ""}</div></td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{a.statementMovement != null ? a.statementMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{a.depositsRecorded.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] text-muted-foreground">({a.depositCount})</span></td>
+                        <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${a.unreconciledMovement && Math.abs(a.unreconciledMovement) > 0.01 ? "text-amber-600" : ""}`}>{a.unreconciledMovement != null ? a.unreconciledMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                <p className="font-semibold mb-1">Bank-method payments recorded in the period</p>
+                {Object.keys(bankRec.bankPaymentsRecorded).length === 0 ? (
+                  <p className="text-muted-foreground text-xs">None.</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">{Object.entries(bankRec.bankPaymentsRecorded).map(([c, v]: any) => `${c} ${v.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${v.count})`).join("  ·  ")}</p>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">{bankRec.note}</p>
+            </div>
+          )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="ifrs17-movement">
+        <CardSection
+          title="IFRS 17 Movement Analysis (PAA)"
+          description="The roll-forward of the two insurance-contract liabilities over the period: LRC (opening + premiums received − revenue recognised = closing) and LIC (opening + claims incurred − claims paid = closing). PAA-classified business only; LIC excludes IBNR."
+          icon={Shield}
+          headerRight={<ExportButton reportType="ifrs17-movement" filters={filters} />}
+          flush
+        >
+          {loadingIfrs17 ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : !ifrs17 ? (
+            <EmptyState title="No PAA-classified business in the period" description="Classify product versions as 'PAA' under Products to include them in IFRS 17 reporting." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (() => {
+            const curs: string[] = ifrs17.currencies?.length ? ifrs17.currencies : ["USD"];
+            const m = (obj: any, c: string) => (obj?.[c] != null ? Number(obj[c]).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
+            const block = (title: string, L: any, lines: [string, string][]) => (
+              <div className="mb-5">
+                <p className="text-sm font-semibold mb-2">{title}</p>
+                <div className="overflow-x-auto">
+                  <DataTable containerClassName="border rounded-md min-w-[420px]">
+                    <TableHeader className={dataTableStickyHeaderClass}>
+                      <TableRow><TableHead>Line</TableHead>{curs.map((c) => <TableHead key={c} className="text-right">{c}</TableHead>)}</TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {lines.map(([key, label], i) => (
+                        <TableRow key={i} className={key === "opening" || key === "closing" ? "font-semibold" : ""}>
+                          <TableCell>{label}</TableCell>
+                          {curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{m(L[key], c)}</TableCell>)}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </DataTable>
+                </div>
+              </div>
+            );
+            return (
+              <div className="p-4">
+                {block("Liability for Remaining Coverage (LRC)", ifrs17.lrc, [
+                  ["opening", "Opening balance"],
+                  ["premiumsReceived", "Add: premiums received"],
+                  ["revenueRecognised", "Less: insurance revenue recognised"],
+                  ["closing", "Closing balance"],
+                  ["residual", "Residual (straddling receipts)"],
+                ])}
+                {block("Liability for Incurred Claims (LIC)", ifrs17.lic, [
+                  ["opening", "Opening balance"],
+                  ["claimsIncurred", "Add: claims incurred (reported)"],
+                  ["claimsPaid", "Less: claims paid / settled"],
+                  ["closing", "Closing balance"],
+                  ["residual", "Residual"],
+                ])}
+                <p className="text-xs text-muted-foreground">
+                  {ifrs17.classification.paaPolicyCount} PAA-classified {ifrs17.classification.paaPolicyCount === 1 ? "policy" : "policies"} included.
+                  {ifrs17.classification.excludedActivePolicyCount > 0 ? ` ${ifrs17.classification.excludedActivePolicyCount} excluded (unclassified / GMM / VFA).` : ""}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-1">{ifrs17.note}</p>
+              </div>
+            );
+          })()}
+        </CardSection>
+      </TabsContent>
+
       <TabsContent value="ledger">
         <CardSection
           title="Transaction Ledger"
@@ -509,31 +796,33 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
             />
           ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <KpiStatCard
-                  label="Policies"
-                  value={<span data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</span>}
-                  icon={FolderOpen}
-                />
-                <KpiStatCard
-                  label="Total monthly payable"
-                  value={
-                    <span className="tabular-nums" data-testid="text-underwriter-monthly">
-                      {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalMonthlyPayable.toFixed(2)}
-                    </span>
-                  }
-                  icon={DollarSign}
-                />
-                <KpiStatCard
-                  label="Total (incl. advance months)"
-                  value={
-                    <span className="tabular-nums" data-testid="text-underwriter-total">
-                      {underwriterPayableResult.rows[0]?.currency ?? ""} {underwriterPayableResult.summary.totalPayableIncludingAdvance.toFixed(2)}
-                    </span>
-                  }
-                  icon={TrendingUp}
-                />
-              </div>
+              {(() => {
+                const bc = underwriterPayableResult.summary.byCurrency ?? {};
+                const curs = Object.keys(bc);
+                const fmtByCur = (pick: (v: { monthlyPayable: number; totalPayable: number }) => number) =>
+                  curs.length
+                    ? curs.map((c) => `${c} ${pick(bc[c]).toFixed(2)}`).join("  ·  ")
+                    : "—";
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <KpiStatCard
+                      label="Policies"
+                      value={<span data-testid="text-underwriter-policy-count">{underwriterPayableResult.summary.policyCount}</span>}
+                      icon={FolderOpen}
+                    />
+                    <KpiStatCard
+                      label="Total monthly payable"
+                      value={<span className="tabular-nums" data-testid="text-underwriter-monthly">{fmtByCur((v) => v.monthlyPayable)}</span>}
+                      icon={DollarSign}
+                    />
+                    <KpiStatCard
+                      label="Total (incl. advance months)"
+                      value={<span className="tabular-nums" data-testid="text-underwriter-total">{fmtByCur((v) => v.totalPayable)}</span>}
+                      icon={TrendingUp}
+                    />
+                  </div>
+                );
+              })()}
               <EnhancedDataTable
                 columns={underwriterPayableColumns}
                 rows={underwriterPayableResult.rows}
@@ -631,6 +920,256 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               emptyMessage="No POL263 Platform receivables recorded."
             />
           )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="budget">
+        <CardSection
+          title={`Budget — ${budgetYear}`}
+          description="Monthly targets by category. The executive report shows actual vs budget vs variance for total income, total expenses and new policies. Amounts are USD; edit a cell and click away to save."
+          icon={Calendar}
+          flush
+        >
+          <div className="p-4 overflow-x-auto">
+            {(() => {
+              const cats = [
+                { key: "total_income", label: "Total income" },
+                { key: "total_expenses", label: "Total expenses" },
+                { key: "new_policies", label: "New policies" },
+              ];
+              const months = Array.from({ length: 12 }, (_, i) => `${budgetYear}-${String(i + 1).padStart(2, "0")}-01`);
+              const valueOf = (month: string, cat: string) => {
+                const r = (budgetRows as any[]).find((b) => String(b.periodMonth).slice(0, 10) === month && b.category === cat);
+                return r ? String(Number(r.amount)) : "";
+              };
+              return (
+                <table className="text-sm border-separate border-spacing-0 min-w-[760px]">
+                  <thead>
+                    <tr className="text-xs uppercase text-muted-foreground">
+                      <th className="text-left px-2 py-2 sticky left-0 bg-card">Month</th>
+                      {cats.map((c) => <th key={c.key} className="text-right px-2 py-2">{c.label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {months.map((month) => (
+                      <tr key={month} className="border-t">
+                        <td className="px-2 py-1 whitespace-nowrap font-mono text-xs sticky left-0 bg-card">{month.slice(0, 7)}</td>
+                        {cats.map((c) => (
+                          <td key={c.key} className="px-2 py-1">
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              defaultValue={valueOf(month, c.key)}
+                              className="w-28 h-8 rounded-md border border-input bg-background px-2 text-sm text-right tabular-nums"
+                              placeholder="—"
+                              onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                if (v === "" || v === valueOf(month, c.key)) return;
+                                saveBudget.mutate({ periodMonth: month, category: c.key, amount: String(Number(v).toFixed(2)) });
+                              }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()}
+            {saveBudget.isPending && <p className="text-xs text-muted-foreground mt-2">Saving…</p>}
+          </div>
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="reinsurance">
+        <CardSection
+          title="Reinsurance premium bordereau"
+          description="Per-policy premium ceded to the underwriter / reinsurer for the period. The cession is the configured per-adult / per-child underwriter amount (same basis as Underwriter payable). Exchanged with the reinsurer as CSV."
+          icon={Truck}
+          headerRight={<ExportButton reportType="premium-bordereau" filters={filters} />}
+          flush
+        >
+          {loadingPremBd ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (premiumBordereau as any[]).length === 0 ? (
+            <EmptyState title="No policies with an underwriter cession" description="No active/grace policies on products that carry a configured underwriter amount." className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-xs min-w-[900px]">
+                <thead className="bg-muted/40 uppercase text-[10px] text-muted-foreground">
+                  <tr>{["Policy", "Insured", "Product", "Inception", "Sum insured", "Gross prem (mo)", "Lives", "Ceded (mo)", "Retained (mo)"].map((h) => <th key={h} className="text-left px-2 py-1.5 whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(premiumBordereau as any[]).map((r, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.policyNumber}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[160px] truncate" title={r.insured}>{r.insured}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.product}>{r.product}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.inceptionDate || "—"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.sumInsured != null ? `${r.sumInsuredCurrency} ${Number(r.sumInsured).toLocaleString()}` : "—"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.currency} {r.grossPremium.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{r.lives}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium">{r.currency} {r.cededPremiumMonthly.toFixed(2)}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">{r.currency} {r.retainedPremiumMonthly.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardSection>
+
+        <CardSection
+          title="Reinsurance claims bordereau"
+          description="Per-claim detail for the period for the reinsurer to apply the treaty cession. Reports the gross claim; the recoverable share depends on the treaty and is applied by the reinsurer."
+          icon={Shield}
+          headerRight={<ExportButton reportType="claims-bordereau" filters={filters} />}
+          flush
+        >
+          {loadingClaimsBd ? (
+            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (claimsBordereau as any[]).length === 0 ? (
+            <EmptyState title="No claims in the selected period" className="border-0 rounded-none bg-transparent py-8" />
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <table className="w-full text-xs min-w-[820px]">
+                <thead className="bg-muted/40 uppercase text-[10px] text-muted-foreground">
+                  <tr>{["Claim", "Policy", "Insured", "Deceased", "Type", "Date of death", "Reported", "Status", "Gross claim"].map((h) => <th key={h} className="text-left px-2 py-1.5 whitespace-nowrap">{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {(claimsBordereau as any[]).map((r, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.claimNumber}</td>
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{r.policyNumber}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.insured}>{r.insured}</td>
+                      <td className="px-2 py-1 whitespace-nowrap max-w-[140px] truncate" title={r.deceased}>{r.deceased || "—"}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.claimType}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.dateOfDeath || "—"}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{r.dateReported}</td>
+                      <td className="px-2 py-1 whitespace-nowrap capitalize">{r.status}</td>
+                      <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap font-medium">{r.grossClaim > 0 ? `${r.currency} ${r.grossClaim.toFixed(2)}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardSection>
+      </TabsContent>
+
+      <TabsContent value="ipec-return">
+        <CardSection
+          title="IPEC Return — Life / Funeral Assurer (indicative)"
+          description="Assembles the data the system holds into the structure of an IPEC statutory return. Investment income, technical provisions, prescribed-asset holdings and the ZICARP capital requirement are not in the system — enter them below. This is a working draft; the return still needs an actuary's sign-off before submission."
+          icon={Shield}
+          headerRight={
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(`${getApiBase()}/api/reports/ipec-return/pdf?${ipecQs()}&download=1`, "_blank")}>
+              <Download className="h-3.5 w-3.5" /> PDF
+            </Button>
+          }
+          flush
+        >
+          <div className="p-4 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Insurer class</label>
+                <Select value={ipecManual.insurerClass || "funeral"} onValueChange={(v) => setIpecField("insurerClass", v)}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="funeral">Funeral (min. capital USD 500,000)</SelectItem>
+                    <SelectItem value="life">Life (min. capital USD 2,000,000)</SelectItem>
+                    <SelectItem value="composite">Composite (USD 2,000,000)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {[
+                ["investmentIncome", "Investment income (USD, period)"],
+                ["technicalProvisions", "Technical provisions (USD, as of)"],
+                ["prescribedAssetsHeld", "Prescribed assets held (USD, as of)"],
+                ["otherLiabilities", "Other liabilities (USD, as of) — blank = derived"],
+                ["riskBasedCapitalRequirement", "ZICARP RBC requirement (USD) — blank = flat minimum"],
+              ].map(([k, label]) => (
+                <div key={k} className="space-y-1">
+                  <label className="text-xs text-muted-foreground">{label}</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    value={ipecManual[k] || ""}
+                    onChange={(e) => setIpecField(k, e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+              ))}
+            </div>
+
+            {loadingIpec ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+            ) : !ipecReturn ? (
+              <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+            ) : (() => {
+              const R = ipecReturn;
+              const u = (n: number) => `USD ${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              const flag = (ok: boolean) => <span className={ok ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>{ok ? "Compliant" : "Not compliant"}</span>;
+              const Row = ({ l, v }: { l: string; v: any }) => (
+                <div className="flex justify-between gap-4 py-1 border-b border-border/40 text-sm"><span className="text-muted-foreground">{l}</span><span className="tabular-nums text-right">{v}</span></div>
+              );
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                  <p className="md:col-span-2 text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">{R.meta.disclaimer}</p>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Business summary</p>
+                    <Row l="Policies in force" v={R.businessSummary.policiesInForce} />
+                    <Row l="New policies in period" v={R.businessSummary.newPoliciesInPeriod} />
+                    <Row l="Lapses in period" v={R.businessSummary.lapsesInPeriod} />
+                    <Row l="Lives covered" v={R.businessSummary.livesCovered} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Revenue account (USD)</p>
+                    <Row l="Gross premium written" v={u(R.revenueAccount.grossPremiumWritten)} />
+                    <Row l="Reinsurance ceded (estimate)" v={u(R.revenueAccount.reinsurancePremiumCeded)} />
+                    <Row l="Net premium written" v={u(R.revenueAccount.netPremiumWritten)} />
+                    <Row l="Investment income (manual)" v={u(R.revenueAccount.investmentIncome)} />
+                    <Row l="Claims incurred" v={u(R.revenueAccount.claimsIncurred)} />
+                    <Row l="Commission" v={u(R.revenueAccount.commission)} />
+                    <Row l="Management expenses" v={u(R.revenueAccount.managementExpenses)} />
+                    <Row l="Underwriting result" v={<span className={R.revenueAccount.underwritingResult >= 0 ? "text-emerald-600" : "text-destructive"}>{u(R.revenueAccount.underwritingResult)}</span>} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Financial position (USD)</p>
+                    <Row l="Total assets" v={u(R.financialPosition.totalAssets)} />
+                    <Row l="Technical provisions (manual)" v={u(R.financialPosition.technicalProvisions)} />
+                    <Row l="Total liabilities" v={u(R.financialPosition.totalLiabilities)} />
+                    <Row l="Shareholders' funds" v={u(R.financialPosition.shareholdersFunds)} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Prescribed assets &amp; capital</p>
+                    <Row l={`Prescribed asset ratio (min ${R.prescribedAssets.minimumRatio}%)`} v={`${R.prescribedAssets.ratio}%`} />
+                    <Row l="Prescribed asset shortfall" v={u(R.prescribedAssets.shortfall)} />
+                    <Row l="Prescribed assets" v={flag(R.prescribedAssets.compliant)} />
+                    <Row l="Available capital" v={u(R.capitalAdequacy.availableCapital)} />
+                    <Row l="Min. capital requirement" v={u(R.capitalAdequacy.minimumCapitalRequirement)} />
+                    <Row l={`Capital adequacy ratio`} v={`${R.capitalAdequacy.capitalAdequacyRatio}%`} />
+                    <Row l="Capital adequacy" v={flag(R.capitalAdequacy.compliant)} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Claims analysis</p>
+                    <Row l="Reported" v={R.claimsAnalysis.reported} />
+                    <Row l="Settled" v={R.claimsAnalysis.settled} />
+                    <Row l="Repudiated" v={R.claimsAnalysis.repudiated} />
+                    <Row l="Outstanding" v={R.claimsAnalysis.outstanding} />
+                    <Row l="Avg settlement (days)" v={R.claimsAnalysis.averageSettlementDays} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Complaints</p>
+                    <Row l="Received" v={R.complaints.received} />
+                    <Row l="Resolved" v={R.complaints.resolved} />
+                    <Row l="Outstanding" v={R.complaints.outstanding} />
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </CardSection>
       </TabsContent>
 

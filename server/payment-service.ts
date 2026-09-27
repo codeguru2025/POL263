@@ -18,6 +18,7 @@ import { db } from "./db";
 import { structuredLog } from "./logger";
 import { insertOutboxMessageInTx, requestOutboxDrain, OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP } from "./outbox";
 import { todayForOrg } from "./date-utils";
+import { toCents, tryToCents, fromCents, moneyString } from "@shared/money";
 
 const PAYNOW_INIT_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
 const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
@@ -48,10 +49,10 @@ function paynowAmountMatches(postedAmount: string | null | undefined, expectedAm
     structuredLog("warn", "Paynow response omitted amount — proceeding without amount verification", { expectedAmount: String(expectedAmount) });
     return true; // nothing to compare
   }
-  const posted = parseFloat(String(postedAmount));
-  const expected = parseFloat(String(expectedAmount));
-  if (!Number.isFinite(posted) || !Number.isFinite(expected)) return false;
-  return Math.abs(posted - expected) <= 0.01;
+  const posted = tryToCents(postedAmount);
+  const expected = tryToCents(expectedAmount);
+  if (posted == null || expected == null) return false;
+  return Math.abs(posted - expected) <= 1;
 }
 
 /** actor_id in payment_events references users.id; clients are not in users. Use null when actor is client. */
@@ -117,8 +118,8 @@ export async function createPaymentIntent(input: CreateIntentInput): Promise<{
   const currency = input.currency ?? "USD";
   const purpose = input.purpose ?? "premium";
 
-  const amountNum = parseFloat(String(amount));
-  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+  const amountCents = tryToCents(amount);
+  if (amountCents == null || amountCents <= 0) {
     return { intent: null as any, created: false, error: "Amount must be greater than zero" };
   }
   // Paynow's initiate/remote transaction API has no currency field at all (see
@@ -185,7 +186,7 @@ function buildInitParams(
   const params: Record<string, string> = {
     id: integrationId,
     reference: merchantReference,
-    amount: String(parseFloat(amount).toFixed(2)),
+    amount: moneyString(amount),
     returnurl: returnUrl,
     resulturl: resultUrl,
     ...(email ? { authemail: email } : {}),
@@ -216,7 +217,7 @@ function buildRemoteParams(
   const params: Record<string, string> = {
     id: integrationId,
     reference: merchantReference,
-    amount: String(parseFloat(amount).toFixed(2)),
+    amount: moneyString(amount),
     returnurl: returnUrl,
     resulturl: resultUrl,
     authemail: authEmail,
@@ -739,13 +740,14 @@ export async function applyPaymentToPolicy(
       const receiptNumber = await storage.allocatePaymentReceiptNumberInTx(txDb, orgId);
 
       // Advance the policy cycle N times — infer months from amount/premium ratio
-      const premiumAmt = policy.premiumAmount ? parseFloat(String(policy.premiumAmount)) : 0;
-      const paidAmt = parseFloat(String(intent.amount));
+      // Integer cents — float division misjudges whole cycles (0.3 / 0.1 floors to 2).
+      const premiumCents = toCents(policy.premiumAmount);
+      const paidCents = toCents(intent.amount);
       // Math.max(0, ...): a payment under one premium must NOT advance the cycle — it gets
       // banked below as credit instead. Flooring (not rounding) so an overpayment just under
       // 2x a premium doesn't grant a free extra cycle either.
-      const monthCount = (premiumAmt > 0 && Number.isFinite(paidAmt / premiumAmt))
-        ? Math.min(12, Math.max(0, Math.floor(paidAmt / premiumAmt)))
+      const monthCount = premiumCents > 0
+        ? Math.min(12, Math.max(0, Math.floor(paidCents / premiumCents)))
         : 1;
       let currentPolicySnap: typeof policy = policy;
       let paymentPeriod: { periodFrom: string; periodTo: string } = { periodFrom: today, periodTo: today };
@@ -761,10 +763,10 @@ export async function applyPaymentToPolicy(
       // Anything paid beyond the monthCount periods just advanced didn't buy another whole
       // period — credit it to the policy's balance instead of dropping it. See the matching
       // comment in POST /api/payments (server/routes.ts) for how this gets auto-spent later.
-      if (premiumAmt > 0) {
-        const excess = paidAmt - monthCount * premiumAmt;
-        if (excess > 0.01) {
-          await storage.addPolicyCreditBalanceInTx(txDb, orgId, intent.policyId, excess.toFixed(2), intent.currency);
+      if (premiumCents > 0) {
+        const excessCents = paidCents - monthCount * premiumCents;
+        if (excessCents > 0) {
+          await storage.addPolicyCreditBalanceInTx(txDb, orgId, intent.policyId, fromCents(excessCents), intent.currency);
         }
       }
 

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { humanizeAction, humanizeEntityType, summarizeAuditEntry, summarizeChanges } from "@/lib/audit-format";
+import { humanizeAction, humanizeEntityType, summarizeAuditEntry, summarizeChanges, renderChange } from "@/lib/audit-format";
 
 const ACTION_OPTIONS = [
   "CREATE_CLIENT",
@@ -69,7 +69,7 @@ export default function AuditLogs() {
     return params.toString();
   }, [page, debouncedSearch, action, from, to]);
 
-  const { data, isLoading } = useQuery<{ rows: any[]; total: number; refs?: Record<string, string> }>({
+  const { data, isLoading } = useQuery<{ rows: any[]; total: number; refs?: Record<string, string>; policyNumbers?: Record<string, string> }>({
     queryKey: ["/api/audit-logs", page, debouncedSearch, action, from, to],
     queryFn: async () => {
       const res = await fetch(getApiBase() + `/api/audit-logs?${buildParams()}`, { credentials: "include" });
@@ -81,6 +81,7 @@ export default function AuditLogs() {
 
   const logs = data?.rows ?? [];
   const refs = data?.refs ?? {};
+  const policyNumbers = data?.policyNumbers ?? {};
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const showingFrom = total === 0 ? 0 : page * PAGE_SIZE + 1;
@@ -102,25 +103,28 @@ export default function AuditLogs() {
       accessor: (log) => summarizeAuditEntry(log, refs),
       cell: (log) => {
         const changes = summarizeChanges(log.before, log.after, refs);
+        const policyNo = policyNumbers[log.id];
+        const entityLabel = log.entityId ? (refs[log.entityId] || log.entityId.slice(0, 8)) : null;
         return (
           <div className="space-y-1 max-w-md">
             <p className="text-sm leading-snug">{summarizeAuditEntry(log, refs)}</p>
-            {log.entityType && (
-              <p className="text-xs text-muted-foreground">
-                {humanizeEntityType(log.entityType)}
-                {log.entityId && <span className="font-mono"> · {log.entityId.slice(0, 8)}</span>}
-              </p>
-            )}
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+              {log.entityType && (
+                <span>
+                  {humanizeEntityType(log.entityType)}
+                  {entityLabel && <span className="font-mono"> · {entityLabel}</span>}
+                </span>
+              )}
+              {policyNo && log.entityType !== "Policy" && (
+                <span className="font-medium text-foreground/70">Policy {policyNo}</span>
+              )}
+            </div>
             {changes.length > 0 && (
               <ul className="text-xs text-muted-foreground space-y-0.5 pl-3 border-l-2 border-border/60">
                 {changes.map((c) => (
                   <li key={c.field}>
                     <span className="font-medium text-foreground/80">{c.field}:</span>{" "}
-                    {c.kind === "diff" ? (
-                      <>{c.from} <span aria-hidden>→</span> {c.to}</>
-                    ) : (
-                      c.to
-                    )}
+                    {renderChange(c)}
                   </li>
                 ))}
               </ul>

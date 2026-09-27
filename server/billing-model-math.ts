@@ -1,5 +1,5 @@
 /**
- * Pure billing-model math — no DB, no network, no imports beyond types. The daily sweep
+ * Pure billing-model math — no DB, no network, no imports beyond types and shared/money. The daily sweep
  * (server/tenant-billing-service.ts) pulls the raw numbers (policy counts / collected revenue)
  * and calls these to turn them into a monthly invoice amount + a human-readable breakdown.
  * See tests/unit/billing-model-math.test.ts.
@@ -15,6 +15,7 @@
  * plan per combination.
  */
 import type { BillingPlan, BillingFeature, TenantSubscription } from "@shared/control-plane-schema";
+import { moneyString, sumMoney } from "@shared/money";
 
 export type BillingModel = "flat" | "per_policy" | "revenue_share";
 
@@ -68,8 +69,9 @@ const num = (v: unknown): number => {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
   return Number.isFinite(n) ? n : 0;
 };
-const money = (n: number): string => (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2);
-const sumLines = (lines: InvoiceLine[]): number => lines.reduce((s, l) => s + num(l.amount), 0);
+// Exact 2dp rounding and summing — see shared/money.ts.
+const money = (n: number): string => moneyString(n);
+const sumLines = (lines: InvoiceLine[]): number => sumMoney(lines.map((l) => l.amount));
 
 // ─── effective pricing (plan + feature deltas + tenant overrides) ────────────
 

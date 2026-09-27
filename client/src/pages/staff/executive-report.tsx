@@ -68,11 +68,21 @@ function pivotByCurrency<T extends { currency: string }>(
   return { data: Array.from(byGroup.values()), currencies };
 }
 
-function StatTile({ label, value, color }: { label: string; value: string; color?: string }) {
+function StatTile({ label, value, color, delta, budget }: { label: string; value: string; color?: string; delta?: number | null; budget?: { budget: number; variancePct: number | null } | null }) {
   return (
     <div className="rounded-lg border p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="text-lg font-semibold tabular-nums" style={color ? { color } : undefined}>{value}</p>
+      {delta != null && (
+        <p className={`text-[11px] tabular-nums ${delta > 0 ? "text-emerald-600" : delta < 0 ? "text-destructive" : "text-muted-foreground"}`}>
+          {delta > 0 ? "▲" : delta < 0 ? "▼" : "■"} {Math.abs(delta)}% vs prior period
+        </p>
+      )}
+      {budget && (
+        <p className={`text-[11px] tabular-nums ${budget.variancePct == null ? "text-muted-foreground" : budget.variancePct >= 0 ? "text-emerald-600" : "text-destructive"}`}>
+          Budget {money(budget.budget)}{budget.variancePct != null ? ` (${budget.variancePct >= 0 ? "+" : ""}${budget.variancePct}%)` : ""}
+        </p>
+      )}
     </div>
   );
 }
@@ -176,13 +186,14 @@ export default function ExecutiveReport() {
 
             {/* KPI tiles */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <StatTile label="Total income" value={`USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}`} color="#15803d" />
+              <StatTile label="Total income" value={`USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}`} color="#15803d" delta={report.comparison?.deltaPct?.totalIncomeUsd} budget={report.budget?.totalIncomeUsd} />
               <StatTile
                 label="Net"
                 value={`USD ${money(report.financial.incomeStatement.consolidatedUsd?.net)}`}
                 color={Number(report.financial.incomeStatement.consolidatedUsd?.net ?? 0) >= 0 ? "#15803d" : "#b91c1c"}
+                delta={report.comparison?.deltaPct?.netUsd}
               />
-              <StatTile label="New policies" value={String(report.policies.newPoliciesCount)} />
+              <StatTile label="New policies" value={String(report.policies.newPoliciesCount)} delta={report.comparison?.deltaPct?.newPoliciesCount} budget={report.budget?.newPoliciesCount} />
               <StatTile label="Funeral services" value={report.funeralServices ? String(report.funeralServices.byType.reduce((s: number, r: any) => s + r.count, 0)) : "—"} />
               <StatTile label="Quote conversion" value={report.quotes ? pct(report.quotes.conversionRate) : "—"} />
               <StatTile label="Claims overdue" value={report.claims?.overdue ? pct(report.claims.overdue.overduePercent) : "—"} color={report.claims?.overdue?.overdueCount ? "#b91c1c" : undefined} />

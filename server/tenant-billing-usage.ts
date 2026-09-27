@@ -11,6 +11,7 @@ import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { policies, paymentReceipts, serviceReceipts, platformReceivables } from "@shared/schema";
+import { addMoney } from "@shared/money";
 
 /**
  * Live policy count per status, excluding soft-deleted rows. Keys are the RAW database status
@@ -57,7 +58,7 @@ export async function getReceiptedCollectionsByCurrency(
     ))
     .groupBy(paymentReceipts.currency);
   for (const r of premiumRows) {
-    out[r.currency.toUpperCase()] = (out[r.currency.toUpperCase()] ?? 0) + parseFloat(r.total);
+    out[r.currency.toUpperCase()] = addMoney(out[r.currency.toUpperCase()], r.total);
   }
 
   const serviceRows = await tdb
@@ -74,7 +75,7 @@ export async function getReceiptedCollectionsByCurrency(
     ))
     .groupBy(serviceReceipts.currency);
   for (const r of serviceRows) {
-    out[r.currency.toUpperCase()] = (out[r.currency.toUpperCase()] ?? 0) + parseFloat(r.total);
+    out[r.currency.toUpperCase()] = addMoney(out[r.currency.toUpperCase()], r.total);
   }
 
   return out;
@@ -101,7 +102,7 @@ export async function getUnsettledPlatformFeesByCurrency(orgId: string): Promise
   const byCurrency: Record<string, number> = {};
   let count = 0;
   for (const r of rows) {
-    byCurrency[r.currency.toUpperCase()] = (byCurrency[r.currency.toUpperCase()] ?? 0) + parseFloat(r.total);
+    byCurrency[r.currency.toUpperCase()] = addMoney(byCurrency[r.currency.toUpperCase()], r.total);
     count += Number(r.n);
   }
   return { byCurrency, count };

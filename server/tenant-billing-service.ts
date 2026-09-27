@@ -11,6 +11,7 @@
  */
 import { eq, and, desc } from "drizzle-orm";
 import crypto from "crypto";
+import { moneyString } from "@shared/money";
 import { cpDb } from "./control-plane-db";
 import {
   tenants as cpTenants,
@@ -71,8 +72,7 @@ export { getEffectiveGraceDays, addBillingCycle } from "./tenant-billing-math";
 
 /** 2-dp money string from any numeric-ish input. */
 function money(v: unknown): string {
-  const n = parseFloat(String(v ?? "0"));
-  return (Math.round((Number.isFinite(n) ? n : 0) * 100 + Number.EPSILON) / 100).toFixed(2);
+  return moneyString(v);
 }
 
 function generateMerchantReference(orgId: string): string {
@@ -421,7 +421,7 @@ function buildInitParams(reference: string, amount: string, returnUrl: string, r
   const params: Record<string, string> = {
     id: integrationId,
     reference,
-    amount: String(parseFloat(amount).toFixed(2)),
+    amount: moneyString(amount),
     returnurl: returnUrl,
     resulturl: resultUrl,
     ...(email ? { authemail: email } : {}),
@@ -442,7 +442,7 @@ function buildRemoteParams(reference: string, amount: string, returnUrl: string,
   const params: Record<string, string> = {
     id: integrationId,
     reference,
-    amount: String(parseFloat(amount).toFixed(2)),
+    amount: moneyString(amount),
     returnurl: returnUrl,
     resulturl: resultUrl,
     authemail: authEmail,

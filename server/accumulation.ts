@@ -7,6 +7,7 @@
  * from its own contribution date to the as-of date, then all contributions (minus paid
  * withdrawals) are summed per currency.
  */
+import { tryToCents, centsToNumber, roundMoney } from "@shared/money";
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
@@ -50,19 +51,22 @@ export function computeAccumulationBalance(
   annualRatePercent: number | null | undefined,
   asOfDate: string,
 ): Record<string, number> {
+  // Growth is fractional by nature, so compound unrounded and round each currency's
+  // total to the cent once at the end (rounding per contribution would compound error).
   const balance: Record<string, number> = {};
   for (const c of contributions) {
-    const amt = parseFloat(String(c.amount));
-    if (!Number.isFinite(amt)) continue;
-    const fv = computeContributionFutureValue(amt, annualRatePercent, c.contributionDate, asOfDate);
+    const cents = tryToCents(c.amount);
+    if (cents == null) continue;
+    const fv = computeContributionFutureValue(centsToNumber(cents), annualRatePercent, c.contributionDate, asOfDate);
     balance[c.currency] = (balance[c.currency] ?? 0) + fv;
   }
   for (const w of withdrawals) {
     if (w.status !== "paid") continue;
-    const amt = parseFloat(String(w.amount));
-    if (!Number.isFinite(amt)) continue;
-    balance[w.currency] = (balance[w.currency] ?? 0) - amt;
+    const cents = tryToCents(w.amount);
+    if (cents == null) continue;
+    balance[w.currency] = (balance[w.currency] ?? 0) - centsToNumber(cents);
   }
+  for (const currency of Object.keys(balance)) balance[currency] = roundMoney(balance[currency]);
   return balance;
 }
 

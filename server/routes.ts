@@ -15,6 +15,7 @@ import {
 } from "./tenant-db";
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
+import { toCents, tryToCents, fromCents, centsToNumber, roundMoney, moneyString, moneyEquals, sumMoney, sumCents, subMoney, allocateProRata } from "@shared/money";
 import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
@@ -52,6 +53,7 @@ import { registerCustomerServiceRoutes } from "./customer-service-routes";
 import { initiatePaynowForInvoice, pollInvoiceStatus } from "./tenant-billing-service";
 import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCache } from "./module-gate";
 import { resolveAuditRefs } from "./audit-ref-resolver";
+import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
@@ -119,6 +121,8 @@ import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
 import { enqueueJob, getJobStats } from "./job-queue";
+import { getEventLoopStats } from "./event-loop-monitor";
+import { getCpuPoolStats } from "./cpu-pool";
 import {
   insertOutboxMessageInTx,
   requestOutboxDrain,
@@ -257,9 +261,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       { productVersion: pv, product: pvProduct ?? null },
     );
 
-    const current = parseFloat(String(policy.premiumAmount ?? "0"));
-    const next = parseFloat(String(recomputedPremium ?? "0"));
-    if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+    // Exact cents comparison — float subtraction misses 1-cent changes (2.01 - 2.00 < 0.01).
+    if (!moneyEquals(policy.premiumAmount, recomputedPremium)) {
       const updated = await storage.updatePolicy(policy.id, { premiumAmount: recomputedPremium }, orgId);
       return updated || { ...policy, premiumAmount: recomputedPremium };
     }
@@ -282,10 +285,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const pv = policy?.productVersionId ? await storage.getProductVersion(policy.productVersionId, orgId) : undefined;
     const product = pv ? await storage.getProduct(pv.productId, orgId) : undefined;
     if (product?.pricingModel === "individual_age_rated") {
-      const contribution = parseFloat(String(removedMember?.premiumContribution ?? ""));
-      if (!Number.isFinite(contribution) || contribution <= 0) return { policy, premiumReviewNeeded: true };
-      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
-      const next = Math.max(0, oldPremium - contribution).toFixed(2);
+      const contributionCents = tryToCents(removedMember?.premiumContribution);
+      if (contributionCents == null || contributionCents <= 0) return { policy, premiumReviewNeeded: true };
+      const next = fromCents(Math.max(0, toCents(policy.premiumAmount) - contributionCents));
       const updated = await storage.updatePolicy(policy.id, { premiumAmount: next }, orgId);
       return { policy: updated || { ...policy, premiumAmount: next }, premiumReviewNeeded: false };
     }
@@ -309,12 +311,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const members = await storage.getPolicyMembers(policy.id, orgId);
       const target = members.find((m: any) => m.id === claim.policyMemberId);
       if (!target || target.isActive === false || target.role !== "dependent") return { ended: false };
-      const oldPremium = parseFloat(String(policy.premiumAmount ?? "0"));
+      const oldPremium = roundMoney(policy.premiumAmount);
       const removed = await storage.deactivatePolicyMember(target.id, policy.id, orgId);
       const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, orgId);
-      const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
+      const newPremium = roundMoney(recalced?.premiumAmount ?? oldPremium);
       let reconciliation: any = null;
-      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      if (!moneyEquals(newPremium, oldPremium)) {
         reconciliation = await reconcilePremiumChange({
           orgId, policy: recalced, oldPremium, newPremium,
           effectiveDate: await todayForOrg(orgId),
@@ -394,9 +396,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         { productVersion: pv, product: product ?? null, orgAddOns },
       );
 
-      const current = parseFloat(String(policy.premiumAmount ?? "0"));
-      const next = parseFloat(String(recomputedPremium ?? "0"));
-      if (Number.isFinite(current) && Number.isFinite(next) && Math.abs(current - next) >= 0.01) {
+      if (!moneyEquals(policy.premiumAmount, recomputedPremium)) {
         drifted.push({ policy, recomputedPremium });
       }
     }));
@@ -635,7 +635,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       await dispatchNotification(orgId, "premium_due", policy.clientId, {
         ...ctx,
-        outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+        outstanding: `${policy.currency} ${moneyString(policy.premiumAmount)}`,
       });
       if (settings.sendPushNotifications) {
         await notifyClientPush(
@@ -656,7 +656,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         methodType: null,
         message: "Premium due reminder sent.",
         metadata: {
-          outstanding: `${policy.currency} ${parseFloat(String(policy.premiumAmount || 0)).toFixed(2)}`,
+          outstanding: `${policy.currency} ${moneyString(policy.premiumAmount)}`,
         },
       } as any);
       await storage.updatePolicy(policy.id, { lastAutoReminderAt: now, lastAutoPaymentAttemptAt: now }, orgId);
@@ -2774,8 +2774,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.to) filters.to = String(req.query.to);
     const result = await storage.getAuditLogs(user.organizationId, limit, offset, filters);
     const tdb = await getDbForOrg(user.organizationId);
-    const refs = await resolveAuditRefs(tdb, result.rows);
-    return res.json({ ...result, refs });
+    const { refs, policyNumbers } = await resolveAuditRefs(tdb, result.rows);
+    return res.json({ ...result, refs, policyNumbers });
   });
 
   // ─── Dashboard Stats ───────────────────────────────────────
@@ -3899,12 +3899,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const policyPayments = await storage.getPaymentsByPolicy(policy.id, user.organizationId);
-    const totalPaid = policyPayments
-      .filter((p: any) => p.status === "cleared")
-      .reduce((sum: number, p: any) => sum + parseFloat(p.amount || "0"), 0);
+    const totalPaid = sumMoney(policyPayments.filter((p: any) => p.status === "cleared").map((p: any) => p.amount));
 
     const wallet = await storage.getPolicyCreditBalance(user.organizationId, policy.id);
-    const walletBalance = parseFloat(String(wallet?.balance ?? "0")) || 0;
+    const walletBalance = roundMoney(wallet?.balance);
     const { totalDue, balance, outstanding, periodsElapsed } = computePolicyOutstanding({ policy, totalPaid, walletBalance });
 
     // Fire-and-forget — a view is worth recording on the policy's activity timeline, but must
@@ -4541,7 +4539,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (rawPremium != null && rawPremium !== "" && canEditPremium) {
       const parsed = parseFloat(String(rawPremium));
       const current = parseFloat(String(before.premiumAmount ?? "0"));
-      if (Number.isFinite(parsed) && parsed >= 0 && Math.abs(parsed - current) >= 0.01) {
+      if (Number.isFinite(parsed) && parsed >= 0 && !moneyEquals(parsed, current)) {
         manualPremium = parsed;
       }
     }
@@ -5112,7 +5110,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const recalced = await recalculatePolicyPremiumIfNeeded(policy, user.organizationId);
     const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
     let reconciliation: any = null;
-    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+    if (!moneyEquals(newPremium, oldPremium)) {
       const effDate = typeof req.body.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
         : await todayForOrg(user.organizationId);
@@ -5164,7 +5162,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { policy: recalced, premiumReviewNeeded } = await repricePolicyAfterMemberRemoval(policy, target, user.organizationId);
     const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
     let reconciliation: any = null;
-    if (Math.abs(newPremium - oldPremium) >= 0.01) {
+    if (!moneyEquals(newPremium, oldPremium)) {
       const effDate = typeof req.body?.effectiveDate === "string" && req.body.effectiveDate.trim()
         ? req.body.effectiveDate.trim()
         : await todayForOrg(user.organizationId);
@@ -5215,7 +5213,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ? req.body.effectiveDate.trim()
       : await todayForOrg(user.organizationId);
     const periods = periodsBetween(effectiveDate, new Date(), paymentSchedule);
-    const reconciliation = Number(((newPremium - oldPremium) * periods).toFixed(2));
+    const reconciliation = centsToNumber((toCents(newPremium) - toCents(oldPremium)) * periods);
     const direction = reconciliation > 0 ? "arrears" : reconciliation < 0 ? "credit" : "none";
 
     return res.json({
@@ -5447,7 +5445,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const recalced = await recalculatePolicyPremiumIfNeeded(result.updatedPolicy, orgId);
       const newPremium = parseFloat(String(recalced?.premiumAmount ?? oldPremium));
       let reconciliation: any = null;
-      if (Math.abs(newPremium - oldPremium) >= 0.01) {
+      if (!moneyEquals(newPremium, oldPremium)) {
         reconciliation = await reconcilePremiumChange({
           orgId, policy: recalced, oldPremium, newPremium,
           effectiveDate: await todayForOrg(orgId),
@@ -5528,7 +5526,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (let i = 0; i < activePolicies.length; i++) {
       const before = parseFloat(String(activePolicies[i].premiumAmount ?? "0"));
       const after = parseFloat(String(recalced[i]?.premiumAmount ?? before));
-      if (Math.abs(after - before) >= 0.01) updated++;
+      if (!moneyEquals(after, before)) updated++;
     }
     const skipped = allPolicies.length - activePolicies.length;
     await auditLog(req, "BATCH_RECALCULATE_PREMIUMS", "ProductVersion", pvId, null, { pvId, total: allPolicies.length, updated, skipped });
@@ -5615,11 +5613,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // edit:premium holders may submit a mismatched amount at all; approval requires
     // approve:finance (see POST /api/payment-receipts/:id/approve).
     if (isClearedWithPolicy && policy && policy.clientId) {
-      const requestedAmount = parseFloat(String(req.body.amount ?? 0));
+      const requestedCents = tryToCents(req.body.amount ?? 0);
       const explicitMonths = req.body.months != null ? parseInt(String(req.body.months), 10) : 1;
       const monthsForCheck = Number.isFinite(explicitMonths) && explicitMonths >= 1 ? Math.min(12, explicitMonths) : 1;
-      const expectedAmount = parseFloat(String(policy.premiumAmount ?? "0")) * monthsForCheck;
-      const isOverridden = Number.isFinite(requestedAmount) && Math.abs(requestedAmount - expectedAmount) >= 0.01;
+      const expectedCents = toCents(policy.premiumAmount) * monthsForCheck;
+      const requestedAmount = requestedCents == null ? NaN : centsToNumber(requestedCents);
+      const expectedAmount = centsToNumber(expectedCents);
+      const isOverridden = requestedCents != null && requestedCents !== expectedCents;
 
       if (isOverridden) {
         const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
@@ -5687,9 +5687,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const explicit = req.body.months != null ? parseInt(String(req.body.months), 10) : null;
         if (explicit && Number.isFinite(explicit) && explicit >= 1) return Math.min(12, explicit);
         if (policy?.premiumAmount) {
-          const prem = parseFloat(String(policy.premiumAmount));
-          const amt = parseFloat(String(req.body.amount ?? 0));
-          if (prem > 0 && amt > 0 && Number.isFinite(amt)) {
+          // Integer cents: float division floors 3.30 / 1.10 to 2, under-counting periods.
+          const prem = toCents(policy.premiumAmount);
+          const amt = toCents(req.body.amount ?? 0);
+          if (prem > 0 && amt > 0) {
             // 0 is valid: a payment under one premium doesn't advance the cycle — it gets
             // banked as credit below instead of granting a free period.
             return Math.min(12, Math.max(0, Math.floor(amt / prem)));
@@ -5714,11 +5715,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // instead of silently dropping it. credit-apply.ts auto-spends this the next time a full
         // premium is due (manually via POST /api/apply-credit-balances, or on the automation tick).
         if (policy?.premiumAmount) {
-          const premiumForExcess = parseFloat(String(policy.premiumAmount));
-          const paidForExcess = parseFloat(String(parsed.amount ?? 0));
-          const excess = premiumForExcess > 0 ? paidForExcess - monthCount * premiumForExcess : 0;
-          if (excess > 0.01) {
-            await storage.addPolicyCreditBalanceInTx(txDb, user.organizationId, parsed.policyId, excess.toFixed(2), parsed.currency || policy.currency || "USD");
+          const premiumForExcess = toCents(policy.premiumAmount);
+          const paidForExcess = toCents(parsed.amount ?? 0);
+          const excessCents = premiumForExcess > 0 ? paidForExcess - monthCount * premiumForExcess : 0;
+          if (excessCents > 0) {
+            await storage.addPolicyCreditBalanceInTx(txDb, user.organizationId, parsed.policyId, fromCents(excessCents), parsed.currency || policy.currency || "USD");
           }
         }
       }
@@ -6556,36 +6557,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const addOnMap = new Map(addOnCatalog.map((a) => [a.id, a]));
       perPolicyAmount = {};
       perPolicyItems = {};
-      let sum = 0;
+      let sumCentsAll = 0;
       for (const item of items) {
         const policy = valid.find((p) => p.id === String(item.policyId));
         if (!policy) continue;
-        let amt = 0;
+        let amtCents = 0;
         const lineItems: { label: string; amount: string }[] = [];
         if (item.includeServicePremium !== false) {
-          const premiumAmt = parseFloat(String(policy.premiumAmount || 0));
-          amt += premiumAmt;
-          lineItems.push({ label: "Service premium", amount: premiumAmt.toFixed(2) });
+          const premiumCents = toCents(policy.premiumAmount);
+          amtCents += premiumCents;
+          lineItems.push({ label: "Service premium", amount: fromCents(premiumCents) });
         }
         const attachedIds = new Set((addOnsByPolicy[policy.id] || []).map((a) => a.addOnId));
         for (const addOnId of Array.isArray(item.addOnIds) ? item.addOnIds : []) {
           if (!attachedIds.has(addOnId)) continue;
           const ao = addOnMap.get(addOnId);
           if (!ao) continue;
-          const price = getAddOnPrice(ao, policy.paymentSchedule || "monthly");
-          amt += price;
-          lineItems.push({ label: ao.name, amount: price.toFixed(2) });
+          const priceCents = toCents(getAddOnPrice(ao, policy.paymentSchedule || "monthly"));
+          amtCents += priceCents;
+          lineItems.push({ label: ao.name, amount: fromCents(priceCents) });
         }
-        perPolicyAmount[policy.id] = amt;
+        perPolicyAmount[policy.id] = centsToNumber(amtCents);
         perPolicyItems[policy.id] = lineItems;
-        sum += amt;
+        sumCentsAll += amtCents;
       }
-      amountNum = sum;
+      amountNum = centsToNumber(sumCentsAll);
       if (amountNum <= 0) return res.status(400).json({ message: "No line items selected — nothing to receipt." });
     } else {
-      amountNum = parseFloat(String(totalAmount));
+      amountNum = roundMoney(totalAmount);
+      if (!(amountNum > 0)) return res.status(400).json({ message: "totalAmount must be a positive amount." });
     }
-    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
+    // Lump-sum mode: share the total across policies pro rata to premium so the per-policy
+    // amounts add back up to the receipt total exactly (rounding each share separately could
+    // gain or lose a cent — e.g. $100 over three equal premiums became 3 × $33.33 = $99.99).
+    const proRataCents: Record<string, number> = {};
+    if (!perPolicyAmount) {
+      const shares = allocateProRata(toCents(amountNum), valid.map((p) => toCents(p.premiumAmount)));
+      valid.forEach((p, i) => { proRataCents[p.id] = shares[i]; });
+    }
     const results: { id: string; policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
     // Stable lock order avoids deadlocks when multiple group receipts overlap. Itemized mode
@@ -6611,10 +6620,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
       const recordedByForLedger = actorRow?.id ?? null;
       for (const policy of sortedPolicies) {
-        const premium = parseFloat(String(policy.premiumAmount || 0));
         const amount = perPolicyAmount
-          ? perPolicyAmount[policy.id].toFixed(2)
-          : totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
+          ? moneyString(perPolicyAmount[policy.id])
+          : fromCents(proRataCents[policy.id] ?? 0);
         const polyCurrency = currency || policy.currency || "USD";
         await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
         const receiptNum = await storage.allocatePaymentReceiptNumberInTx(txDb, user.organizationId);
@@ -6966,8 +6974,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const policies = await storage.getPoliciesByIds(policyIds, user.organizationId);
     const valid = policies.filter((p) => p.groupId === groupId);
     if (valid.length === 0) return res.status(400).json({ message: "No valid policies in group" });
-    const totalPremium = valid.reduce((s, p) => s + parseFloat(String(p.premiumAmount || 0)), 0);
-    const amountNum = parseFloat(String(totalAmount));
+    const amountCents = tryToCents(totalAmount);
+    const amountNum = amountCents == null ? NaN : centsToNumber(amountCents);
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       return res.status(400).json({ message: "totalAmount must be greater than zero" });
     }
@@ -6999,17 +7007,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         initiatedByUserId: initiatedByResolved ?? undefined,
         updatedAt: new Date(),
       }).returning();
-      const allocations = valid.map((p) => {
-        const premium = parseFloat(String(p.premiumAmount || 0));
-        const amount = totalPremium > 0 ? (amountNum * (premium / totalPremium)).toFixed(2) : (amountNum / valid.length).toFixed(2);
-        return { groupPaymentIntentId: created.id, policyId: p.id, amount, currency: cur };
-      });
-      const allocSum = allocations.reduce((s, a) => s + parseFloat(a.amount), 0);
-      const remainder = Math.round((amountNum - allocSum) * 100) / 100;
-      if (allocations.length > 0 && Math.abs(remainder) >= 0.01) {
-        const last = allocations[allocations.length - 1];
-        last.amount = (parseFloat(last.amount) + remainder).toFixed(2);
-      }
+      // Pro rata to premium; shares always sum exactly to the intent total.
+      const shares = allocateProRata(amountCents!, valid.map((p) => toCents(p.premiumAmount)));
+      const allocations = valid.map((p, i) => ({
+        groupPaymentIntentId: created.id, policyId: p.id, amount: fromCents(shares[i]), currency: cur,
+      }));
       await txDb.insert(groupPaymentAllocations).values(allocations);
       return created;
     });
@@ -7279,16 +7281,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const preparerId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const body = req.body as any;
     const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
-    let totalAmount = 0;
-    for (const k of Object.keys(amountsByMethod)) {
-      totalAmount += parseFloat(String(amountsByMethod[k] || "0")) || 0;
-    }
+    const totalAmount = sumMoney(Object.values(amountsByMethod));
     const parsed = insertCashupSchema.parse({
       organizationId: user.organizationId,
       preparedBy: preparerId,
       branchId: body.branchId || undefined,
       cashupDate: body.cashupDate,
-      totalAmount: String(totalAmount.toFixed(2)),
+      totalAmount: moneyString(totalAmount),
       currency: body.currency || "USD",
       transactionCount: typeof body.transactionCount === "number" ? body.transactionCount : parseInt(String(body.transactionCount || "0"), 10) || 0,
       amountsByMethod,
@@ -7340,19 +7339,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     if (cashup.status === "submitted" && (body.action === "confirm" || body.action === "confirm_discrepancy")) {
       if (!hasFinance) return res.status(403).json({ message: "Only finance can confirm cashups" });
-      const countedTotal = body.countedTotal != null ? parseFloat(String(body.countedTotal)) : null;
+      const countedTotal = body.countedTotal != null ? roundMoney(body.countedTotal) : null;
       const countedAmountsByMethod = body.countedAmountsByMethod && typeof body.countedAmountsByMethod === "object" ? body.countedAmountsByMethod : undefined;
       let computedCountedTotal = countedTotal;
       if (computedCountedTotal == null && countedAmountsByMethod) {
-        computedCountedTotal = 0;
-        for (const k of Object.keys(countedAmountsByMethod)) {
-          computedCountedTotal += parseFloat(String(countedAmountsByMethod[k] || "0")) || 0;
-        }
+        computedCountedTotal = sumMoney(Object.values(countedAmountsByMethod));
       }
-      const expectedTotal = parseFloat(String(cashup.totalAmount || "0"));
+      const expectedTotal = roundMoney(cashup.totalAmount);
       const finalCounted = computedCountedTotal ?? expectedTotal;
-      const discrepancyAmount = finalCounted - expectedTotal;
-      const hasDiscrepancy = Math.abs(discrepancyAmount) > 0.005;
+      const discrepancyAmount = subMoney(finalCounted, expectedTotal);
+      const hasDiscrepancy = discrepancyAmount !== 0;
       const status = hasDiscrepancy ? "discrepancy" : "confirmed";
       const discrepancyNotes = body.discrepancyNotes || (hasDiscrepancy ? `Counted ${finalCounted.toFixed(2)} vs expected ${expectedTotal.toFixed(2)}` : undefined);
       const updated = await storage.updateCashup(cashup.id, {
@@ -9331,7 +9327,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     // Round all amounts to 2dp
-    const r2 = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, parseFloat(v.toFixed(2))]));
+    const r2 = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, roundMoney(v)]));
 
     return res.json({
       agentId,
@@ -10152,13 +10148,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM requisitions WHERE id = ${reqId} FOR UPDATE`);
         const [locked] = await txDb.select().from(requisitions).where(eq(requisitions.id, reqId)).limit(1);
         if (!locked) throw new Error("REQUISITION_NOT_FOUND");
-        const alreadyPaid = Number(locked.amountPaid ?? 0);
-        const remaining = Number(locked.amount) - alreadyPaid;
-        if (amount > remaining + 0.001) {
-          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        // Integer cents: exact balance checks, no float tolerance fudge.
+        const alreadyPaidCents = toCents(locked.amountPaid);
+        const remainingCents = toCents(locked.amount) - alreadyPaidCents;
+        if (toCents(amount) > remainingCents) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${moneyString(amount)} exceeds outstanding balance of ${fromCents(remainingCents)}`);
         }
-        const newAmountPaid = alreadyPaid + amount;
-        const fullyPaid = newAmountPaid >= Number(locked.amount) - 0.001;
+        const newAmountPaid = centsToNumber(alreadyPaidCents + toCents(amount));
+        const fullyPaid = toCents(newAmountPaid) >= toCents(locked.amount);
         const voucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -10241,14 +10238,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await txDb.execute(sql`SELECT id FROM expenditures WHERE id = ${expId} FOR UPDATE`);
         const [locked] = await txDb.select().from(expenditures).where(eq(expenditures.id, expId)).limit(1);
         if (!locked) throw new Error("EXPENDITURE_NOT_FOUND");
-        const alreadyPaid = Number(locked.amountPaid ?? 0);
-        const totalAmt = Number(locked.amount);
-        const remaining = totalAmt - alreadyPaid;
-        if (amount > remaining + 0.001) {
-          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${amount.toFixed(2)} exceeds outstanding balance of ${remaining.toFixed(2)}`);
+        // Integer cents: exact balance checks, no float tolerance fudge.
+        const alreadyPaidCents = toCents(locked.amountPaid);
+        const totalCents = toCents(locked.amount);
+        const remainingCents = totalCents - alreadyPaidCents;
+        if (toCents(amount) > remainingCents) {
+          throw new Error(`PAYMENT_EXCEEDS_BALANCE:Payment of ${locked.currency} ${moneyString(amount)} exceeds outstanding balance of ${fromCents(remainingCents)}`);
         }
-        const newAmountPaid = alreadyPaid + amount;
-        const fullyPaid = newAmountPaid >= totalAmt - 0.001;
+        const newAmountPaid = centsToNumber(alreadyPaidCents + toCents(amount));
+        const fullyPaid = toCents(newAmountPaid) >= totalCents;
         const expVoucherNumber = await storage.generateVoucherNumberInTx(txDb, user.organizationId);
         const [disbursement] = await txDb.insert(paymentDisbursements).values({
           organizationId: user.organizationId,
@@ -10916,10 +10914,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Auto-update quotation conversion status
     if (quote?.id) {
       const allReceipts = await storage.getServiceReceipts(user.organizationId, { funeralCaseId: fc.id });
-      const totalPaid = allReceipts
-        .filter(r => r.status === "issued")
-        .reduce((s, r) => s + parseFloat(String(r.amount)), 0);
-      const grandTotal = parseFloat(String(quote.grandTotal || quote.total || "0"));
+      // Exact cents — a float sum of several receipts can land a hair under the total
+      // and leave a fully-paid quote marked "partial".
+      const totalPaid = centsToNumber(sumCents(allReceipts.filter(r => r.status === "issued").map(r => r.amount)));
+      const grandTotal = roundMoney(quote.grandTotal || quote.total);
       if (grandTotal > 0 && totalPaid >= grandTotal) {
         await storage.markQuotationConverted(quote.id, user.organizationId);
       } else if (totalPaid > 0) {
@@ -13199,7 +13197,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           memberNumber: row.memberNumber || undefined,
           joinedDate: row.joinedDate || undefined,
           contributions: contributions.map((c: any) => ({
-            amount: parseFloat(String(c.amount)).toFixed(2),
+            amount: moneyString(c.amount),
             currency: c.currency,
             contributionDate: c.contributionDate,
             notes: c.notes || undefined,
@@ -13301,6 +13299,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ balance: computeGroupLedgerBalance(entries) });
   });
 
+  app.get("/api/groups/:id/statement/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const groupId = String(req.params.id);
+    const orgToday = await todayForOrg(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${orgToday.slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : orgToday;
+    const { streamGroupStatementPdf } = await import("./group-statement-pdf");
+    await streamGroupStatementPdf(user.organizationId, groupId, from, to, res, { attachment: req.query.download === "1" });
+  });
+
   app.post("/api/groups/ledger/import/upload", requireAuth, requireTenantScope, requirePermission("write:finance"), groupLedgerImportUpload.single("file"), async (req, res) => {
     const user = req.user as any;
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -13321,7 +13329,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const uploadToken = cacheParsedUpload(user.organizationId, req.file.originalname, parsed);
       return res.json({ uploadToken, headers: parsed.headers, sampleRows: parsed.rows.slice(0, 20), totalRows: parsed.rows.length, suggestedMapping, fieldSpec });
     } catch (err: any) {
-      return res.status(400).json({ message: err?.message || "Failed to parse file" });
+      return res.status(err?.status === 503 ? 503 : 400).json({ message: err?.message || "Failed to parse file" });
     }
   });
   app.use("/api/groups/ledger/import/upload", handleGroupLedgerImportUploadError);
@@ -13785,7 +13793,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!Number.isFinite(amount) || amount <= 0) {
         return res.status(400).json({ message: "A positive amount is required." });
       }
-      const shortfall = Math.max(0, amount - balance);
+      const shortfall = Math.max(0, subMoney(amount, balance));
       if (shortfall > 0 && !req.body.force) {
         return res.status(400).json({
           error: "Insufficient fund balance",
@@ -14093,7 +14101,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const day = new Date(p.receivedAt || p.createdAt).toISOString().slice(0, 10);
       daily[day] = (daily[day] || 0) + parseFloat(p.amount || "0");
     });
-    const trend = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, total]) => ({ date, total }));
+    const trend = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, total]) => ({ date, total: roundMoney(total) }));
     return res.json(trend);
   });
 
@@ -14191,7 +14199,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       totalPolicies: policyByProduct[prod.id]?.total || 0,
       activePolicies: policyByProduct[prod.id]?.active || 0,
       lapsedPolicies: policyByProduct[prod.id]?.lapsed || 0,
-      revenue: revenueByProduct[prod.id] || 0,
+      revenue: roundMoney(revenueByProduct[prod.id] || 0),
       currency: currencyByProduct[prod.id] || "USD",
     }));
 
@@ -14378,6 +14386,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
   };
 
+
   app.get("/api/reports/policy-details", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -14448,7 +14457,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+    // Grace policies whose grace period ends within the pre-lapse window (default 7 days) — the
+    // actionable retention list, distinct from /overdue which is every grace policy.
+    const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
+    const cutoff = Date.now() + windowDays * 86400000;
+    const graceRows = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" });
+    return res.json(graceRows.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff));
   });
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -14457,11 +14471,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.get("/api/reports/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     const user = req.user as any;
-    const filters = parseReportFilters(req.query);
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const status = req.query.status ? String(req.query.status) : undefined;
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
   });
+  app.get("/api/reports/claims-aging", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    return res.json(await storage.getClaimsAgingReport((req.user as any).organizationId));
+  });
+
+  app.get("/api/reports/claims-analytics", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getClaimsAnalyticsReport(user.organizationId, from, to));
+  });
+
   app.get("/api/reports/new-joinings", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -14508,6 +14534,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.min(parseInt(String(req.query.limit)) || 2000, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, limit, offset, filters));
+  });
+
+  app.get("/api/reports/commission-statement/pdf", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
+    const user = req.user as any;
+    const agentId = typeof req.query.agentId === "string" ? req.query.agentId : "";
+    if (!agentId) return res.status(400).json({ message: "agentId is required" });
+    const scoped = await enforceAgentScope(req, parseReportFilters(req.query));
+    if (scoped.agentId && scoped.agentId !== agentId) return res.status(403).json({ message: "Not permitted for this agent" });
+    const orgToday = await todayForOrg(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${orgToday.slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : orgToday;
+    const { streamCommissionStatementPdf } = await import("./commission-statement-pdf");
+    await streamCommissionStatementPdf(user.organizationId, agentId, from, to, res, { attachment: req.query.download === "1" });
   });
 
   app.get("/api/reports/agent-portfolio/pdf", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -14574,6 +14613,140 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const date = typeof req.query.date === "string" && req.query.date ? req.query.date : await todayForOrg(user.organizationId);
     return res.json(await buildDailyReport(user.organizationId, date));
+  });
+
+  app.get("/api/reports/data-integrity", requireAuth, requireTenantScope, requirePermission("read:report"), async (req, res) => {
+    const user = req.user as any;
+    return res.json(await storage.getDataIntegrityReport(user.organizationId));
+  });
+
+  app.get("/api/reports/chart-of-accounts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (_req, res) => {
+    const { CHART_OF_ACCOUNTS } = await import("./general-ledger");
+    return res.json(CHART_OF_ACCOUNTS);
+  });
+
+  app.get("/api/reports/trial-balance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { buildTrialBalance, buildLedgerPosition } = await import("./general-ledger");
+    const [trialBalance, position] = await Promise.all([
+      buildTrialBalance(user.organizationId, { from, to, branchId }),
+      buildLedgerPosition(user.organizationId, { asOf: to, branchId }),
+    ]);
+    return res.json({ trialBalance, position });
+  });
+
+  app.get("/api/reports/general-ledger", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const account = typeof req.query.account === "string" && req.query.account ? req.query.account : undefined;
+    const { buildGeneralLedger } = await import("./general-ledger");
+    return res.json(await buildGeneralLedger(user.organizationId, { from, to, account, branchId }));
+  });
+
+  const parseIpecParams = async (user: any, q: any) => {
+    const orgToday = await todayForOrg(user.organizationId);
+    const num = (v: unknown) => { const n = parseFloat(String(v)); return Number.isFinite(n) ? n : undefined; };
+    const insurerClass = ["funeral", "life", "composite"].includes(String(q.insurerClass)) ? String(q.insurerClass) as any : undefined;
+    return {
+      from: typeof q.fromDate === "string" && q.fromDate ? q.fromDate : `${orgToday.slice(0, 4)}-01-01`,
+      to: typeof q.toDate === "string" && q.toDate ? q.toDate : orgToday,
+      asOf: typeof q.asOf === "string" && q.asOf ? q.asOf : (typeof q.toDate === "string" && q.toDate ? q.toDate : orgToday),
+      branchId: typeof q.branchId === "string" && q.branchId ? q.branchId : undefined,
+      insurerClass,
+      manual: {
+        investmentIncome: num(q.investmentIncome),
+        technicalProvisions: num(q.technicalProvisions),
+        prescribedAssetsHeld: num(q.prescribedAssetsHeld),
+        otherLiabilities: num(q.otherLiabilities),
+        riskBasedCapitalRequirement: num(q.riskBasedCapitalRequirement),
+      },
+    };
+  };
+
+  app.get("/api/reports/ipec-return", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { buildIpecReturn } = await import("./ipec-return");
+    return res.json(await buildIpecReturn(user.organizationId, await parseIpecParams(user, req.query)));
+  });
+
+  app.get("/api/reports/ipec-return/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { streamIpecReturnPdf } = await import("./ipec-return-pdf");
+    await streamIpecReturnPdf(user.organizationId, await parseIpecParams(user, req.query), res, { attachment: req.query.download === "1" });
+  });
+
+  app.get("/api/reports/collection-efficiency", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getCollectionEfficiencyReport(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/persistency", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    return res.json(await storage.getPersistencyReport((req.user as any).organizationId));
+  });
+
+  app.get("/api/reports/lapse-analysis", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getLapseAnalysisReport(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/member-movement", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getMemberMovementReport(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/anniversary", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    const withinDays = Math.max(1, Math.min(parseInt(String(req.query.withinDays)) || 60, 366));
+    return res.json(await storage.getAnniversaryReport((req.user as any).organizationId, withinDays));
+  });
+
+  app.get("/api/reports/ifrs17-movement", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const { buildIfrs17Movement } = await import("./ifrs17-movement");
+    return res.json(await buildIfrs17Movement(user.organizationId, { from, to, branchId }));
+  });
+
+  app.get("/api/reports/bank-reconciliation", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getBankReconciliation(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/premium-bordereau", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getPremiumBordereau(user.organizationId, from, to));
+  });
+
+  app.get("/api/reports/claims-bordereau", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const def = await defaultStatementRange(user.organizationId);
+    const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
+    const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
+    return res.json(await storage.getClaimsBordereau(user.organizationId, from, to));
   });
 
   app.get("/api/reports/daily/pdf", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -14744,35 +14917,58 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ success: true });
   });
 
-  // This route serves report types spanning several permission domains behind one handler —
-  // the base `read:policy` guard above only covers the policy-shaped report types. Anything
-  // exposing finance/payroll/commission data must be additionally checked here against the
-  // same permission its own dedicated endpoint requires (e.g. GET /api/payments needs
-  // read:finance, GET /api/payroll/employees needs read:payroll) — otherwise a role with only
-  // read:policy (e.g. "staff", "agent") could export data none of its other endpoints expose.
-  const REPORT_EXPORT_EXTRA_PERMISSION: Record<string, string> = {
-    finance: "read:finance",
-    "underwriter-payable": "read:finance",
-    expenditures: "read:finance",
-    platform: "read:finance",
-    payments: "read:finance",
-    cashups: "read:finance",
-    receipts: "read:finance",
-    payroll: "read:payroll",
-    commissions: "read:commission",
-    "commission-payments": "read:commission",
-  };
+  // ── Budgets (monthly targets by category) ──
+  app.get("/api/budgets", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const from = typeof req.query.from === "string" ? req.query.from : undefined;
+    const to = typeof req.query.to === "string" ? req.query.to : undefined;
+    return res.json(await storage.getBudgets(user.organizationId, { from, to }));
+  });
 
-  app.get("/api/reports/export/:type", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+  app.post("/api/budgets", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const { periodMonth, category, amount, currency, notes } = req.body;
+    if (!periodMonth || !String(category || "").trim() || amount === undefined) {
+      return res.status(400).json({ message: "periodMonth, category and amount are required" });
+    }
+    const amt = parsePositiveAmount(amount);
+    if (!amt && amt !== 0) return res.status(400).json({ message: "amount must be a valid number" });
+    const month = String(periodMonth).slice(0, 7) + "-01";
+    const created = await storage.upsertBudget({
+      organizationId: user.organizationId,
+      periodMonth: month,
+      category: String(category).trim(),
+      amount: String(Number(amount).toFixed(2)),
+      currency: normalizeCurrency(currency) || "USD",
+      notes: notes ? String(notes).trim() : undefined,
+      createdByUserId: await resolveOrSyncTenantUserId(user.organizationId, user.id),
+    });
+    await auditLog(req, "UPSERT_BUDGET", "Budget", created.id, null, created);
+    return res.status(201).json(created);
+  });
+
+  app.delete("/api/budgets/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+    const user = req.user as any;
+    const id = String(req.params.id);
+    await storage.deleteBudget(id, user.organizationId);
+    await auditLog(req, "DELETE_BUDGET", "Budget", id, null, null);
+    return res.json({ success: true });
+  });
+
+  app.get("/api/reports/export/:type", requireAuth, requireTenantScope,
+    requireAnyPermission("read:policy", "read:finance", "read:commission", "read:payroll", "read:claim", "read:report", "read:audit_log", "read:funeral_ops", "read:fleet", "read:user"),
+    async (req, res) => {
     const user = req.user as any;
     const reportType = req.params.type as string;
-    const requiredExtraPermission = REPORT_EXPORT_EXTRA_PERMISSION[reportType];
-    if (requiredExtraPermission) {
-      const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-      if (!perms.includes(requiredExtraPermission)) {
-        return res.status(403).json({ message: "Insufficient permissions for this report type" });
-      }
+
+    // Gate on the same permission the report's JSON sibling uses (see REPORT_EXPORT_PERMISSIONS).
+    const requiredPerm = REPORT_EXPORT_PERMISSIONS[reportType];
+    if (!requiredPerm) return res.status(400).json({ message: `Unknown report type: ${reportType}` });
+    const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+    if (!effPerms.includes(requiredPerm)) {
+      return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
     }
+
     const reportFilters = await enforceAgentScope(req, parseReportFilters(req.query));
 
     const CURRENCIES = ["USD", "ZAR", "ZIG"] as const;
@@ -14990,34 +15186,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } else {
             const payrollRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
             headers = [
-              "AGENT NAME",
-              "",
-              "NUMBER OF POLICIES",
-              "Groups",
-              "Groups",
-              "individ",
-              "Individ",
-              "Investm",
-              "Clawb",
-              "Call Cen",
+              "Agent Name",
+              "Number Of Policies",
+              "Groups Count",
+              "Groups Commission",
+              "Individuals Count",
+              "Individuals Commission",
+              "Investment Commission",
+              "Clawback",
+              "Call Centre",
               "Trips",
-              "Cash se",
+              "Cash Settlement",
               "Basic",
-              "Overtim",
-              "TOTAL",
-              "PA",
-              "TAX LE",
-              "CRED",
-              "ADVAN",
-              "POLICY DEDUCTI",
-              "MEDICAL AID DEDUCTI",
-              "UNPAID M",
-              "NET P",
+              "Overtime",
+              "Total",
+              "PAYE",
+              "Tax Levy",
+              "Credit",
+              "Advance",
+              "Policy Deduction",
+              "Medical Aid Deduction",
+              "Unpaid Months",
+              "Net Pay",
             ];
             currencyTotals = null;
             rows = payrollRows.map((r: any) => [
               r.agentName,
-              "",
               r.numberOfPolicies,
               r.groupsCount,
               r.groupsCommission,
@@ -15116,7 +15310,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "overdue":
         case "pre-lapse": {
-          const grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          let grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
+          // "Pre-lapse" is the actionable subset: in grace AND grace ends within the pre-lapse
+          // window (default 7 days) — not a synonym for "overdue" (every grace policy).
+          if (reportType === "pre-lapse") {
+            const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
+            const cutoff = Date.now() + windowDays * 86400000;
+            grace = grace.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff);
+          }
           headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
           currencyTotals = { Premium: {} };
           rows = grace.map((r: any) => {
@@ -15367,23 +15568,95 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             from: reportFilters.fromDate,
             to: reportFilters.toDate,
           });
-          headers = ["Action", "Entity Type", "Entity ID", "User", "IP Address", "Timestamp"];
-          rows = auditRows.map((r: any) => [r.action, r.entityType, r.entityId, r.userName || r.userId || "", r.ipAddress || "", r.createdAt]);
+          const tdbAudit = await getDbForOrg(user.organizationId);
+          const { refs: auditRefs, policyNumbers: auditPolicyNos } = await resolveAuditRefs(tdbAudit, auditRows);
+          const changeSummary = (before: any, after: any): string => {
+            if (!before || !after || typeof before !== "object" || typeof after !== "object") return "";
+            const parts: string[] = [];
+            for (const k of Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))) {
+              if (["id", "organizationId", "createdAt", "updatedAt"].includes(k)) continue;
+              if (JSON.stringify(before[k]) === JSON.stringify(after[k])) continue;
+              parts.push(`${k}: ${before[k] ?? "—"} → ${after[k] ?? "—"}`);
+              if (parts.length >= 6) break;
+            }
+            return parts.join("; ");
+          };
+          headers = ["Timestamp", "Action", "Entity Type", "Entity", "Policy", "Actor", "IP Address", "Changes"];
+          rows = auditRows.map((r: any) => [
+            r.timestamp ? new Date(r.timestamp).toISOString() : "",
+            r.action, r.entityType,
+            r.entityId ? (auditRefs[r.entityId] || r.entityId) : "",
+            auditPolicyNos[r.id] || "",
+            r.actorEmail || "System",
+            r.ipAddress || "",
+            changeSummary(r.before, r.after),
+          ]);
           break;
         }
         case "irp5-reconciliation": {
-          const employees = await storage.getPayrollEmployees(user.organizationId);
-          headers = ["Employee Name", "ID Number", "Position", "Department", "Currency", "Basic Salary", "Status", "Tax Year"];
-          rows = employees.map((r: any) => [r.employeeName, r.idNumber, r.position, r.department, r.currency || "USD", r.basicSalary, r.status, new Date().getFullYear()]);
+          // Payroll-tax reconciliation for a tax year, from finalised payslips (deductionsDetail
+          // JSON). Replaces the previous stub, which dumped the employee list with the current
+          // calendar year literally in a "Tax Year" column.
+          const taxYear = parseInt(String(req.query.taxYear)) || new Date().getFullYear();
+          const slips = await storage.getPayslipsForTaxYear(user.organizationId, taxYear);
+          const byEmp = new Map<string, { name: string; idNo: string; gross: number; paye: number; aidsLevy: number; nssa: number; net: number; currency: string; months: number }>();
+          for (const s of slips as any[]) {
+            const d = (s.deductionsDetail || {}) as any;
+            const e = (s.earnings || {}) as any;
+            const key = s.employeeId;
+            if (!byEmp.has(key)) byEmp.set(key, { name: s.employeeName || "—", idNo: s.employeeIdNumber || "—", gross: 0, paye: 0, aidsLevy: 0, nssa: 0, net: 0, currency: s.currency || "USD", months: 0 });
+            const row = byEmp.get(key)!;
+            row.gross += parseFloat(String(e.totalGross ?? s.grossAmount ?? 0)) || 0;
+            row.paye += parseFloat(String(d.paye ?? 0)) || 0;
+            row.aidsLevy += parseFloat(String(d.aidsLevy ?? 0)) || 0;
+            row.nssa += parseFloat(String(d.nssa ?? 0)) || 0;
+            row.net += parseFloat(String(s.netAmount ?? 0)) || 0;
+            row.months += 1;
+          }
+          headers = ["Tax Year", "Employee Name", "ID Number", "Currency", "Months Paid", "Gross", "PAYE", "AIDS Levy", "NSSA", "Net"];
+          currencyTotals = { Gross: {}, PAYE: {}, "AIDS Levy": {}, NSSA: {}, Net: {} };
+          rows = Array.from(byEmp.values()).sort((a, b) => a.name.localeCompare(b.name)).map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!.Gross[c] = (currencyTotals!.Gross[c] || 0) + r.gross;
+            currencyTotals!.PAYE[c] = (currencyTotals!.PAYE[c] || 0) + r.paye;
+            currencyTotals!["AIDS Levy"][c] = (currencyTotals!["AIDS Levy"][c] || 0) + r.aidsLevy;
+            currencyTotals!.NSSA[c] = (currencyTotals!.NSSA[c] || 0) + r.nssa;
+            currencyTotals!.Net[c] = (currencyTotals!.Net[c] || 0) + r.net;
+            return [taxYear, r.name, r.idNo, c, r.months, r.gross.toFixed(2), r.paye.toFixed(2), r.aidsLevy.toFixed(2), r.nssa.toFixed(2), r.net.toFixed(2)];
+          });
           break;
         }
         case "deleted-receipts":
         case "edited-receipts":
         case "moved-receipts":
-        case "backdated-receipts": {
-          const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["DTSTAMP", "agentsName", "policy_number", "surname", "Product_Name", "DatePaid", "AmountCollected", "Currency", "ReceiptNumber", "CapturedBy"];
-          rows = receiptRows.map((r: any) => [r.DTSTAMP ?? "", r.agentsName ?? "", r.policy_number ?? "", r.surname ?? "", r.Product_Name ?? "", r.DatePaid ?? "", r.AmountCollected ?? "", r.Currency ?? "", r.ReceiptNumber ?? "", r.CapturedBy ?? ""]);
+        case "backdated-receipts":
+        case "receipt-amendments": {
+          // A real exception report sourced from the audit trail — every receipt that was
+          // amended, voided or deletion-requested — plus receipts whose paid date precedes their
+          // issue date (back-dated). Replaces four separate stubs that just dumped the receipt list.
+          const RECEIPT_ACTIONS = new Set(["UPDATE_RECEIPT", "DELETE_RECEIPT", "REQUEST_DELETE_RECEIPT", "REJECT_RECEIPT", "RECEIPT_REPRINT"]);
+          const { rows: raRows } = await storage.getAuditLogs(user.organizationId, Math.min(REPORT_EXPORT_MAX_ROWS, 5000), 0, {
+            from: reportFilters.fromDate, to: reportFilters.toDate,
+          });
+          const tdbRa = await getDbForOrg(user.organizationId);
+          const { refs: raRefs } = await resolveAuditRefs(tdbRa, raRows);
+          headers = ["Timestamp", "Action", "Receipt", "Actor", "Detail"];
+          rows = raRows
+            .filter((r: any) => RECEIPT_ACTIONS.has(r.action))
+            .map((r: any) => {
+              const b = r.before || {}; const a = r.after || {};
+              const changed = Object.keys({ ...b, ...a })
+                .filter((k) => !["id", "updatedAt"].includes(k) && JSON.stringify(b[k]) !== JSON.stringify(a[k]))
+                .map((k) => `${k}: ${b[k] ?? "—"} → ${a[k] ?? "—"}`)
+                .slice(0, 5).join("; ");
+              return [
+                r.timestamp ? new Date(r.timestamp).toISOString() : "",
+                r.action,
+                r.entityId ? (raRefs[r.entityId] || r.entityId) : "",
+                r.actorEmail || "System",
+                changed,
+              ];
+            });
           break;
         }
         case "employee-summary": {
@@ -15392,40 +15665,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rows = empList.map((r: any) => [r.displayName || r.email, r.email, r.isActive !== false ? "Active" : "Inactive", r.createdAt]);
           break;
         }
-        case "arrears-breakdown": {
-          const graceRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
-          headers = [
-            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
-            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
-            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
-            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
-            "Date_Captured", "GroupName", "Debit_day",
-          ];
-          rows = graceRaw.map((r: any) => [
-            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
-            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
-            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
-            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
-            r.Date_Captured, r.GroupName, r.Debit_day,
-          ]);
-          break;
-        }
+        case "arrears-breakdown":
         case "outstanding-payments": {
-          const awaitingRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
+          // Both were the same policy dump with no arrears figure. Now sourced from the finance
+          // report (per-policy outstanding + grace days) and given real aging columns.
+          // arrears-breakdown = grace only; outstanding-payments = active + grace.
+          const arStatuses = reportType === "arrears-breakdown" ? { status: "grace" } : { statuses: ["active", "grace"] };
+          // Arrears is an "as of now" report — don't let a stale capture-date filter narrow it.
+          const arRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, fromDate: undefined, toDate: undefined, ...arStatuses });
+          const arToday = await todayForOrg(user.organizationId);
+          const daysInArrears = (due: string | null | undefined): number => {
+            if (!due) return 0;
+            const d = Math.floor((new Date(arToday).getTime() - new Date(due).getTime()) / 86400000);
+            return d > 0 ? d : 0;
+          };
+          const bucket = (days: number): string =>
+            days === 0 ? "Current" : days <= 30 ? "1–30" : days <= 60 ? "31–60" : days <= 90 ? "61–90" : days <= 120 ? "91–120" : "120+";
           headers = [
-            "Branch_ID", "BranchName", "Member_ID", "Policy_Number", "MandateReference",
-            "InternalReferenceNumber", "Inception_Date", "fullname", "ID_Number", "Date_Of_Birth",
-            "ProductName", "Cell_Number", "EmailAddress", "physicalAddress", "postalAddress",
-            "UsualPremium", "Currency", "AgentsName", "Payment_Method", "currstatus",
-            "Date_Captured", "GroupName", "Debit_day",
+            "Policy Number", "Status", "First Name", "Surname", "National ID", "Phone",
+            "Product", "Branch", "Agent", "Group", "Currency", "Premium", ...currencyHeaders("Premium"),
+            "Outstanding", ...currencyHeaders("Outstanding"),
+            "Days In Arrears", "Aging Bucket", "Grace Days Remaining", "Grace End Date", "Last Payment",
           ];
-          rows = awaitingRaw.map((r: any) => [
-            r.Branch_ID, r.BranchName, r.Member_ID, r.Policy_Number, r.MandateReference,
-            r.InternalReferenceNumber, r.Inception_Date, r.fullname, r.ID_Number, r.Date_Of_Birth,
-            r.ProductName, r.Cell_Number, r.EmailAddress, r.physicalAddress, r.postalAddress,
-            r.UsualPremium, r.Currency, r.AgentsName, r.Payment_Method, r.currstatus,
-            r.Date_Captured, r.GroupName, r.Debit_day,
-          ]);
+          currencyTotals = { Premium: {}, Outstanding: {} };
+          rows = arRows.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            const prem = parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            const out = parseFloat(String(r.outstandingPremium ?? 0)) || 0;
+            const days = daysInArrears(r.dueDate);
+            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + prem;
+            if (out > 0) currencyTotals!.Outstanding[c] = (currencyTotals!.Outstanding[c] || 0) + out;
+            return [
+              r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+              r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.groupName ?? "", r.currency,
+              r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency),
+              r.outstandingPremium, ...currencyAmounts(r.outstandingPremium, r.currency),
+              days, bucket(days), r.graceDaysRemaining ?? "", r.graceEndDate || "", r.datePaid || "",
+            ];
+          });
           break;
         }
         case "captured-per-employee": {
@@ -15442,8 +15719,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "complaint-report": {
-          headers = ["Date", "Policy Number", "Client", "Complaint Type", "Description", "Status", "Resolved At"];
-          rows = [];
+          const { rows: fbRows } = await storage.getFeedbackByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { type: "complaint", status: reportFilters.status });
+          const fbClientIds = Array.from(new Set(fbRows.map((f: any) => f.clientId).filter(Boolean)));
+          const fbClients = new Map<string, string>();
+          for (const cid of fbClientIds) {
+            const cl = await storage.getClient(cid, user.organizationId);
+            if (cl) fbClients.set(cid, [cl.firstName, cl.lastName].filter(Boolean).join(" "));
+          }
+          headers = ["Logged", "Client", "Subject", "Message", "Status", "Escalated", "Resolved At", "Resolution Notes"];
+          rows = fbRows.map((f: any) => [
+            f.createdAt ? new Date(f.createdAt).toISOString() : "",
+            fbClients.get(f.clientId) || f.clientId || "",
+            f.subject || "", f.message || "", f.status || "",
+            f.escalated ? "Yes" : "No",
+            f.resolvedAt ? new Date(f.resolvedAt).toISOString() : "",
+            f.resolutionNotes || "",
+          ]);
           break;
         }
         // Agent commission reports — detailed ledger view
@@ -15507,14 +15798,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "select-count": {
-          const scRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          // Policy count per agent, with agent names resolved (was: raw agent UUIDs).
+          const scRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           const scMap: Record<string, number> = {};
-          for (const r of scRaw) {
-            const key = (r as any).agentId || "unassigned";
+          for (const r of scRaw as any[]) {
+            const key = r.AgentsName || r.agentDisplayName || "Unassigned";
             scMap[key] = (scMap[key] || 0) + 1;
           }
-          headers = ["Agent ID", "Policy Count"];
-          rows = Object.entries(scMap).map(([k, v]) => [k, v]);
+          headers = ["Agent", "Policy Count"];
+          rows = Object.entries(scMap).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v]);
           break;
         }
         case "broker-policies": {
@@ -15545,11 +15837,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "branch-report": {
           const brRaw = await storage.getPoliciesByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const brNames = new Map((await storage.getBranchesByOrg(user.organizationId)).map((b) => [b.id, b.name]));
           const brMap: Record<string, { name: string; active: number; lapsed: number; grace: number; premiumByCurrency: Record<string, number> }> = {};
           currencyTotals = { "Total Premium": {} };
           for (const r of brRaw) {
             const key = (r as any).branchId || "no-branch";
-            if (!brMap[key]) brMap[key] = { name: key, active: 0, lapsed: 0, grace: 0, premiumByCurrency: {} };
+            if (!brMap[key]) brMap[key] = { name: brNames.get(key) || (key === "no-branch" ? "(No branch)" : key), active: 0, lapsed: 0, grace: 0, premiumByCurrency: {} };
             if ((r as any).status === "active") brMap[key].active++;
             else if ((r as any).status === "lapsed") brMap[key].lapsed++;
             else if ((r as any).status === "grace") brMap[key].grace++;
@@ -15560,7 +15853,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
           // Never blend currencies into one "Total Premium" number — a branch report mixing
           // USD and ZAR policies previously summed them raw into a figure with no real meaning.
-          headers = ["Branch ID", "Active Policies", "Lapsed Policies", "Grace Policies", ...currencyHeaders("Total Premium")];
+          headers = ["Branch", "Active Policies", "Lapsed Policies", "Grace Policies", ...currencyHeaders("Total Premium")];
           rows = Object.values(brMap).map((b) => [
             b.name, b.active, b.lapsed, b.grace,
             ...CURRENCIES.map((c) => (b.premiumByCurrency[c] ? b.premiumByCurrency[c].toFixed(2) : "")),
@@ -15605,21 +15898,202 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ];
           break;
         }
+        case "data-integrity": {
+          const issues = await storage.getDataIntegrityReport(user.organizationId);
+          headers = ["Severity", "Category", "Policy", "Client", "Detail"];
+          rows = issues.map((i) => [i.severity.toUpperCase(), i.category, i.policyNumber, i.client, i.detail]);
+          break;
+        }
+        case "trial-balance": {
+          const orgTodayTb = await todayForOrg(user.organizationId);
+          const tbFrom = reportFilters.fromDate || `${orgTodayTb.slice(0, 4)}-01-01`;
+          const tbTo = reportFilters.toDate || orgTodayTb;
+          const { buildTrialBalance, buildLedgerPosition } = await import("./general-ledger");
+          const [tb, pos] = await Promise.all([
+            buildTrialBalance(user.organizationId, { from: tbFrom, to: tbTo, branchId: reportFilters.branchId }),
+            buildLedgerPosition(user.organizationId, { asOf: tbTo, branchId: reportFilters.branchId }),
+          ]);
+          headers = ["Section", "Code", "Account", "Class", "Currency", "Debit", "Credit"];
+          const emit = (section: string, r: { code: string; name: string; class: string; debit: Record<string, number>; credit: Record<string, number> }) => {
+            const curs = Array.from(new Set([...Object.keys(r.debit), ...Object.keys(r.credit)]));
+            for (const c of curs) rows.push([section, r.code, r.name, r.class, c, (r.debit[c] ?? 0).toFixed(2), (r.credit[c] ?? 0).toFixed(2)]);
+          };
+          for (const r of tb.rows) emit("Trial balance (period)", r);
+          rows.push(["", "", "", "", "", "", ""]);
+          for (const r of pos.rows) emit(`Financial position (as of ${tbTo})`, r as any);
+          break;
+        }
+        case "general-ledger": {
+          const orgTodayGl = await todayForOrg(user.organizationId);
+          const glFrom = reportFilters.fromDate || `${orgTodayGl.slice(0, 4)}-01-01`;
+          const glTo = reportFilters.toDate || orgTodayGl;
+          const account = typeof req.query.account === "string" && req.query.account ? req.query.account : undefined;
+          const { buildGeneralLedger } = await import("./general-ledger");
+          const gl = await buildGeneralLedger(user.organizationId, { from: glFrom, to: glTo, account, branchId: reportFilters.branchId });
+          headers = ["Date", "Account", "Account Name", "Description", "Reference", "Currency", "Debit", "Credit"];
+          rows = gl.lines.map((l) => [l.date, l.account, l.accountName, l.description, l.reference || "", l.currency, l.debit != null ? l.debit.toFixed(2) : "", l.credit != null ? l.credit.toFixed(2) : ""]);
+          break;
+        }
+        case "collection-efficiency": {
+          const def = { from: `${(await todayForOrg(user.organizationId)).slice(0, 7)}-01`, to: await todayForOrg(user.organizationId) };
+          const ce = await storage.getCollectionEfficiencyReport(user.organizationId, reportFilters.fromDate || def.from, reportFilters.toDate || def.to);
+          headers = ["Branch", "Currency", "Policies", "Expected Premium", "Collected", "Collection Rate %"];
+          currencyTotals = { "Expected Premium": {}, "Collected": {} };
+          rows = ce.map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!["Expected Premium"][c] = (currencyTotals!["Expected Premium"][c] || 0) + r.expected;
+            currencyTotals!["Collected"][c] = (currencyTotals!["Collected"][c] || 0) + r.collected;
+            return [r.branch, c, r.policyCount, r.expected.toFixed(2), r.collected.toFixed(2), `${r.collectionRate}%`];
+          });
+          break;
+        }
+        case "persistency": {
+          const pr = await storage.getPersistencyReport(user.organizationId);
+          headers = ["Inception Cohort", "Months Elapsed", "Incepted", "Active", "In Grace", "Lapsed", "Cancelled", "Persistency %"];
+          rows = pr.map((r) => [r.cohort, r.monthsElapsed, r.incepted, r.active, r.grace, r.lapsed, r.cancelled, `${r.persistency}%`]);
+          break;
+        }
+        case "lapse-analysis": {
+          const orgToday = await todayForOrg(user.organizationId);
+          const la = await storage.getLapseAnalysisReport(user.organizationId, reportFilters.fromDate || `${orgToday.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday);
+          headers = ["Month", "Lapses", "Reinstatements"];
+          rows = la.months.map((m) => [m.month, m.lapses, m.reinstatements]);
+          rows.push(["TOTAL", la.totalLapses, la.totalReinstatements]);
+          rows.push(["", "", ""]);
+          rows.push([`In force now: ${la.inForceNow}`, `Approx. period lapse rate: ${la.approxLapseRate}%`, ""]);
+          break;
+        }
+        case "member-movement": {
+          const orgToday2 = await todayForOrg(user.organizationId);
+          const mm = await storage.getMemberMovementReport(user.organizationId, reportFilters.fromDate || `${orgToday2.slice(0, 7)}-01`, reportFilters.toDate || orgToday2);
+          headers = ["Date", "Action", "Policy", "Member", "Actor"];
+          rows = mm.map((r) => [r.date, r.action, r.policyNumber, r.member, r.actor]);
+          break;
+        }
+        case "anniversary": {
+          const withinDays = Math.max(1, Math.min(parseInt(String(req.query.withinDays)) || 60, 366));
+          const an = await storage.getAnniversaryReport(user.organizationId, withinDays);
+          headers = ["Policy #", "Client", "Phone", "Product", "Branch", "Currency", "Premium", "Inception Date", "Next Anniversary", "Days Until", "Years In Force"];
+          rows = an.map((r) => [r.policyNumber, r.client, r.phone, r.product, r.branch, r.currency, r.premium, r.inceptionDate, r.nextAnniversary, r.daysUntil, r.yearsInForce]);
+          break;
+        }
+        case "ifrs17-movement": {
+          const orgTodayIm = await todayForOrg(user.organizationId);
+          const imFrom = reportFilters.fromDate || `${orgTodayIm.slice(0, 7)}-01`;
+          const imTo = reportFilters.toDate || orgTodayIm;
+          const { buildIfrs17Movement } = await import("./ifrs17-movement");
+          const mv = await buildIfrs17Movement(user.organizationId, { from: imFrom, to: imTo, branchId: reportFilters.branchId });
+          headers = ["Liability", "Line", "Currency", "Amount"];
+          const emitMv = (liab: string, lbl: string, m: Record<string, number>) => {
+            for (const [c, v] of Object.entries(m)) rows.push([liab, lbl, c, Number(v).toFixed(2)]);
+          };
+          emitMv("LRC", "Opening balance", mv.lrc.opening);
+          emitMv("LRC", "Premiums received", mv.lrc.premiumsReceived);
+          emitMv("LRC", "Insurance revenue recognised", mv.lrc.revenueRecognised);
+          emitMv("LRC", "Closing balance", mv.lrc.closing);
+          emitMv("LRC", "Residual (straddling receipts)", mv.lrc.residual);
+          emitMv("LIC", "Opening balance", mv.lic.opening);
+          emitMv("LIC", "Claims incurred (reported)", mv.lic.claimsIncurred);
+          emitMv("LIC", "Claims paid / settled", mv.lic.claimsPaid);
+          emitMv("LIC", "Closing balance", mv.lic.closing);
+          emitMv("LIC", "Residual", mv.lic.residual);
+          break;
+        }
+        case "bank-reconciliation": {
+          const orgTodayBr = await todayForOrg(user.organizationId);
+          const brFrom = reportFilters.fromDate || `${orgTodayBr.slice(0, 7)}-01`;
+          const brTo = reportFilters.toDate || orgTodayBr;
+          const br = await storage.getBankReconciliation(user.organizationId, brFrom, brTo);
+          headers = ["Account", "Bank", "Currency", "Opening Balance", "Opening Date", "Closing Balance", "Closing Date", "Statement Movement", "Deposits Recorded", "Deposit Count", "Unreconciled Movement"];
+          rows = br.accounts.map((a) => [a.accountName, a.bankName, a.currency, a.openingBalance ?? "", a.openingDate ?? "", a.closingBalance ?? "", a.closingDate ?? "", a.statementMovement ?? "", a.depositsRecorded.toFixed(2), a.depositCount, a.unreconciledMovement ?? ""]);
+          rows.push(["", "", "", "", "", "", "", "", "", "", ""]);
+          for (const [c, v] of Object.entries(br.bankPaymentsRecorded)) {
+            rows.push([`Bank-method payments recorded (${c})`, "", c, "", "", "", "", "", v.total.toFixed(2), v.count, ""]);
+          }
+          break;
+        }
+        case "premium-bordereau": {
+          const orgTodayPb = await todayForOrg(user.organizationId);
+          const bd = await storage.getPremiumBordereau(user.organizationId, reportFilters.fromDate || `${orgTodayPb.slice(0, 7)}-01`, reportFilters.toDate || orgTodayPb);
+          headers = ["Policy Number", "Insured", "National ID", "Product", "Branch", "Inception Date", "Sum Insured", "Sum Insured Currency", "Currency", "Gross Premium (monthly)", "Lives", "Premium Ceded (monthly)", "Retained Premium (monthly)", "Period From", "Period To"];
+          currencyTotals = { "Gross Premium (monthly)": {}, "Premium Ceded (monthly)": {} };
+          rows = bd.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            currencyTotals!["Gross Premium (monthly)"][c] = (currencyTotals!["Gross Premium (monthly)"][c] || 0) + r.grossPremium;
+            currencyTotals!["Premium Ceded (monthly)"][c] = (currencyTotals!["Premium Ceded (monthly)"][c] || 0) + r.cededPremiumMonthly;
+            return [r.policyNumber, r.insured, r.nationalId, r.product, r.branch, r.inceptionDate, r.sumInsured ?? "", r.sumInsuredCurrency, r.currency, r.grossPremium.toFixed(2), r.lives, r.cededPremiumMonthly.toFixed(2), r.retainedPremiumMonthly.toFixed(2), r.periodFrom, r.periodTo];
+          });
+          break;
+        }
+        case "claims-bordereau": {
+          const orgTodayCb = await todayForOrg(user.organizationId);
+          const cb = await storage.getClaimsBordereau(user.organizationId, reportFilters.fromDate || `${orgTodayCb.slice(0, 7)}-01`, reportFilters.toDate || orgTodayCb);
+          headers = ["Claim Number", "Policy Number", "Insured", "Deceased", "Product", "Claim Type", "Date Of Death", "Date Reported", "Status", "Currency", "Sum Insured", "Gross Claim", "Period From", "Period To"];
+          currencyTotals = { "Gross Claim": {} };
+          rows = cb.map((r: any) => {
+            const c = (r.currency || "USD").toUpperCase();
+            if (r.grossClaim > 0) currencyTotals!["Gross Claim"][c] = (currencyTotals!["Gross Claim"][c] || 0) + r.grossClaim;
+            return [r.claimNumber, r.policyNumber, r.insured, r.deceased, r.product, r.claimType, r.dateOfDeath, r.dateReported, r.status, r.currency, r.sumInsured ?? "", r.grossClaim.toFixed(2), r.periodFrom, r.periodTo];
+          });
+          break;
+        }
+        case "claims-aging": {
+          const ca = await storage.getClaimsAgingReport(user.organizationId);
+          headers = ["Claim #", "Policy #", "Deceased", "Status", "Branch", "Days Open", "Aging Bucket", "Overdue", "Currency", "Amount"];
+          currencyTotals = { Amount: {} };
+          rows = ca.map((r) => {
+            const c = (r.currency || "USD").toUpperCase();
+            if (r.amount > 0) currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + r.amount;
+            return [r.claimNumber, r.policyNumber, r.deceased, r.status, r.branch, r.daysOpen, r.bucket, r.overdue ? "Yes" : "No", c, r.amount.toFixed(2)];
+          });
+          break;
+        }
+        case "claims-analytics": {
+          const orgToday3 = await todayForOrg(user.organizationId);
+          const an = await storage.getClaimsAnalyticsReport(user.organizationId, reportFilters.fromDate || `${orgToday3.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday3);
+          headers = ["Section", "Key", "Submitted / Claims incurred", "Approved / Premium collected", "Rejected", "Ratio %"];
+          rows = [
+            ...an.lossRatio.map((l) => ["Loss ratio", l.currency, l.claimsIncurred.toFixed(2), l.premiumCollected.toFixed(2), "", `${l.ratio}%`]),
+            ["", "", "", "", "", ""],
+            ...an.repudiation.map((r) => ["Repudiation", r.claimType, r.submitted, r.approved, r.rejected, `${r.repudiationRate}%`]),
+          ];
+          break;
+        }
         default:
           return res.status(400).json({ message: `Unknown report type: ${reportType}` });
       }
 
-      const escapeCsv = (val: any) => {
-        const str = String(val ?? "");
-        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
+      // Same data, rendered as a landscape-A4 letterhead PDF instead of CSV, for reports narrow
+      // enough to read on a page (?format=pdf). Wide Easipol-format exports are refused inside.
+      if (String(req.query.format) === "pdf") {
+        const pdfOrg = await storage.getOrganization(user.organizationId);
+        if (!pdfOrg) return res.status(404).json({ message: "Organisation not found" });
+        const { streamListReportPdf } = await import("./list-report-pdf");
+        const periodBits = [reportFilters.fromDate, reportFilters.toDate].filter(Boolean).join(" to ");
+        await streamListReportPdf({
+          org: pdfOrg as any,
+          title: reportExportLabel(reportType),
+          subtitle: `${periodBits ? `Period: ${periodBits}  ·  ` : ""}Generated ${new Date().toLocaleString("en-ZA")}`,
+          headers,
+          rows,
+          currencyTotals,
+          truncatedAt: REPORT_EXPORT_MAX_ROWS,
+        }, res, { attachment: req.query.download === "1" });
+        return;
+      }
 
-      const csvLines = [headers.join(",")];
+      const escapeCsv = csvEscape;
+
+      const csvLines = [headers.map(escapeCsv).join(",")];
       for (const row of rows) {
         csvLines.push(row.map(escapeCsv).join(","));
+      }
+
+      // The report queries pass REPORT_EXPORT_MAX_ROWS as their limit; hitting it exactly almost
+      // always means the result was cut off. Say so in the file rather than truncating silently.
+      if (rows.length >= REPORT_EXPORT_MAX_ROWS) {
+        csvLines.push("");
+        csvLines.push(escapeCsv(`*** TRUNCATED at ${REPORT_EXPORT_MAX_ROWS} rows — narrow the date range or add filters to export the rest ***`));
       }
 
       if (currencyTotals && Object.keys(currencyTotals).length > 0) {
@@ -15633,9 +16107,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename="${reportType}-report.csv"`);
-      return res.send(csvLines.join("\n"));
+      // Descriptive filename: tenant + report + period, so repeated pulls don't collide in the
+      // Downloads folder and the file carries its own provenance.
+      const exportOrg = await storage.getOrganization(user.organizationId);
+      const orgSlug = (exportOrg?.name || "pol263").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) || "pol263";
+      const period = [reportFilters.fromDate, reportFilters.toDate].filter(Boolean).join("_to_") || new Date().toISOString().slice(0, 10);
+      const filename = `${orgSlug}_${reportType}_${period}.csv`;
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      // UTF-8 BOM so Excel on Windows renders accented names / currency text correctly; CRLF per RFC 4180.
+      return res.send("﻿" + csvLines.join("\r\n"));
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });
     }
@@ -15674,6 +16156,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         tableCounts,
         tenantPools: getTenantPoolStats(),
         backgroundJobs: getJobStats(),
+        eventLoop: getEventLoopStats(),
+        cpuPool: getCpuPoolStats(),
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {

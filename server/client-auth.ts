@@ -26,6 +26,7 @@ import { hasModule } from "./module-gate";
 import { validatePasswordPolicy } from "@shared/validation";
 import { invalidateOtherSessions } from "./route-helpers";
 import { verifyTurnstileToken } from "./turnstile";
+import { tryToCents, fromCents, splitCents } from "@shared/money";
 
 const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -1108,13 +1109,17 @@ export function setupClientAuth(app: Express) {
       const policies = await storage.getPoliciesByGroupId(clientOrgId, groupId);
       const selected = policies.filter(p => policyIds.includes(p.id));
       if (selected.length === 0) return res.status(400).json({ message: "No valid policies selected" });
-      const perPolicy = (parseFloat(totalAmount) / selected.length).toFixed(2);
-      for (const policy of selected) {
+      const totalCents = tryToCents(totalAmount);
+      if (totalCents == null || totalCents <= 0) return res.status(400).json({ message: "totalAmount must be a positive amount" });
+      // Equal shares that add back up to the total exactly ($100 / 3 → 33.34 + 33.33 + 33.33).
+      const shares = splitCents(totalCents, selected.length);
+      for (let i = 0; i < selected.length; i++) {
+        const policy = selected[i];
         await storage.createPaymentTransaction({
           organizationId: clientOrgId,
           policyId: policy.id,
           clientId: policy.clientId,
-          amount: perPolicy,
+          amount: fromCents(shares[i]),
           currency: currency || "USD",
           paymentMethod: "cash",
           status: "pending",

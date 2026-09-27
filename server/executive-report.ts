@@ -10,7 +10,7 @@ import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { getTenantCapabilities, hasModuleCapability } from "./org-capabilities";
-import { buildIncomeStatement, buildCashFlowStatement, buildIncomeTimeSeries, buildExecutiveSummary } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildIncomeTimeSeries, buildExecutiveSummary, fxMapFor } from "./financial-statements";
 import { computeClaimAgeDays, isClaimOverdue } from "./claims-sla";
 import { effectiveLeadStage, PIPELINE_STAGES } from "@shared/lead-pipeline";
 import { funeralCases, mortuaryIntakes, leads } from "@shared/schema";
@@ -33,14 +33,58 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
   const hasClaims = hasModuleCapability(caps, "claims");
   const hasFleet = hasModuleCapability(caps, "fleet");
 
-  const [incomeStatement, cashFlow, incomeTimeSeries, execSummary] = await Promise.all([
+  // Immediately-preceding window of the same length, for period-on-period deltas on the
+  // headline KPIs. Half-open at the start so the two windows don't overlap on the boundary day.
+  const spanDays = Math.max(1, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1);
+  const prevTo = new Date(new Date(from).getTime() - 86400000).toISOString().slice(0, 10);
+  const prevFrom = new Date(new Date(from).getTime() - spanDays * 86400000).toISOString().slice(0, 10);
+
+  const [incomeStatement, cashFlow, incomeTimeSeries, execSummary, prevIncome, prevSummary] = await Promise.all([
     buildIncomeStatement(orgId, { from, to, branchId }),
     buildCashFlowStatement(orgId, { from, to, branchId }),
     buildIncomeTimeSeries(orgId, { from, to, branchId }),
     // Reused wholesale rather than re-deriving: branchBreakdown, claimStats, newPoliciesCount,
     // countryFlag (SA vs home split — gated on countryFlagSettings.isEnabled inside).
     buildExecutiveSummary(orgId, { from, to, branchId }),
+    buildIncomeStatement(orgId, { from: prevFrom, to: prevTo, branchId }),
+    buildExecutiveSummary(orgId, { from: prevFrom, to: prevTo, branchId }),
   ]);
+
+  const pctChange = (curr: number, prev: number): number | null =>
+    prev === 0 ? (curr === 0 ? 0 : null) : Number((((curr - prev) / Math.abs(prev)) * 100).toFixed(1));
+  const comparison = {
+    previousPeriod: { from: prevFrom, to: prevTo },
+    totalIncomeUsd: { current: Number(incomeStatement.consolidatedUsd?.income ?? 0), previous: Number(prevIncome.consolidatedUsd?.income ?? 0) },
+    netUsd: { current: Number(incomeStatement.consolidatedUsd?.net ?? 0), previous: Number(prevIncome.consolidatedUsd?.net ?? 0) },
+    newPoliciesCount: { current: execSummary.newPoliciesCount, previous: prevSummary.newPoliciesCount },
+    deltaPct: {
+      totalIncomeUsd: pctChange(Number(incomeStatement.consolidatedUsd?.income ?? 0), Number(prevIncome.consolidatedUsd?.income ?? 0)),
+      netUsd: pctChange(Number(incomeStatement.consolidatedUsd?.net ?? 0), Number(prevIncome.consolidatedUsd?.net ?? 0)),
+      newPoliciesCount: pctChange(execSummary.newPoliciesCount, prevSummary.newPoliciesCount),
+    },
+  };
+
+  // ── Budget vs actual (headline categories only — see the budgets table) ──
+  const fxMap = await fxMapFor(orgId);
+  const sumUsd = (m: Record<string, number>) => Object.entries(m).reduce((s, [c, v]) => s + v * (fxMap[c.toUpperCase()] ?? 0), 0);
+  const [budIncome, budExpenses, budNewPolicies] = await Promise.all([
+    storage.getBudgetForRange(orgId, from, to, "total_income"),
+    storage.getBudgetForRange(orgId, from, to, "total_expenses"),
+    storage.getBudgetForRange(orgId, from, to, "new_policies"),
+  ]);
+  const variance = (actual: number, budget: number) => ({
+    actual: Number(actual.toFixed(2)), budget: Number(budget.toFixed(2)),
+    variance: Number((actual - budget).toFixed(2)),
+    variancePct: budget === 0 ? null : Number((((actual - budget) / Math.abs(budget)) * 100).toFixed(1)),
+  });
+  const budIncomeUsd = sumUsd(budIncome), budExpensesUsd = sumUsd(budExpenses);
+  const budNewPoliciesTotal = Object.values(budNewPolicies).reduce((s, v) => s + v, 0);
+  const hasBudget = budIncomeUsd > 0 || budExpensesUsd > 0 || budNewPoliciesTotal > 0;
+  const budget = hasBudget ? {
+    totalIncomeUsd: variance(Number(incomeStatement.consolidatedUsd?.income ?? 0), budIncomeUsd),
+    totalExpensesUsd: variance(Number(incomeStatement.consolidatedUsd?.expenses ?? 0), budExpensesUsd),
+    newPoliciesCount: variance(execSummary.newPoliciesCount, budNewPoliciesTotal),
+  } : null;
 
   // The 14 queries below are all independent of each other (same orgId/from/to/branchId, no
   // query depends on another's result) but were previously awaited one at a time — a report
@@ -257,6 +301,8 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
 
   return {
     period: { from, to, branchId: branchId ?? null },
+    comparison,
+    budget,
     capabilities: { hasFuneralOps, hasClaims, hasFleet },
     financial: {
       incomeStatement, cashFlow, incomeTimeSeries,

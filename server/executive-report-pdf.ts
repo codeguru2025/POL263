@@ -35,16 +35,28 @@ export async function streamExecutiveReportPdf(
   newPage(ctx);
 
   // Headline KPI tiles
+  const cmp = (report as any).comparison;
+  const dl = (v: number | null | undefined) => (v == null ? "" : `  (${v > 0 ? "+" : ""}${v}% vs prior)`);
   statRow(ctx, [
-    { label: "Total income (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}`, color: C_INCOME },
-    { label: "Net (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.net)}`, color: Number(report.financial.incomeStatement.consolidatedUsd?.net ?? 0) >= 0 ? C_INCOME : C_EXPENSE },
-    { label: "New policies", value: String(report.policies.newPoliciesCount) },
+    { label: "Total income (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.income)}${dl(cmp?.deltaPct?.totalIncomeUsd)}`, color: C_INCOME },
+    { label: "Net (consolidated)", value: `USD ${money(report.financial.incomeStatement.consolidatedUsd?.net)}${dl(cmp?.deltaPct?.netUsd)}`, color: Number(report.financial.incomeStatement.consolidatedUsd?.net ?? 0) >= 0 ? C_INCOME : C_EXPENSE },
+    { label: "New policies", value: `${report.policies.newPoliciesCount}${dl(cmp?.deltaPct?.newPoliciesCount)}` },
   ]);
   statRow(ctx, [
     { label: "Funeral services", value: report.funeralServices ? String(report.funeralServices.byType.reduce((s, r) => s + r.count, 0)) : "—" },
     { label: "Quote conversion rate", value: report.quotes ? pct(report.quotes.conversionRate) : "—" },
     { label: "Claims overdue", value: report.claims?.overdue ? pct(report.claims.overdue.overduePercent) : "—" },
   ]);
+
+  const bud = (report as any).budget;
+  if (bud) {
+    const bl = (b: { budget: number; variance: number; variancePct: number | null }) =>
+      `${money(b.budget)}  (var ${b.variance >= 0 ? "+" : ""}${money(b.variance)}${b.variancePct != null ? `, ${b.variancePct >= 0 ? "+" : ""}${b.variancePct}%` : ""})`;
+    sectionBand(ctx, "Budget vs Actual");
+    kv(ctx, "Total income — budget", bl(bud.totalIncomeUsd));
+    kv(ctx, "Total expenses — budget", bl(bud.totalExpensesUsd));
+    kv(ctx, "New policies — budget", bl(bud.newPoliciesCount));
+  }
 
   renderIncomeStatementBody(ctx, report.financial.incomeStatement);
 

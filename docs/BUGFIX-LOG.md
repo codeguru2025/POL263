@@ -10,6 +10,120 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-27 — Suspended tenant's staff bounced silently; billing sweep would override a manual suspension
+
+**Symptom:** suspending a tenant (Falakhe, for non-payment) from the platform console gave its
+staff no explanation. Google login "succeeded", then the next request dropped the session and
+they landed back on the login page with no message. Separately, Falakhe was `past_due` with a
+grace deadline of 30 Sep, so the daily billing sweep would have re-suspended them on top of the
+manual suspension.
+
+**Root cause:** tenant suspension was only enforced in `deserializeUser` (`done(null, null)`),
+which cannot tell the user why. `suspendReason` was stored but never shown to the tenant. The
+sweep's auto-suspend step only checked subscription status, not whether the tenant was already
+manually suspended, so it would overwrite the reason, loosen a full block into view-only
+(`viewOnlyGraceUntil`), and start the deletion-countdown emails.
+
+**Fix:** `server/auth.ts`: the Google callback checks `resolveTenantAccess` before completing
+login and redirects to `/staff/login?error=<suspendReason, or "Pay your bill to regain access">`.
+`server/tenant-billing-sweep.ts`: auto-suspend skips tenants whose `isActive` is already false.
+
+**Verified:** typecheck, full test suite (792/792).
+
+**Lesson for next time:** an access denial made in `deserializeUser` is invisible to the user,
+so surface the reason at the login step. Automated state machines (the billing sweep) must
+check for a human override before acting on the same row.
+
+---
+
+## 2026-09-26 — Dev server silently exited (code 1) whenever a page logged a React warning
+
+**Symptom:** while recording the product demo against a local dev server, the server died
+with no error every time the Groups page was opened. The only clue was the last log line: a
+forwarded browser warning, ``(client) [console.error] Each child in a list should have a
+unique "key" prop … StaffGroups``. The exit code was 1.
+
+**Root cause:** `server/vite.ts` passed a `customLogger` whose `error` called `process.exit(1)`.
+That is an old template default. Newer Vite forwards the browser's `console.error` to the server
+logger. So any client-side warning (here, a missing React key) became a fatal server exit.
+The trigger was a keyless `<>` fragment wrapping each group row in `client/src/pages/staff/groups.tsx`.
+The `key` sat on the inner `TableRow`, not on the fragment. Dev only: production serves the
+built bundle without Vite.
+
+**Fix:** `server/vite.ts` uses the plain Vite logger (logs errors, never exits).
+`groups.tsx` wraps each group row in `<Fragment key={group.id}>`.
+
+**Verified:** re-ran the Groups demo scene, which had crashed the server on every run before. The
+server stayed up and the rest of the scenes recorded.
+
+**Lesson for next time:** if the dev server dies with exit code 1 and no stack trace, grep for
+`process.exit` in logger or error hooks before anything else. Look at the last forwarded
+`(client) [console.error]` line. Never make a logger fatal.
+
+---
+
+## 2026-09-26 — Float money maths under-counted multi-month payments and dropped cents; heavy CPU work froze the server
+
+**Symptom (found in a review, not reported by users):** several money paths did arithmetic
+on JavaScript floats, and a few heavy jobs ran on the single request thread.
+- Paying several premiums at once could advance the policy one cycle too few. `Math.floor(paid /
+  premium)` with floats gives `3.30 / 1.10 = 2.9999999999999996` and floors that to **2**. This
+  affects about 7.5% of premium values between $1 and $200 (for 2/3/4/6/12-month payments).
+  The "excess" premium was then banked as credit, not as the period the client paid for.
+- `Math.abs(a - b) >= 0.01` missed real 1-cent differences in 57% of cases (`2.01 - 2.00` is
+  `0.00999…`). So 1-cent premium changes skipped reconciliation and drift re-pricing, and a 1-cent
+  short receipt was not flagged as a premium override.
+- Lump-sum group receipts rounded each policy's pro-rata share on its own, so the shares
+  could add up to a cent more or less than the receipt. The same happened with the client-portal
+  group split ($100 over 3 = 3 × 33.33 = $99.99). The Paynow group intent patched the
+  last share, but the cash group receipt did not.
+- A funeral quote could stay "partial" after full payment, because a float sum of receipts
+  landed just under the grand total.
+- A lump-sum group receipt accepted a missing or non-positive `totalAmount` (it wrote `NaN`).
+- The SMS usage report PDF (up to 50,000 rows) blocked the event loop for its whole render,
+  about 12 s for 20k rows on a dev machine. A 30k-row Excel import stalled it for about 650 ms.
+  Every other request on that instance waited.
+
+**Root cause:** there was no shared money type, so each call site did `parseFloat` and float
+maths with its own tolerance (0.01, 0.005, 0.001). Node runs all request handling on one thread,
+and nothing moved long pure-CPU work off it.
+
+**Fix:**
+- `shared/money.ts` holds exact integer-cent helpers (`toCents`, `fromCents`, `sumMoney`,
+  `percentOf`, `moneyEquals`, `allocateProRata` (largest remainder), `splitCents`).
+  Payments, balances, arrears, credit apply, group ledger, pool/accumulation, platform fee,
+  commissions and clawbacks, settlement FX allocation, petty cash, tombstone payments, quotation
+  totals, cashups, requisition/expenditure payouts, tenant billing and statement rounding use it
+  (`payment-service.ts`, `routes.ts`, `storage.ts`, `route-helpers.ts`, `credit-apply.ts`,
+  billing modules, and others). Commit `fdb1d41`.
+- `server/cpu-pool.ts` is a worker-thread pool: lazy start, idle exit, a heap cap per worker, a
+  bounded queue (503 when busy), per-task timeouts, and a fallback to running inline.
+  `server/workers/cpu-tasks.ts` is the registry of pure tasks. Spreadsheet import parsing
+  (`spreadsheet-parse.ts`) and the SMS report PDF (`sms-report-pdf.ts`) now run on it.
+  `script/build.ts` also emits `dist/cpu-worker.cjs`.
+- `server/event-loop-monitor.ts` logs a warning when the loop stalls ≥ `EVENT_LOOP_WARN_MS`.
+  Its stats and the pool stats appear in `GET /api/diagnostics/health`.
+
+**Verified:** `tsc` clean; 792/792 tests (`money.test.ts`, `cpu-pool.test.ts` new). The
+responsiveness test fails with `CPU_POOL_DISABLED=true` (2,969 ms stall) and passes on the pool,
+so it really proves the offload. The compiled `dist/cpu-worker.cjs` was exercised directly.
+
+**Deliberately not changed:** premium *calculation* rounding (`computePolicyPremium` still
+ends in float `toFixed(2)`). `recalculatePolicyPremiumIfNeeded` auto-persists any drift, so
+switching it to half-up would silently re-price every policy whose premium lands on a
+half-cent (weekly or loaded premiums) by 1 cent. That needs Augustus's decision and a dry run
+against real policies first. Report CSV totals were also left alone: they sum 2dp values and
+round once at output, which is already exact.
+
+**Lesson for next time:** never `parseFloat` money into arithmetic. Use `toCents` / `sumMoney`,
+and compare with `moneyEquals`, never `Math.abs(a - b) >= 0.01`. When splitting a total, use
+`allocateProRata` / `splitCents` so the shares add back up. For slow endpoints, check the
+"Event loop stalled" warnings first. A long synchronous block (one big pdfkit render, a
+spreadsheet parse) belongs in `cpu-tasks.ts`. Generators that `await` a DB read between pages
+(member-card batches) already yield and don't need moving.
+
+---
+
 ## 2026-09-26 — Claim SMS only went out if the tenant had built an SMS template; client claims skipped approvals
 
 **Symptom / rules set by Augustus:** every claim change must reach the client by SMS; client-portal
@@ -919,6 +1033,143 @@ old `window:` param is silently ignored. And: MFA/TOTP tests that only mock the 
 a zero-tolerance default — the regression test must run real `otplib` with a time-shifted token.
 
 ---
+## 2026-08-27 — Reporting audit remediation: export access-control gap + a dozen dead/broken reports
+
+Followed the reporting audit (artifact + `project_reporting_audit_2026_08_27` memory) with a
+fix pass. The findings and fixes:
+
+**1. `GET /api/reports/export/:type` bypassed every finance/payroll/commission/audit permission.**
+The ~50 JSON report endpoints are each gated on their own permission; the CSV route that serves
+the same data for all of them was gated on a single `requirePermission("read:policy")` with no
+per-type check. A `read:policy` holder (including an agent) could download payroll salaries
+(`payroll`, `irp5-reconciliation`), commission net-pay / PAYE (`commissions` + 13 variants),
+the full audit trail incl. IP addresses (`audit-trail`), the balance sheet
+(`actuarial-balance-sheet`), and client PII + `ConfidentialNotes` in bulk (`policies`,
+`arrears-breakdown`). Same class as the 2026-08-04 client-PII leak, different route.
+Fix: new `server/report-export.ts` exports `REPORT_EXPORT_PERMISSIONS` (every type → the same
+permission its JSON sibling uses) and `csvEscape`. The route now takes
+`requireAnyPermission(...report perms...)` and checks the per-type permission in-handler before
+doing any work; an unmapped type is a 400, never defaulted. `tests/unit/report-export.test.ts`
+asserts every type is mapped to a real `read:*` permission.
+
+**2. `getAllPoliciesReportByOrg` returned only Easipol-format keys — 5 reports were showing
+blank tables.** The method's `.map()` returns `Policy_Number` / `fullname` / `currstatus` /
+`UsualPremium` etc. The `active-policies`, `awaiting-payments`, `overdue`, `pre-lapse` and
+`lapsed` reports (screen **and** CSV) read `policyNumber` / `clientFirstName` / `premiumAmount` /
+`graceEndDate` / `status` — all `undefined`, so every column rendered empty. (The `policies`,
+`agent-portfolio`, `broker-policies`, `new-joinings` consumers read the Easipol keys and were
+fine.) Fix: the method now returns both key sets on each row, and `graceEndDate` / `clientTitle`
+were added to its select. `branch-report` was also resolving branch **id** as the branch name —
+now joined to `getBranchesByOrg`.
+
+**3. `audit-trail` CSV: actor + timestamp columns always blank.** Mapped `r.userName ||
+r.userId` and `r.createdAt` — none exist on an audit row (`actorEmail`, `timestamp`). Rewritten
+to use the real fields, resolve the entity UUID via `resolveAuditRefs`, add a Policy column and
+a before→after Changes column.
+
+**4. `complaint-report` was hard-coded `rows = []`.** Wired to `getFeedbackByOrg(type:
+"complaint")` with resolved client names, status, escalation and resolution notes.
+
+**5. `deleted/edited/moved/backdated-receipts` — four stubs that each dumped the full receipt
+list with no filter.** Replaced by one `receipt-amendments` report sourced from `audit_logs`
+(`UPDATE_RECEIPT` / `DELETE_RECEIPT` / `REQUEST_DELETE_RECEIPT` / `REJECT_RECEIPT` /
+`RECEIPT_REPRINT`) with a before→after detail column. Old type strings kept as aliases.
+
+**6. `irp5-reconciliation` was an employee list with `new Date().getFullYear()` in a "Tax Year"
+column.** Rebuilt as a real payroll-tax (ITF16) reconciliation from finalised payslips — per
+employee: months paid, gross, PAYE, AIDS levy, NSSA, net, with per-currency totals. New
+`storage.getPayslipsForTaxYear`. Menu relabelled.
+
+**7. `arrears-breakdown` had no arrears figure**, and was identical to `outstanding-payments`.
+Both now source from `getFinanceReportByOrg` (per-policy outstanding + grace days) and carry
+Outstanding, Days In Arrears, Aging Bucket (Current / 1–30 / 31–60 / 61–90 / 91–120 / 120+),
+Grace Days Remaining. arrears = grace only; outstanding = active + grace. Stale capture-date
+filters stripped (arrears is an "as of now" report).
+
+**8. `pre-lapse` == `overdue`** (both `status: "grace"`). Pre-lapse is now grace **and**
+`graceEndDate` within a window (`?withinDays`, default 7).
+
+**9. `select-count` exposed raw agent UUIDs.** Now resolves agent names, sorted by count.
+
+**10. CSV writer** (`csvEscape` + emit): added a UTF-8 BOM (Excel/Windows), CRLF line endings
+(RFC 4180), a formula-injection guard (a `Notes`/`description` value starting `= + - @` or a
+control char is apostrophe-prefixed and quoted), a truncation trailer row when the 15,000-row
+cap is hit, and descriptive filenames (`<tenant>_<type>_<period>.csv`).
+
+**11. Underwriter-payable** summary was `rows[0].currency` (always `undefined` — the base query
+never selected currency) against a raw cross-currency sum. Now per-currency: `summary.byCurrency`
++ one KPI tile line per currency.
+
+**12. Garbled headers.** The `commissions` CSV + on-screen summary had truncated labels
+(`Investm`, `Clawb`, `PA`, `NET P`, `Groups` twice, a blank column); the Receipts screen table
+had ~40 DB-alias columns (`InternalRe`, `Product_N`, `Sstatus`); Agent Productivity showed
+`agent_id` / `fdate` / `Colour`. All given real Title-Case headers / curated to a sane default
+column set. Easipol-format CSV exports (`policies`, `agent-portfolio`, `new-joinings`) left as-is
+— those column names are an import contract, not a style choice.
+
+**13. `claims` report** skipped `enforceAgentScope` (its siblings all use it). Fixed.
+
+**Verified:** `npm run check` clean; `npm run test` 407/407 (6 new). Not visually run against
+tenant data — local `DATABASE_URL` is production (same caution as the executive report).
+
+**Deliberately NOT done** (net-new build, not a fix — flagged to Augustus): generic
+"list report → letterhead PDF" wrapper; a unified Reports index page (the nav already groups
+them); and the entire "missing reports" set from the audit (IPEC statutory returns, persistency,
+premium-collection efficiency, per-agent commission statement, double-entry trial balance,
+reinsurance bordereaux, IFRS 17 movement analysis, board pack, data-integrity/exception report).
+
+**Lesson for next time:** two report subsystems share `getAllPoliciesReportByOrg` with
+incompatible key conventions — when a report "renders blank rows", check whether the storage
+method returns the key names the consumer reads before assuming the query is wrong. And any
+CSV/export route that mirrors a permission-gated JSON endpoint needs the *same* gate — the
+route-level middleware is not enough when one handler serves 50 report types.
+
+## 2026-08-27 — Audit trail still showed raw UUIDs (vehicles, entity ids) and hid policy numbers
+
+**Symptom:** After the 2026-08-26 "readability overhaul", the audit viewer still read as
+jargon in three ways: (1) some before/after fields — most visibly `vehicleId` on
+CHECKOUT_VEHICLE / RETURN_VEHICLE / trip logs — rendered a raw UUID because the resolver had
+no rule for them; (2) the row subtitle always showed `entityType · <first 8 hex of entityId>`
+— a truncated UUID — because the row's *own* `entityId` was never resolved at all, only
+UUIDs embedded inside before/after JSON; (3) for a mutation on a sub-entity of a policy
+(payment, receipt, claim, member) the policy number appeared nowhere, even though "which
+policy?" is the first thing a reader wants — most mutations in this system are against a
+policy.
+
+**Root cause:** `server/audit-ref-resolver.ts` only did field-name-rule resolution of UUIDs
+found *inside* `before`/`after`, and its field→table map was short (`clientId`, `policyId`,
+`branchId`, `groupId`, actor-shaped `*By`/`*UserId`/`*DriverId`). It never looked at the
+row's top-level `entityType`/`entityId`, and the client (`audit.tsx`,
+`policy-logs-tab.tsx`) hard-coded `log.entityId.slice(0, 8)` for the subtitle instead of a
+ref lookup. Snapshot (create/delete) changes also rendered as the bare new value with no
+`— →` so a reader couldn't tell at a glance it was a change line.
+
+**Fix:**
+- `server/audit-ref-resolver.ts`: added `vehicleId`/`fleetVehicleId`/`productId`/`claimId`/
+  `receiptId` to `tableForField`; added `tableForEntityType()` so the row's own `entityId`
+  is resolved (Policy→policyNumber, Client/User/Branch/Group→name, FleetVehicle→"REG (make
+  model)", Product→name, Claim→claimNumber, PaymentReceipt→receiptNumber); the resolver now
+  also returns a per-row `policyNumbers` map (entity is a policy, or its payload carries a
+  `policyId`). Return type changed from `Record<string,string>` to
+  `{ refs, policyNumbers }` — updated both call sites (`server/routes.ts` audit-logs route,
+  `server/policy-activity-log.ts` which destructures `{ refs }`).
+- `client/src/lib/audit-format.ts`: added `renderChange(c)` → `"old → new"` for a diff,
+  `"— → new"` for a create/delete snapshot (both sides always shown).
+- `client/src/pages/staff/audit.tsx`: subtitle now shows `refs[entityId] || slice(8)`, plus
+  a separate "Policy <number>" chip from `policyNumbers` when the entity itself isn't the
+  policy. `client/src/pages/staff/policies/detail/policy-logs-tab.tsx`: resolves the
+  sub-entity id, uses `renderChange`.
+
+**Verified:** `npm run check` clean; `npm run test` 401/401 (added 2 `renderChange` cases +
+updated import in `tests/unit/audit-format.test.ts`).
+
+**Lesson for next time:** "resolve the IDs in the audit trail" has two halves — the UUIDs
+*inside* before/after JSON, and the row's *own* `entityType`/`entityId`. The 2026-08-26 pass
+only did the first. When a reader says the trail "still shows ids", check whether the
+subtitle/entity column is doing a raw `.slice(0, 8)` rather than a ref lookup. The resolver
+is deliberately rule-based (field name / entity type → table), not a per-action table, so
+extending it is a one-line map entry per new reference kind — but a genuinely new table
+(vehicles, products, claims) still needs its own `inArray` fetch block added.
 
 ## 2026-08-26 — Pre-push review: payment-route race condition, 2 misattributed audit-log entries, 1 timing side-channel
 

@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
-import { FolderOpen, Shield, UserCircle, Users, Wallet, Wrench } from "lucide-react";
+import { Activity, FolderOpen, Shield, UserCircle, Users, Wallet, Wrench } from "lucide-react";
 
-export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll";
+export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "operations" | "payroll" | "quality";
 
 /** Backend / client dataset keys used to gate report queries. */
 export type ReportDatasetId =
@@ -29,9 +29,15 @@ export type ReportDatasetId =
   | "financeReport"
   | "incomeStatement"
   | "cashFlow"
+  | "trialBalance"
+  | "generalLedger"
+  | "bankReconciliation"
+  | "ifrs17Movement"
   | "transactionLedger"
   | "balanceSheet"
   | "underwriterPayable"
+  | "premiumBordereau"
+  | "claimsBordereau"
   | "cashups"
   | "receiptReport"
   | "claimsReport"
@@ -40,7 +46,17 @@ export type ReportDatasetId =
   | "branches"
   | "products"
   | "users"
-  | "insuranceContractSummary";
+  | "insuranceContractSummary"
+  | "ipecReturn"
+  | "budget"
+  | "dataIntegrity"
+  | "collectionEfficiency"
+  | "persistency"
+  | "lapseAnalysis"
+  | "memberMovement"
+  | "anniversary"
+  | "claimsAging"
+  | "claimsAnalytics";
 
 export const SECTION_META: Record<ReportSectionId, { label: string; icon: LucideIcon }> = {
   policies: { label: "Policies", icon: FolderOpen },
@@ -49,6 +65,7 @@ export const SECTION_META: Record<ReportSectionId, { label: string; icon: Lucide
   claims: { label: "Claims", icon: Shield },
   operations: { label: "Operations", icon: Wrench },
   payroll: { label: "Payroll", icon: Users },
+  quality: { label: "Book Health", icon: Activity },
 };
 
 export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: string; testId?: string }[]> = {
@@ -68,16 +85,23 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   finance: [
     { value: "income-statement", label: "Income Statement", testId: "tab-income-statement" },
     { value: "cash-flow", label: "Cash Flow", testId: "tab-cash-flow" },
+    { value: "trial-balance", label: "Trial Balance", testId: "tab-trial-balance" },
+    { value: "general-ledger", label: "General Ledger", testId: "tab-general-ledger" },
     { value: "ledger", label: "Transaction Ledger", testId: "tab-ledger" },
     { value: "balance-sheet", label: "Balance Sheet", testId: "tab-balance-sheet" },
+    { value: "bank-reconciliation", label: "Bank Reconciliation", testId: "tab-bank-reconciliation" },
+    { value: "ifrs17-movement", label: "IFRS 17 Movement", testId: "tab-ifrs17-movement" },
     { value: "finance", label: "Finance", testId: "tab-finance-report" },
     { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
+    { value: "reinsurance", label: "Reinsurance bordereaux", testId: "tab-reinsurance" },
     { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
     { value: "payments", label: "Payments", testId: "tab-payments-report" },
     { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
     { value: "cashups", label: "Cashups", testId: "tab-cashups-report" },
     { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
     { value: "actuarial", label: "Actuarial Export", testId: "tab-actuarial-export" },
+    { value: "ipec-return", label: "IPEC Return", testId: "tab-ipec-return" },
+    { value: "budget", label: "Budget", testId: "tab-budget" },
   ],
   agents: [
     { value: "agent-portfolio", label: "Agent portfolio", testId: "tab-agent-portfolio" },
@@ -85,7 +109,19 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "commissions", label: "Commissions summary", testId: "tab-commissions-report" },
     { value: "commission-payments", label: "Commission by payment", testId: "tab-commission-payments" },
   ],
-  claims: [{ value: "claims", label: "Claims", testId: "tab-claims-report" }],
+  claims: [
+    { value: "claims", label: "Claims register", testId: "tab-claims-report" },
+    { value: "claims-aging", label: "Claims aging", testId: "tab-claims-aging" },
+    { value: "claims-analytics", label: "Loss ratio & repudiation", testId: "tab-claims-analytics" },
+  ],
+  quality: [
+    { value: "persistency", label: "Persistency", testId: "tab-persistency" },
+    { value: "lapse-analysis", label: "Lapse analysis", testId: "tab-lapse-analysis" },
+    { value: "collection-efficiency", label: "Collection efficiency", testId: "tab-collection-efficiency" },
+    { value: "anniversary", label: "Anniversary / review", testId: "tab-anniversary" },
+    { value: "member-movement", label: "Member movement", testId: "tab-member-movement" },
+    { value: "data-integrity", label: "Data integrity", testId: "tab-data-integrity" },
+  ],
   operations: [
     { value: "funerals", label: "Funerals", testId: "tab-funerals-report" },
     { value: "fleet", label: "Fleet", testId: "tab-fleet-report" },
@@ -93,7 +129,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
   payroll: [{ value: "payroll", label: "Payroll", testId: "tab-payroll-report" }],
 };
 
-const ALL_SECTIONS: ReportSectionId[] = ["policies", "finance", "agents", "claims", "operations", "payroll"];
+const ALL_SECTIONS: ReportSectionId[] = ["policies", "finance", "agents", "claims", "operations", "payroll", "quality"];
 
 export function tabsForSection(
   section: ReportSectionId,
@@ -125,6 +161,7 @@ export function visibleReportSections(opts: {
   if (opts.canReadClaim) out.push("claims");
   if (opts.canReadFuneralOps || opts.canReadFleet) out.push("operations");
   if (opts.canReadPayroll) out.push("payroll");
+  out.push("quality");
   return out;
 }
 
@@ -143,21 +180,36 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   reinstatements: ["reinstatements"],
   "income-statement": ["incomeStatement"],
   "cash-flow": ["cashFlow"],
+  "trial-balance": ["trialBalance"],
+  "general-ledger": ["generalLedger"],
+  "bank-reconciliation": ["bankReconciliation"],
+  "ifrs17-movement": ["ifrs17Movement"],
   ledger: ["transactionLedger"],
   "balance-sheet": ["balanceSheet"],
   finance: ["financeReport"],
   "underwriter-payable": ["underwriterPayable"],
+  reinsurance: ["premiumBordereau", "claimsBordereau"],
   receipts: ["receiptReport"],
   payments: ["payments"],
   expenditures: ["expenditures"],
   cashups: ["cashups"],
   platform: ["platformReceivables"],
   actuarial: ["insuranceContractSummary"],
+  "ipec-return": ["ipecReturn"],
+  budget: ["budget"],
   "agent-portfolio": ["agentPortfolio"],
   "agent-productivity": ["agentProductivity"],
   commissions: ["commissionPlans", "commissionSummary"],
   "commission-payments": ["commissionPayments"],
   claims: ["claimsReport"],
+  "claims-aging": ["claimsAging"],
+  "claims-analytics": ["claimsAnalytics"],
+  "data-integrity": ["dataIntegrity"],
+  "collection-efficiency": ["collectionEfficiency"],
+  "persistency": ["persistency"],
+  "lapse-analysis": ["lapseAnalysis"],
+  "member-movement": ["memberMovement"],
+  "anniversary": ["anniversary"],
   funerals: ["funeralCases"],
   fleet: ["fleet"],
   payroll: ["payrollEmployees"],

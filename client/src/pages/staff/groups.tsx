@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { Fragment, useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import StaffLayout from "@/components/layout/staff-layout";
 import { PageHeader, PageShell, CardSection, DataTable, dataTableStickyHeaderClass, EnhancedDataTable, EmptyState } from "@/components/ds";
@@ -983,6 +983,17 @@ function GroupLedgerSection({ group }: { group: Group }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={() => window.open(`${getApiBase()}/api/groups/${groupId}/statement/pdf?download=1`, "_blank")}
+          data-testid="button-group-statement-pdf"
+        >
+          <Download className="h-3.5 w-3.5" /> Statement PDF (YTD)
+        </Button>
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {balanceEntries.length === 0 ? (
           <div className="rounded-md border p-3 sm:col-span-3">
@@ -2062,9 +2073,8 @@ export default function StaffGroups() {
               </TableHeader>
               <TableBody>
                 {filteredGroups.map((group) => (
-                  <>
+                  <Fragment key={group.id}>
                     <TableRow
-                      key={group.id}
                       className={`hover:bg-muted/30 transition-colors cursor-pointer ${expandedGroupId === group.id ? "bg-muted/20" : ""}`}
                       onClick={() => setExpandedGroupId(expandedGroupId === group.id ? null : group.id)}
                       data-testid={`row-group-${group.id}`}
@@ -2120,7 +2130,7 @@ export default function StaffGroups() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </TableBody>
             </DataTable>

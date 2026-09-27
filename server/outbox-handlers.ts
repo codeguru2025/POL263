@@ -3,6 +3,7 @@
  * Handlers must be idempotent: the same outbox row may be retried after partial failure.
  */
 
+import { moneyString, percentOf } from "@shared/money";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { computePlatformFee } from "./platform-fee";
@@ -282,7 +283,7 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
             entryType = "recurring";
           }
           if (rate > 0) {
-            const commAmount = (parseFloat(String(intent.amount)) * rate / 100).toFixed(2);
+            const commAmount = moneyString(percentOf(intent.amount, rate));
             await storage.createCommissionLedgerEntry({
               organizationId: orgId,
               agentId: policy.agentId,
