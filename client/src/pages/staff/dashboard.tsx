@@ -951,6 +951,7 @@ export default function StaffDashboard() {
                         <p className="font-medium truncate">{t.name}</p>
                         <div className="flex items-center gap-2 mt-1">
                           <Badge variant="outline">{t.slug}</Badge>
+                          {!t.isActive && <Badge variant="destructive">Suspended</Badge>}
                           <span className="text-xs text-muted-foreground">
                             {t.usersCount} users • {t.policiesCount} policies • {t.clientsCount} clients
                           </span>

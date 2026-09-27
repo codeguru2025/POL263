@@ -610,6 +610,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
                       {org.id === currentOrg?.id && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
                       {org.id !== currentOrg?.id && <span className="w-3.5 shrink-0" />}
                       <span className="truncate">{org.name}</span>
+                      {org.isActive === false && <span className="ml-auto text-[10px] font-medium text-destructive shrink-0">Suspended</span>}
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />

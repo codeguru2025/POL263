@@ -1963,11 +1963,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ activeTenantId: null });
     }
     const [tenant] = await cpDb
-      .select({ id: cpTenants.id, name: cpTenants.name, isActive: cpTenants.isActive })
+      .select({ id: cpTenants.id, name: cpTenants.name, isActive: cpTenants.isActive, licenseStatus: cpTenants.licenseStatus })
       .from(cpTenants)
       .where(eq(cpTenants.id, tenantId))
       .limit(1);
-    if (!tenant || !tenant.isActive || tenant.name?.endsWith("(deleted)")) return res.status(404).json({ message: "Tenant not found or inactive" });
+    // A suspended tenant is still enterable by the platform owner (suspension never applies to
+    // them — see deserializeUser); only deleted/purged tenants are off limits.
+    if (!tenant || tenant.name?.endsWith("(deleted)") || tenant.licenseStatus === "purged") return res.status(404).json({ message: "Tenant not found" });
     (req.session as any).activeTenantId = tenantId;
     if (typeof (req.session as any).save === "function") {
       await new Promise<void>((resolve, reject) => {
@@ -2011,7 +2013,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       .from(cpTenants)
       .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
       .leftJoin(cpTenantDatabases, eq(cpTenantDatabases.tenantId, cpTenants.id))
-      .where(and(eq(cpTenants.isActive, true), sql`${cpTenants.name} NOT LIKE '%(deleted)'`));
+      // Suspended tenants stay listed (the platform owner has to be able to find and reactivate
+      // them); only deleted/purged ones are hidden.
+      .where(sql`${cpTenants.name} NOT LIKE '%(deleted)' AND ${cpTenants.licenseStatus} IS DISTINCT FROM 'purged'`);
 
     const DASHBOARD_BATCH = 5;
     const perTenant: any[] = [];
@@ -2131,7 +2135,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           })
           .from(cpTenants)
           .leftJoin(cpTenantBranding, eq(cpTenantBranding.tenantId, cpTenants.id))
-          .where(eq(cpTenants.isActive, true));
+          // Suspended tenants stay in the switcher so the platform owner can reach them.
+          .where(sql`${cpTenants.name} NOT LIKE '%(deleted)' AND ${cpTenants.licenseStatus} IS DISTINCT FROM 'purged'`);
         return res.json(rows);
       }
       if (user.organizationId) {

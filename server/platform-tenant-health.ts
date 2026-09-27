@@ -5,7 +5,7 @@
  * by GET /api/platform/dashboard (server/routes.ts) and storage.getPlatformRevenueSummary
  * (already currency-grouped — never blend USD/ZAR/ZIG into one number).
  */
-import { and, count, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantSubscriptions, billingPlans, backupSyncRuns, tenantIntegrations } from "@shared/control-plane-schema";
 import { getDbForOrg } from "./tenant-db";
@@ -45,7 +45,8 @@ export async function buildTenantHealth(): Promise<{
   const tenantRows = await cpDb
     .select({ id: cpTenants.id, name: cpTenants.name, slug: cpTenants.slug, isActive: cpTenants.isActive, licenseStatus: cpTenants.licenseStatus })
     .from(cpTenants)
-    .where(eq(cpTenants.isActive, true));
+    // Suspended tenants are exactly the ones a health view needs to show; only purged ones go.
+    .where(sql`${cpTenants.licenseStatus} IS DISTINCT FROM 'purged'`);
   const activeTenants = tenantRows.filter((t) => !t.name.includes("(deleted)"));
   const tenantIds = activeTenants.map((t) => t.id);
 
