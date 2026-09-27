@@ -106,9 +106,9 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (deletionGraceDays !== undefined && (!Number.isInteger(deletionGraceDays) || deletionGraceDays < 1)) {
       return res.status(400).json({ message: "deletionGraceDays must be a positive integer" });
     }
-    const { hardDeleteEnabled } = req.body;
-    if (hardDeleteEnabled !== undefined && typeof hardDeleteEnabled !== "boolean") {
-      return res.status(400).json({ message: "hardDeleteEnabled must be a boolean" });
+    // Automatic deletion was removed: tenant data is only ever deleted by hand.
+    if (req.body.hardDeleteEnabled === true) {
+      return res.status(400).json({ message: "Automatic deletion is not supported. Tenant data can only be deleted by hand from the tenant console." });
     }
     if (trialDays !== undefined && (!Number.isInteger(trialDays) || trialDays < 0)) {
       return res.status(400).json({ message: "trialDays must be a non-negative integer" });
@@ -140,7 +140,6 @@ export function registerPlatformBillingRoutes(app: Express): void {
     if (defaultMonthlyMinimumUsd !== undefined) patch.defaultMonthlyMinimumUsd = defaultMonthlyMinimumUsd;
     if (defaultOutstandingFeeCapUsd !== undefined) patch.defaultOutstandingFeeCapUsd = defaultOutstandingFeeCapUsd;
     if (deletionGraceDays !== undefined) patch.deletionGraceDays = deletionGraceDays;
-    if (hardDeleteEnabled !== undefined) patch.hardDeleteEnabled = hardDeleteEnabled;
 
     if (existing) {
       await cpDb.update(billingSettings).set(patch).where(eq(billingSettings.id, "global"));
