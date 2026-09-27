@@ -142,7 +142,11 @@ async function runSweepBody(trigger: "scheduler" | "manual"): Promise<SweepResul
       if (sub.status === "past_due") {
         const graceDays = getEffectiveGraceDays(sub, settings);
         const graceDeadline = new Date(sub.currentPeriodEnd.getTime() + graceDays * 24 * 60 * 60 * 1000);
-        if (graceDeadline.getTime() <= now.getTime()) {
+        // A tenant the platform owner already suspended by hand stays that way: auto-suspending on
+        // top would overwrite their reason, loosen a full block into view-only, and start the
+        // deletion countdown — none of which the platform owner asked for.
+        const [tenantRow] = await cpDb.select({ isActive: cpTenants.isActive }).from(cpTenants).where(eq(cpTenants.id, sub.tenantId)).limit(1);
+        if (graceDeadline.getTime() <= now.getTime() && tenantRow?.isActive !== false) {
           await cpDb.update(tenantSubscriptions).set({ status: "suspended", updatedAt: now }).where(eq(tenantSubscriptions.id, sub.id));
           const viewOnlyUntil = new Date(now.getTime() + ((settings as any).deletionGraceDays ?? 30) * 24 * 60 * 60 * 1000);
           await cpDb.update(cpTenants).set({
