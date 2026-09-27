@@ -10,6 +10,32 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-27 — Suspended tenant's staff bounced silently; billing sweep would override a manual suspension
+
+**Symptom:** suspending a tenant (Falakhe, for non-payment) from the platform console gave its
+staff no explanation. Google login "succeeded", then the next request dropped the session and
+they landed back on the login page with no message. Separately, Falakhe was `past_due` with a
+grace deadline of 30 Sep, so the daily billing sweep would have re-suspended them on top of the
+manual suspension.
+
+**Root cause:** tenant suspension was only enforced in `deserializeUser` (`done(null, null)`),
+which cannot tell the user why. `suspendReason` was stored but never shown to the tenant. The
+sweep's auto-suspend step only checked subscription status, not whether the tenant was already
+manually suspended, so it would overwrite the reason, loosen a full block into view-only
+(`viewOnlyGraceUntil`), and start the deletion-countdown emails.
+
+**Fix:** `server/auth.ts`: the Google callback checks `resolveTenantAccess` before completing
+login and redirects to `/staff/login?error=<suspendReason, or "Pay your bill to regain access">`.
+`server/tenant-billing-sweep.ts`: auto-suspend skips tenants whose `isActive` is already false.
+
+**Verified:** typecheck, full test suite (792/792).
+
+**Lesson for next time:** an access denial made in `deserializeUser` is invisible to the user,
+so surface the reason at the login step. Automated state machines (the billing sweep) must
+check for a human override before acting on the same row.
+
+---
+
 ## 2026-09-26 — Dev server silently exited (code 1) whenever a page logged a React warning
 
 **Symptom:** while recording the product demo against a local dev server, the server died
