@@ -10,6 +10,28 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-27 — Suspending a tenant hid it from the platform owner entirely
+
+**Symptom:** after Falakhe was suspended, it disappeared from the platform dashboard's tenant
+list and the tenant switcher, so the platform owner couldn't find it to check or reactivate it.
+
+**Root cause:** four control-plane queries used `isActive = true` as a stand-in for "not
+deleted": `GET /api/organizations` (switcher), the control-plane dashboard, `buildTenantHealth`,
+and `POST /api/platform/switch-tenant`, which also refused to enter an inactive tenant. But
+`isActive = false` also means suspended.
+
+**Fix:** those queries now exclude only deleted tenants (name ends in "(deleted)") or purged
+ones (`licenseStatus = 'purged'`). Suspended tenants show a "Suspended" badge in the dashboard
+and switcher. Files: `server/routes.ts`, `server/platform-tenant-health.ts`,
+`client/src/pages/staff/dashboard.tsx`, `client/src/components/layout/staff-layout.tsx`.
+
+**Verified:** full build + 808/808 tests.
+
+**Lesson for next time:** `isActive` is overloaded (suspended vs deleted). Filter on the state
+you actually mean. Platform-owner views must never hide a tenant the owner has to act on.
+
+---
+
 ## 2026-09-27 — Suspended tenant's staff bounced silently; billing sweep would override a manual suspension
 
 **Symptom:** suspending a tenant (Falakhe, for non-payment) from the platform console gave its
