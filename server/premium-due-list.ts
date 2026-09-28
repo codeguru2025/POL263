@@ -79,6 +79,54 @@ export function buildDueList<T extends DueListInput>(
   return { due, undated };
 }
 
+export interface GraceInfo {
+  /** The day the lapse sweep will lapse it (the day after the grace end date) — null if unknown. */
+  lapseDate: string | null;
+  daysUntilLapse: number | null;
+  /** Days since the first unpaid day (0 if unknown). */
+  daysOverdue: number;
+  cyclesDue: number;
+  /** What it takes to bring the policy up to date and stop the lapse. */
+  amountDue: string;
+}
+
+/**
+ * Reports → Policies → Overdue / grace (Pre-lapse merged in): individual policies in grace with
+ * days overdue, days until lapse and the amount needed to keep them, soonest lapse first.
+ * `lapseWithinDays` narrows to policies lapsing within that many days (the old Pre-lapse tab).
+ * Group policies in grace are returned separately — the lapse sweep skips group policies, so one
+ * in grace is stuck there until someone moves it.
+ */
+export function buildGraceList<T extends DueListInput & { graceEndDate?: string | null }>(
+  rows: T[],
+  today: string,
+  lapseWithinDays?: number,
+): { individual: (T & GraceInfo)[]; groupStuck: T[] } {
+  const individual: (T & GraceInfo)[] = [];
+  const groupStuck: T[] = [];
+  for (const r of rows) {
+    if (r.status !== "grace") continue;
+    if (r.groupId) {
+      groupStuck.push(r);
+      continue;
+    }
+    const due = computeDue(r, today);
+    const lapseDate = r.graceEndDate ? addDaysIso(r.graceEndDate, 1) : null;
+    const daysUntilLapse = lapseDate ? daysBetweenIso(today, lapseDate) : null;
+    if (lapseWithinDays != null && (daysUntilLapse == null || daysUntilLapse > lapseWithinDays)) continue;
+    individual.push({
+      ...r,
+      lapseDate,
+      daysUntilLapse,
+      daysOverdue: due ? Math.max(0, -due.daysUntilDue) : 0,
+      cyclesDue: due?.cyclesDue ?? 1,
+      amountDue: due?.amountDue ?? fromCents(toCents(r.premiumAmount)),
+    });
+  }
+  individual.sort((a, b) => (a.daysUntilLapse ?? Infinity) - (b.daysUntilLapse ?? Infinity));
+  return { individual, groupStuck };
+}
+
 export interface GroupDueSummary {
   groupId: string;
   groupName: string;

@@ -56,7 +56,7 @@ import { resolveAuditRefs } from "./audit-ref-resolver";
 import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { summarizePolicyOverview } from "./policy-overview";
-import { buildDueList, summarizeGroups } from "./premium-due-list";
+import { buildDueList, buildGraceList, summarizeGroups } from "./premium-due-list";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14537,20 +14537,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await buildAwaitingPaymentsReport(user.organizationId, filters, req.query.withinDays));
   });
+  // Overdue / grace — Pre-lapse is the same list narrowed to "lapsing within N days". Capture
+  // from/to dates don't apply (it's about lapse timing); branch/product/agent do.
+  const buildGraceReport = async (orgId: string, filters: ReportFilters, lapseWithinRaw: unknown) => {
+    const parsed = parseInt(String(lapseWithinRaw ?? ""), 10);
+    const lapseWithinDays = Number.isFinite(parsed) && parsed >= 0 ? Math.min(90, parsed) : undefined;
+    const { fromDate: _from, toDate: _to, status: _status, statuses: _statuses, ...rest } = filters;
+    const [rows, today] = await Promise.all([
+      storage.getAllPoliciesReportByOrg(orgId, REPORT_EXPORT_MAX_ROWS, 0, { ...rest, status: "grace" }),
+      todayForOrg(orgId),
+    ]);
+    return { today, lapseWithinDays: lapseWithinDays ?? null, ...buildGraceList(rows, today, lapseWithinDays) };
+  };
   app.get("/api/reports/overdue", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" }));
+    return res.json(await buildGraceReport(user.organizationId, filters, req.query.lapseWithinDays));
   });
+  // Kept for old links/integrations: the pre-lapse view is now /overdue?lapseWithinDays=N.
   app.get("/api/reports/pre-lapse", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    // Grace policies whose grace period ends within the pre-lapse window (default 7 days) — the
-    // actionable retention list, distinct from /overdue which is every grace policy.
-    const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
-    const cutoff = Date.now() + windowDays * 86400000;
-    const graceRows = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "grace" });
-    return res.json(graceRows.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff));
+    return res.json(await buildGraceReport(user.organizationId, filters, req.query.withinDays ?? 7));
   });
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -15441,22 +15449,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "overdue":
         case "pre-lapse": {
-          let grace = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "grace" });
-          // "Pre-lapse" is the actionable subset: in grace AND grace ends within the pre-lapse
-          // window (default 7 days) — not a synonym for "overdue" (every grace policy).
-          if (reportType === "pre-lapse") {
-            const windowDays = Math.max(1, parseInt(String(req.query.withinDays)) || 7);
-            const cutoff = Date.now() + windowDays * 86400000;
-            grace = grace.filter((r: any) => r.graceEndDate && new Date(r.graceEndDate).getTime() <= cutoff);
-          }
-          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
-          currencyTotals = { Premium: {} };
-          rows = grace.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.policyCreatedAt];
-          });
+          const grace = await buildGraceReport(
+            user.organizationId, reportFilters,
+            reportType === "pre-lapse" ? (req.query.withinDays ?? 7) : req.query.lapseWithinDays,
+          );
+          headers = [
+            "Section", "Policy Number", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Group",
+            "Currency", "Premium", "Days Overdue", "Lapses On", "Days Until Lapse", "Cycles Due", "Amount To Keep Policy",
+            ...currencyHeaders("Amount To Keep Policy"), "Last Payment Date", "Last Payment Amount",
+          ];
+          currencyTotals = { "Amount To Keep Policy": {} };
+          const keepCentsByCurrency: Record<string, number> = {};
+          const lastPaidCols = (r: any) => (r.lastPaymentDate ? [r.lastPaymentDate, `${r.lastPaymentCurrency} ${r.lastPaymentAmount}`] : ["None recorded in POL263", ""]);
+          rows = [
+            ...grace.individual.map((r: any) => {
+              const c = (r.currency || "USD").toUpperCase();
+              keepCentsByCurrency[c] = (keepCentsByCurrency[c] || 0) + toCents(r.amountDue);
+              return [
+                "In grace", r.policyNumber, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+                r.productName ?? "", r.branchName ?? "", r.agentDisplayName || r.agentEmail || "", r.groupName ?? "",
+                r.currency, r.premiumAmount, String(r.daysOverdue), r.lapseDate ?? "", r.daysUntilLapse == null ? "" : String(r.daysUntilLapse),
+                String(r.cyclesDue), r.amountDue, ...currencyAmounts(r.amountDue, r.currency), ...lastPaidCols(r),
+              ];
+            }),
+            ...grace.groupStuck.map((r: any) => [
+              "Group policy stuck in grace", r.policyNumber, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+              r.productName ?? "", r.branchName ?? "", r.agentDisplayName || r.agentEmail || "", r.groupName ?? "",
+              r.currency, r.premiumAmount, "", "", "", "", "", ...CURRENCIES.map(() => ""), ...lastPaidCols(r),
+            ]),
+          ];
+          for (const [c, cents] of Object.entries(keepCentsByCurrency)) currencyTotals["Amount To Keep Policy"][c] = centsToNumber(cents);
           break;
         }
         case "lapsed": {

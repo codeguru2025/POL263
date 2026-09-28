@@ -27,6 +27,8 @@ export type ReportFiltersState = {
   excludeUnpaidMigrated?: boolean;
   /** Awaiting payments due list — how many days ahead to include. */
   withinDays?: number;
+  /** Overdue / grace — only policies lapsing within this many days (the old Pre-lapse view). */
+  lapseWithinDays?: number;
 };
 
 export function buildQuery(f: ReportFiltersState) {
@@ -40,6 +42,7 @@ export function buildQuery(f: ReportFiltersState) {
   if (f.status) p.set("status", f.status);
   if (f.excludeUnpaidMigrated) p.set("excludeUnpaidMigrated", "1");
   if (f.withinDays != null) p.set("withinDays", String(f.withinDays));
+  if (f.lapseWithinDays != null) p.set("lapseWithinDays", String(f.lapseWithinDays));
   const q = p.toString();
   return q ? "?" + q : "";
 }

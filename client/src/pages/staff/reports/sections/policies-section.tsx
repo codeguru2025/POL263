@@ -10,6 +10,8 @@ import type { ReportSectionBaseProps } from "../use-report-filters";
 import { PolicyOverviewPanel } from "./policy-overview-panel";
 import { ActivePoliciesPanel } from "./active-policies-panel";
 import { AwaitingPaymentsPanel } from "./awaiting-payments-panel";
+import { GracePoliciesPanel } from "./grace-policies-panel";
+import { isLegacyPreLapseLink } from "@/lib/staff-reports-nav";
 
 const POLICY_DETAILS_PAGE = 500;
 
@@ -100,35 +102,6 @@ function policyListColumns(dateHeader: string, dateAccessor: (p: any) => any): E
 
 const lapsedPoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
 
-function graceListColumns(): EdtColumn<any>[] {
-  return [
-    { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</span> },
-    { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
-    { id: "firstName", header: "First Name", accessor: (p) => p.clientFirstName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientFirstName || "—"}</span> },
-    { id: "surname", header: "Surname", accessor: (p) => p.clientLastName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientLastName || "—"}</span> },
-    { id: "nationalId", header: "National ID", accessor: (p) => p.clientNationalId || "", cell: (p) => <span className="font-mono text-sm">{p.clientNationalId || "—"}</span> },
-    { id: "phone", header: "Phone", accessor: (p) => p.clientPhone || "" },
-    { id: "product", header: "Product", accessor: (p) => p.productName || "" },
-    { id: "branch", header: "Branch", accessor: (p) => p.branchName || "" },
-    { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
-    { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</span> },
-    {
-      id: "graceEnd",
-      header: "Grace End",
-      accessor: (p) => p.graceEndDate ? new Date(p.graceEndDate) : "",
-      cell: (p) => <span className="text-sm whitespace-nowrap">{p.graceEndDate ? new Date(p.graceEndDate).toLocaleDateString() : "—"}</span>,
-    },
-    {
-      id: "captureDate",
-      header: "Capture Date",
-      accessor: (p) => p.policyCreatedAt ? new Date(p.policyCreatedAt) : "",
-      cell: (p) => <span className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</span>,
-    },
-  ];
-}
-
-const overduePoliciesColumns: EdtColumn<any>[] = graceListColumns().filter((c) => c.id !== "status");
-const preLapsePoliciesColumns = graceListColumns();
 
 const newJoiningsColumns: EdtColumn<any>[] = [
   { id: "franchiseBranchId", header: "Franchise_Branch_ID", accessor: (r) => r.Franchise_Branch_ID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Franchise_Branch_ID || "—"}</span> },
@@ -214,24 +187,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: overduePolicies = [], isLoading: loadingOverdue } = useQuery<any[]>({
-    queryKey: ["reports", "overdue", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/overdue" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("overduePolicies"),
-  });
-  const { data: preLapsePolicies = [], isLoading: loadingPreLapse } = useQuery<any[]>({
-    queryKey: ["reports", "pre-lapse", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/pre-lapse" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("preLapsePolicies"),
-  });
   const { data: lapsedPolicies = [], isLoading: loadingLapsed } = useQuery<any[]>({
     queryKey: ["reports", "lapsed", runKey, ...fk],
     queryFn: async () => {
@@ -330,33 +285,13 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="overdue">
-        <CardSection title="Overdue Payments (Grace)" icon={AlertCircle} description="Policies currently in grace period — payment overdue. Filter by branch, product, or agent." headerRight={<ExportButton reportType="overdue" filters={filters} />} flush>
-          {loadingOverdue ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={overduePoliciesColumns}
-              rows={overduePolicies}
-              getRowKey={(p) => p.policyId || p.id}
-              exportFilename="overdue-policies"
-              storageKey="reports-overdue"
-              emptyMessage="No policies match the filters."
-            />
-          )}
-        </CardSection>
-      </TabsContent>
-
-      <TabsContent value="pre-lapse">
-        <CardSection title="Pre-lapse (Grace period)" icon={AlertCircle} description="Policies in grace period at risk of lapsing. Filter by branch, product, or agent." headerRight={<ExportButton reportType="pre-lapse" filters={filters} />} flush>
-          {loadingPreLapse ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={preLapsePoliciesColumns}
-              rows={preLapsePolicies}
-              getRowKey={(p) => p.policyId || p.id}
-              exportFilename="pre-lapse-policies"
-              storageKey="reports-pre-lapse"
-              emptyMessage="No policies match the filters."
-            />
-          )}
-        </CardSection>
+        <GracePoliciesPanel
+          filters={filters}
+          runKey={runKey}
+          fk={fk}
+          enabled={need("overduePolicies")}
+          initialLapseWithinDays={typeof window !== "undefined" && isLegacyPreLapseLink(window.location.search) ? 7 : undefined}
+        />
       </TabsContent>
 
       <TabsContent value="lapsed">

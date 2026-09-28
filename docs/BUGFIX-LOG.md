@@ -10,6 +10,32 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-28 — Group policy stuck in grace forever (FLK00616); undated policies invisible to lapsing
+
+**Symptom:** FLK00616, a group (burial-society) policy, sat in grace with a 5 Oct grace end
+date although its group was paying. Separately, 156 individual Falakhe policies have no
+paid-up-to date (`current_cycle_end`).
+
+**Root cause:** the lapse sweep excludes group policies from both steps (active→grace and
+grace→lapsed) because group premiums are lump sums on the group, not per policy. FLK00616 went
+into grace before that exclusion existed, so it can never leave grace automatically. The
+sweep's active→grace step also requires `current_cycle_end IS NOT NULL`, so undated individual
+policies can never go into grace or lapse. 138 of the 156 are migrated policies whose
+paid-up-to date wasn't imported. 18 were paid in POL263 before roughly 22 June through a
+receipt path that didn't stamp a period.
+
+**Fix:** FLK00616 moved grace→active by hand on Augustus's instruction (status history + audit
+entry). The 156 undated policies are left as they are, per Augustus (option c): the new
+Awaiting Payments report lists them under "No due date on record", and the merged Overdue /
+grace report lists any group policy in grace under "Group policies stuck in grace".
+
+**Lesson for next time:** when a sweep gains an exclusion (`isNull(groupId)`), rows that
+already reached the excluded state before the change are orphaned. Check for and migrate
+them in the same change. And any sweep gated on `isNotNull(someDate)` silently ignores rows
+where that date is missing. Count them.
+
+---
+
 ## 2026-09-28 — Active policies report: float premium totals, UTC dates, no payment info
 
 **Symptom:** the Active policies CSV summed premium totals with `parseFloat` + (float drift on

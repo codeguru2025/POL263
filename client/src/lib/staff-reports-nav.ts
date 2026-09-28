@@ -21,7 +21,6 @@ export type ReportDatasetId =
   | "activePolicies"
   | "awaitingPayments"
   | "overduePolicies"
-  | "preLapsePolicies"
   | "lapsedPolicies"
   | "newJoinings"
   | "agentProductivity"
@@ -75,7 +74,6 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "active-policies", label: "Active", testId: "tab-active-policies" },
     { value: "awaiting-payments", label: "Awaiting payment", testId: "tab-awaiting-payments" },
     { value: "overdue", label: "Overdue / grace", testId: "tab-overdue" },
-    { value: "pre-lapse", label: "Pre-lapse", testId: "tab-pre-lapse" },
     { value: "lapsed", label: "Lapsed", testId: "tab-lapsed" },
     { value: "new-joinings", label: "New joinings", testId: "tab-new-joinings" },
     { value: "activations", label: "Activations", testId: "tab-activations" },
@@ -172,7 +170,6 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   "active-policies": ["activePolicies"],
   "awaiting-payments": ["awaitingPayments"],
   overdue: ["overduePolicies"],
-  "pre-lapse": ["preLapsePolicies"],
   lapsed: ["lapsedPolicies"],
   "new-joinings": ["newJoinings"],
   activations: ["activations"],
@@ -228,10 +225,21 @@ export function reportContextLabel(section: ReportSectionId, tabValue: string): 
   return `${SECTION_META[section].label} — ${tab?.label ?? tabValue}`;
 }
 
+/** Retired tabs → the tab that replaced them, so old links and bookmarks still land somewhere. */
+const TAB_ALIASES: Record<string, string> = {
+  "pre-lapse": "overdue", // merged into Overdue / grace ("Lapsing within 7 days" filter)
+};
+
+/** True when the URL asked for the retired Pre-lapse tab — the merged tab opens pre-filtered. */
+export function isLegacyPreLapseLink(search: string): boolean {
+  return new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("tab") === "pre-lapse";
+}
+
 export function parseReportSearchParams(search: string): { section: ReportSectionId; tab: string } {
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const rawSection = params.get("section") as ReportSectionId | null;
-  const rawTab = params.get("tab");
+  const requestedTab = params.get("tab");
+  const rawTab = requestedTab ? TAB_ALIASES[requestedTab] ?? requestedTab : null;
   const section = rawSection && ALL_SECTIONS.includes(rawSection) ? rawSection : "policies";
   const tabs = SECTION_TAB_DEFS[section].map((t) => t.value);
   const tab = rawTab && tabs.includes(rawTab) ? rawTab : SECTION_TAB_DEFS[section][0]!.value;

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { computeDue, buildDueList, summarizeGroups } from "../../server/premium-due-list";
+import { computeDue, buildDueList, buildGraceList, summarizeGroups } from "../../server/premium-due-list";
+import { parseReportSearchParams, isLegacyPreLapseLink } from "../../client/src/lib/staff-reports-nav";
 
 const TODAY = "2026-09-28";
 const p = (over: Record<string, any>) => ({ policyId: over.policyId ?? "p", status: "active", premiumAmount: "10.00", paymentSchedule: "monthly", paidUpTo: null, groupId: null, ...over });
@@ -35,6 +36,35 @@ describe("buildDueList", () => {
     ], TODAY, 7);
     expect(due.map((r) => r.policyId)).toEqual(["overdue", "soon"]);
     expect(undated.map((r) => r.policyId)).toEqual(["undated"]);
+  });
+});
+
+describe("buildGraceList", () => {
+  const rows = [
+    p({ policyId: "later", status: "grace", paidUpTo: "2026-09-10", graceEndDate: "2026-10-20" }),
+    p({ policyId: "soon", status: "grace", paidUpTo: "2026-08-20", graceEndDate: "2026-09-30", premiumAmount: "8.00" }),
+    p({ policyId: "group", status: "grace", groupId: "g1", graceEndDate: "2026-10-05" }),
+    p({ policyId: "active", paidUpTo: "2026-10-30" }),
+  ];
+
+  it("lists individual grace policies soonest lapse first, groups apart", () => {
+    const { individual, groupStuck } = buildGraceList(rows, TODAY);
+    expect(individual.map((r) => r.policyId)).toEqual(["soon", "later"]);
+    expect(groupStuck.map((r) => r.policyId)).toEqual(["group"]);
+    // Grace ends 30 Sep → lapses 1 Oct = 3 days away; due 21 Aug → 38 days overdue, 2 cycles.
+    expect(individual[0]).toMatchObject({ lapseDate: "2026-10-01", daysUntilLapse: 3, daysOverdue: 38, cyclesDue: 2, amountDue: "16.00" });
+  });
+
+  it("narrows to policies lapsing within N days (the old Pre-lapse tab)", () => {
+    expect(buildGraceList(rows, TODAY, 7).individual.map((r) => r.policyId)).toEqual(["soon"]);
+  });
+});
+
+describe("retired Pre-lapse tab", () => {
+  it("old links open the merged Overdue / grace tab, pre-filtered", () => {
+    expect(parseReportSearchParams("?section=policies&tab=pre-lapse")).toEqual({ section: "policies", tab: "overdue" });
+    expect(isLegacyPreLapseLink("?section=policies&tab=pre-lapse")).toBe(true);
+    expect(isLegacyPreLapseLink("?section=policies&tab=overdue")).toBe(false);
   });
 });
 
