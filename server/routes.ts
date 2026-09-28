@@ -22,7 +22,7 @@ import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock, tryXactLock, endXactLock } from "./advisory-lock";
-import { todayForOrg, localToUtcDate, getOrgTimezone } from "./date-utils";
+import { todayForOrg, localToUtcDate, getOrgTimezone, dateInTimezone } from "./date-utils";
 import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
 import { buildInsuranceContractSummary } from "./insurance-revenue";
 import { buildDailyReport } from "./daily-report";
@@ -57,6 +57,7 @@ import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./repor
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { summarizePolicyOverview } from "./policy-overview";
 import { buildDueList, buildGraceList, summarizeGroups } from "./premium-due-list";
+import { buildLapsedList } from "./lapsed-report";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14560,10 +14561,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await buildGraceReport(user.organizationId, filters, req.query.withinDays ?? 7));
   });
+  // Lapsed win-back list (screen + CSV). From/to filter the LAPSE date, not the capture date.
+  const buildLapsedReport = async (orgId: string, filters: ReportFilters) => {
+    const { fromDate, toDate, status: _status, statuses: _statuses, ...rest } = filters;
+    const [rows, today, tz] = await Promise.all([
+      storage.getAllPoliciesReportByOrg(orgId, REPORT_EXPORT_MAX_ROWS, 0, { ...rest, status: "lapsed" }),
+      todayForOrg(orgId),
+      getOrgTimezone(orgId),
+    ]);
+    const raw = await storage.getReinstatementInputs(orgId, rows.map((r: any) => r.policyId));
+    const inputs = new Map(Array.from(raw, ([id, v]) => [id, { ...v, lapsedOn: v.lapsedAt ? dateInTimezone(v.lapsedAt, tz) : null }]));
+    return { today, ...buildLapsedList(rows, inputs, today, { from: fromDate, to: toDate }) };
+  };
   app.get("/api/reports/lapsed", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "lapsed" }));
+    return res.json(await buildLapsedReport(user.organizationId, filters));
   });
   app.get("/api/reports/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     const user = req.user as any;
@@ -15482,15 +15495,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "lapsed": {
-          const lapsed = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "lapsed" });
-          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Inception Date", "Created"];
-          currencyTotals = { Premium: {} };
-          rows = lapsed.map((r: any) => {
+          const lapsed = await buildLapsedReport(user.organizationId, reportFilters);
+          headers = [
+            "Policy Number", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Group",
+            "Currency", "Premium", "Lapsed On", "Days Since Lapse", "Times Lapsed", "Cost To Reinstate", ...currencyHeaders("Cost To Reinstate"),
+            "Reinstatement Basis", "New Waiting Period", "Migrated", "Last Payment Date", "Last Payment Amount", "Inception Date",
+          ];
+          currencyTotals = { "Cost To Reinstate": {} };
+          const reinstateCentsByCurrency: Record<string, number> = {};
+          rows = lapsed.rows.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.inceptionDate || "", r.policyCreatedAt];
+            reinstateCentsByCurrency[c] = (reinstateCentsByCurrency[c] || 0) + toCents(r.reinstateCost);
+            return [
+              r.policyNumber, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+              r.productName ?? "", r.branchName ?? "", r.agentDisplayName || r.agentEmail || "", r.groupName ?? "",
+              r.currency, r.premiumAmount, r.lapsedOn ?? "", r.daysSinceLapse == null ? "" : String(r.daysSinceLapse), String(r.timesLapsed),
+              r.reinstateCost, ...currencyAmounts(r.reinstateCost, r.currency),
+              r.reinstateBasis === "arrears" ? "Must clear arrears" : "One premium",
+              r.newWaitingPeriod ? `Yes (${r.newWaitingPeriodDays} days)` : "No", r.isLegacy ? "Yes" : "No",
+              r.lastPaymentDate || "None recorded in POL263", r.lastPaymentDate ? `${r.lastPaymentCurrency} ${r.lastPaymentAmount}` : "",
+              r.inceptionDate || "",
+            ];
           });
+          for (const [c, cents] of Object.entries(reinstateCentsByCurrency)) currencyTotals["Cost To Reinstate"][c] = centsToNumber(cents);
           break;
         }
         case "agent-productivity": {

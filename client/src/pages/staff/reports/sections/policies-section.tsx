@@ -11,6 +11,7 @@ import { PolicyOverviewPanel } from "./policy-overview-panel";
 import { ActivePoliciesPanel } from "./active-policies-panel";
 import { AwaitingPaymentsPanel } from "./awaiting-payments-panel";
 import { GracePoliciesPanel } from "./grace-policies-panel";
+import { LapsedPoliciesPanel } from "./lapsed-policies-panel";
 import { isLegacyPreLapseLink } from "@/lib/staff-reports-nav";
 
 const POLICY_DETAILS_PAGE = 500;
@@ -69,38 +70,6 @@ const policyDetailsColumns: EdtColumn<any>[] = [
     ),
   },
 ];
-
-function policyListColumns(dateHeader: string, dateAccessor: (p: any) => any): EdtColumn<any>[] {
-  return [
-    { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.policyNumber}</span> },
-    { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
-    { id: "firstName", header: "First Name", accessor: (p) => p.clientFirstName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientFirstName || "—"}</span> },
-    { id: "surname", header: "Surname", accessor: (p) => p.clientLastName || "", cell: (p) => <span className="whitespace-nowrap">{p.clientLastName || "—"}</span> },
-    { id: "nationalId", header: "National ID", accessor: (p) => p.clientNationalId || "", cell: (p) => <span className="font-mono text-sm">{p.clientNationalId || "—"}</span> },
-    { id: "phone", header: "Phone", accessor: (p) => p.clientPhone || "" },
-    { id: "product", header: "Product", accessor: (p) => p.productName || "" },
-    { id: "branch", header: "Branch", accessor: (p) => p.branchName || "" },
-    { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
-    { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</span> },
-    {
-      id: "date",
-      header: dateHeader,
-      accessor: dateAccessor,
-      cell: (p) => {
-        const d = dateAccessor(p);
-        return <span className="text-sm whitespace-nowrap">{d ? d.toLocaleDateString() : "—"}</span>;
-      },
-    },
-    {
-      id: "captureDate",
-      header: "Capture Date",
-      accessor: (p) => p.policyCreatedAt ? new Date(p.policyCreatedAt) : "",
-      cell: (p) => <span className="text-sm text-muted-foreground whitespace-nowrap">{p.policyCreatedAt ? new Date(p.policyCreatedAt).toLocaleDateString() : "—"}</span>,
-    },
-  ];
-}
-
-const lapsedPoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
 
 
 const newJoiningsColumns: EdtColumn<any>[] = [
@@ -187,15 +156,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: lapsedPolicies = [], isLoading: loadingLapsed } = useQuery<any[]>({
-    queryKey: ["reports", "lapsed", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/lapsed" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("lapsedPolicies"),
-  });
   const { data: newJoinings = [], isLoading: loadingNewJoinings } = useQuery<any[]>({
     queryKey: ["reports", "new-joinings", runKey, ...fk],
     queryFn: async () => {
@@ -295,18 +255,7 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="lapsed">
-        <CardSection title="Lapsed Policies" icon={AlertCircle} description="Policies that have lapsed due to non-payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="lapsed" filters={filters} />} flush>
-          {loadingLapsed ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={lapsedPoliciesColumns}
-              rows={lapsedPolicies}
-              getRowKey={(p) => p.policyId || p.id}
-              exportFilename="lapsed-policies"
-              storageKey="reports-lapsed"
-              emptyMessage="No policies match the filters."
-            />
-          )}
-        </CardSection>
+        <LapsedPoliciesPanel filters={filters} runKey={runKey} fk={fk} enabled={need("lapsedPolicies")} />
       </TabsContent>
 
       <TabsContent value="new-joinings">

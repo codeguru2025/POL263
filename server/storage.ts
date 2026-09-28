@@ -455,6 +455,11 @@ export interface IStorage {
   getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
   getLastPaymentsForPolicies(orgId: string, items: { policyId: string; groupId: string | null }[]): Promise<Map<string, { date: string; amount: string; currency: string; source: "receipt" | "group" }>>;
   getLatestGroupReceipts(orgId: string, groupIds: string[]): Promise<Map<string, { date: string; amount: string; currency: string }>>;
+  getReinstatementInputs(orgId: string, policyIds: string[]): Promise<Map<string, {
+    totalPaid: string; walletBalance: string;
+    requiresArrears: boolean | null; newWaitingPeriod: boolean | null; waitingPeriodDays: number | null;
+    lapsedAt: Date | null; timesLapsed: number;
+  }>>;
   /** Records that are internally inconsistent and need a human — the data-integrity exception report. */
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
   /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
@@ -2131,6 +2136,63 @@ export class DatabaseStorage implements IStorage {
       if (result.has(i.policyId) || !i.groupId) continue;
       const g = latestByGroup.get(i.groupId);
       if (g) result.set(i.policyId, { ...g, source: "group" });
+    }
+    return result;
+  }
+
+  /**
+   * What the Lapsed report needs to price reinstatement the way applyPolicyStatusForClearedPayment
+   * actually decides it: cleared-payment total + credit wallet (for computePolicyOutstanding), the
+   * product version's reinstatement rules, plus when/how often the policy lapsed. Batched.
+   */
+  async getReinstatementInputs(orgId: string, policyIds: string[]): Promise<Map<string, {
+    totalPaid: string; walletBalance: string;
+    requiresArrears: boolean | null; newWaitingPeriod: boolean | null; waitingPeriodDays: number | null;
+    lapsedAt: Date | null; timesLapsed: number;
+  }>> {
+    const result = new Map<string, any>();
+    if (policyIds.length === 0) return result;
+    const tdb = await getDbForOrg(orgId);
+    const [paid, wallets, rules, lapses] = await Promise.all([
+      tdb.select({ policyId: paymentTransactions.policyId, total: sql<string>`coalesce(sum(${paymentTransactions.amount}), 0)::text` })
+        .from(paymentTransactions)
+        .where(and(inArray(paymentTransactions.policyId, policyIds), eq(paymentTransactions.status, "cleared")))
+        .groupBy(paymentTransactions.policyId),
+      tdb.select({ policyId: policyCreditBalances.policyId, balance: policyCreditBalances.balance })
+        .from(policyCreditBalances)
+        .where(and(eq(policyCreditBalances.organizationId, orgId), inArray(policyCreditBalances.policyId, policyIds))),
+      tdb.select({
+        policyId: policies.id,
+        requiresArrears: productVersions.reinstatementRequiresArrears,
+        newWaitingPeriod: productVersions.reinstatementNewWaitingPeriod,
+        waitingPeriodDays: productVersions.waitingPeriodDays,
+      })
+        .from(policies)
+        .leftJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+        .where(inArray(policies.id, policyIds)),
+      tdb.select({
+        policyId: policyStatusHistory.policyId,
+        lapsedAt: sql<Date>`max(${policyStatusHistory.createdAt})`,
+        times: sql<number>`count(*)::int`,
+      })
+        .from(policyStatusHistory)
+        .where(and(inArray(policyStatusHistory.policyId, policyIds), eq(policyStatusHistory.toStatus, "lapsed")))
+        .groupBy(policyStatusHistory.policyId),
+    ]);
+    const paidBy = new Map(paid.map((r) => [r.policyId, r.total]));
+    const walletBy = new Map(wallets.map((r) => [r.policyId, r.balance]));
+    const lapseBy = new Map(lapses.map((r) => [r.policyId, r]));
+    for (const r of rules) {
+      const l = lapseBy.get(r.policyId);
+      result.set(r.policyId, {
+        totalPaid: moneyString(paidBy.get(r.policyId) ?? 0),
+        walletBalance: moneyString(walletBy.get(r.policyId) ?? 0),
+        requiresArrears: r.requiresArrears ?? null,
+        newWaitingPeriod: r.newWaitingPeriod ?? null,
+        waitingPeriodDays: r.waitingPeriodDays ?? null,
+        lapsedAt: l?.lapsedAt ? new Date(l.lapsedAt) : null,
+        timesLapsed: l?.times ?? 0,
+      });
     }
     return result;
   }
