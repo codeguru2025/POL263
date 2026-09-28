@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
 import { getApiBase } from "@/lib/queryClient";
 import { CardSection, EnhancedDataTable, type EdtColumn, EmptyState, StatusBadge } from "@/components/ds";
 import { TabsContent } from "@/components/ui/tabs";
@@ -7,6 +8,8 @@ import { FileText, Loader2, CheckCircle, Clock, AlertCircle, UserCheck, RotateCc
 import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 import { PolicyOverviewPanel } from "./policy-overview-panel";
+
+const POLICY_DETAILS_PAGE = 500;
 
 const policyDetailsColumns: EdtColumn<any>[] = [
   { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
@@ -46,6 +49,7 @@ const policyDetailsColumns: EdtColumn<any>[] = [
   { id: "beneficiaryId", header: "Beneficiary ID", accessor: (r) => r.beneficiaryNationalId || "", cell: (r) => <span className="font-mono text-sm">{r.beneficiaryNationalId || "—"}</span> },
   { id: "beneficiaryPhone", header: "Beneficiary Phone", accessor: (r) => r.beneficiaryPhone || "" },
   { id: "beneficiaryRel", header: "Beneficiary Rel.", accessor: (r) => r.beneficiaryRelationship || "" },
+  { id: "dependentCount", header: "Dependants", accessor: (r) => r.dependents?.length ?? 0, cell: (r) => <span className="tabular-nums">{r.dependents?.length ?? 0}</span> },
   {
     id: "dependents",
     header: "Dependents",
@@ -191,15 +195,25 @@ const conversionsColumns = statusHistoryColumns("Converted at", (r) => r.convert
 const reinstatementsColumns = statusHistoryColumns("Reinstated date", (r) => r.reinstatedAt ? new Date(r.reinstatedAt) : "");
 
 export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: ReportSectionBaseProps) {
-  const { data: policyDetails = [], isLoading: loadingPolicyDetails } = useQuery<any[]>({
+  // Paged: the server sends X-Total-Count so the table can say "showing X of Y" and load the rest
+  // (it used to stop silently at 500 rows).
+  const policyDetailsQuery = useInfiniteQuery<{ rows: any[]; total: number }>({
     queryKey: ["reports", "policy-details", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/policy-details?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const res = await fetch(getApiBase() + `/api/reports/policy-details?limit=${POLICY_DETAILS_PAGE}&offset=${pageParam}` + qAppend, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load the policy report");
+      const rows = await res.json();
+      return { rows, total: Number(res.headers.get("X-Total-Count")) || rows.length };
+    },
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, p) => n + p.rows.length, 0);
+      return loaded < last.total && last.rows.length > 0 ? loaded : undefined;
     },
     enabled: need("policyDetails"),
   });
+  const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
+  const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
   const { data: activePolicies = [], isLoading: loadingActivePolicies } = useQuery<any[]>({
     queryKey: ["reports", "active-policies", runKey, ...fk],
     queryFn: async () => {
@@ -291,23 +305,36 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       <TabsContent value="policy-details">
         <CardSection
           title="Policy report (full details)"
-          description="Comprehensive policy report with client, product, beneficiary and dependent details. Use filters above to narrow results."
+          description="Every policy with its client, product, beneficiary and the dependants that policy covers today. Export gives each dependant their own columns. Use filters above to narrow results."
           icon={FileText}
           headerRight={<ExportButton reportType="policy-details" filters={filters} />}
           flush
         >
-          {loadingPolicyDetails ? (
+          {policyDetailsQuery.isLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : policyDetailsQuery.isError ? (
+            <p className="text-sm text-destructive py-6 text-center">{(policyDetailsQuery.error as Error).message}. Try again.</p>
           ) : (
-            <EnhancedDataTable
-              columns={policyDetailsColumns}
-              rows={policyDetails}
-              getRowKey={(r) => r.policyId}
-              rowTestId={(r) => `row-policy-detail-${r.policyId}`}
-              exportFilename="policy-details"
-              storageKey="reports-policy-details"
-              emptyMessage="No policies match the filters."
-            />
+            <>
+              <EnhancedDataTable
+                columns={policyDetailsColumns}
+                rows={policyDetails}
+                getRowKey={(r) => r.policyId}
+                rowTestId={(r) => `row-policy-detail-${r.policyId}`}
+                exportFilename="policy-details"
+                storageKey="reports-policy-details"
+                emptyMessage="No policies match the filters."
+              />
+              <div className="flex items-center justify-between gap-3 p-3 text-sm text-muted-foreground">
+                <span>Showing {policyDetails.length.toLocaleString()} of {policyDetailsTotal.toLocaleString()} policies</span>
+                {policyDetailsQuery.hasNextPage && (
+                  <Button variant="outline" size="sm" onClick={() => policyDetailsQuery.fetchNextPage()} disabled={policyDetailsQuery.isFetchingNextPage} data-testid="button-policy-details-load-more">
+                    {policyDetailsQuery.isFetchingNextPage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Load {Math.min(POLICY_DETAILS_PAGE, policyDetailsTotal - policyDetails.length).toLocaleString()} more
+                  </Button>
+                )}
+              </div>
+            </>
           )}
         </CardSection>
       </TabsContent>

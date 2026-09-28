@@ -10,6 +10,40 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-28 — Policy report (full details): blank Member No, phantom dependants, 500-row cap
+
+**Symptom:** in Reports → Policies → Policy report (full details) and its CSV, Member No was blank
+on every row. Dependants removed from a policy still showed as covered (95 at Falakhe). A client
+with two policies had every dependant listed on both (Sarah Sibanda: FLK00670 showed 12
+dependants who are only on FLK00769). The on-screen table stopped at 500 of 800 policies
+without saying so, and deleted policies were included.
+
+**Root cause:** (1) `getPolicyReportByOrg` looked up the member number with
+`role = "principal"`, but policy holders are written as `"policy_holder"`. Every other
+policy_members lookup in storage.ts already accepted both. (2) Dependants came from
+`getDependentsByClientsBatch`, i.e. every dependant the client ever registered, not the
+policy's own active `policy_members`. (3) The function built its own filter list, which had no
+`deletedAt` check and used UTC-midnight dates.
+
+**Fix:** `getPolicyReportByOrg` now uses the shared `policyListConditions` (deleted policies
+excluded, local-time dates), accepts both role names, and takes cover from the holder's own
+`policy_members.coverAmount` when set. New `storage.getPolicyDependentsBatch` returns each
+policy's active dependent members (adds member no. + cover), and new `countPoliciesByOrg`
+feeds an `X-Total-Count` header so the page can page through with Load more. The CSV gives each
+dependant their own column group and adds a Dependants count. Files: `server/storage.ts`,
+`server/routes.ts`, `client/src/pages/staff/reports/sections/policies-section.tsx`. The Finance
+report also uses `getPolicyReportByOrg`, so it picks up these fixes.
+
+**Verified:** against Falakhe's live DB: 800/800 rows, Member No on 795, 3,357 dependants
+(was 3,452), FLK00670 now 0 (was 12).
+
+**Lesson for next time:** when one lookup of an enum-ish column (`role`) disagrees with its
+siblings, grep for every use of that literal. And "the client's dependants" and "the
+dependants this policy covers" are different questions: covered = active `policy_members`
+rows with role `dependent`.
+
+---
+
 ## 2026-09-28 — Policy overview report counted only the newest 200 policies
 
 **Symptom:** Reports → Policies → Policy overview showed 200 policies for Falakhe (real: 800),

@@ -14462,15 +14462,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
-    const rows = await storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters);
-    const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter(Boolean)));
-    const depsByClientRaw = await storage.getDependentsByClientsBatch(clientIds, user.organizationId);
-    const depsByClient: Record<string, { firstName: string; lastName: string; nationalId: string | null; dateOfBirth: string | null; gender: string | null; relationship: string }[]> = {};
-    for (const cid of clientIds) {
-      depsByClient[cid] = (depsByClientRaw[cid] || []).map((d: any) => ({ firstName: d.firstName, lastName: d.lastName, nationalId: d.nationalId ?? null, dateOfBirth: d.dateOfBirth ?? null, gender: d.gender ?? null, relationship: d.relationship }));
-    }
-    const enriched = rows.map((r) => ({ ...r, dependents: depsByClient[r.clientId] || [] }));
-    return res.json(enriched);
+    const [rows, total] = await Promise.all([
+      storage.getPolicyReportByOrg(user.organizationId, limit, offset, filters),
+      storage.countPoliciesByOrg(user.organizationId, filters),
+    ]);
+    // Dependants per POLICY (its active members), not per client — see getPolicyDependentsBatch.
+    const depsByPolicy = await storage.getPolicyDependentsBatch(rows.map((r) => r.policyId), user.organizationId);
+    // Total matching rows, so the page can say "showing X of Y" and page through the rest.
+    res.set("X-Total-Count", String(total));
+    return res.json(rows.map((r) => ({ ...r, dependents: depsByPolicy[r.policyId] || [] })));
   });
 
   app.get("/api/reports/finance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -15084,12 +15084,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "policy-details": {
           const reportRows = await storage.getPolicyReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          const clientIds = Array.from(new Set(reportRows.map((r) => r.clientId).filter(Boolean)));
-          const depsByClient = await storage.getDependentsByClientsBatch(clientIds, user.organizationId);
-          const maxDeps = Math.max(1, ...Object.values(depsByClient).map((d) => d.length));
+          // One column group per dependant, sized to the policy with the most — each policy's own
+          // active members, so removed dependants and a client's other policy don't leak in.
+          const depsByPolicy = await storage.getPolicyDependentsBatch(reportRows.map((r) => r.policyId), user.organizationId);
+          const maxDeps = Math.max(1, ...Object.values(depsByPolicy).map((d) => d.length));
           const depHeaders: string[] = [];
           for (let i = 1; i <= maxDeps; i++) {
-            depHeaders.push(`Dependent ${i} Name`, `Dependent ${i} National ID`, `Dependent ${i} DOB`, `Dependent ${i} Gender`, `Dependent ${i} Relationship`);
+            depHeaders.push(
+              `Dependent ${i} Name`, `Dependent ${i} Member No`, `Dependent ${i} National ID`, `Dependent ${i} DOB`,
+              `Dependent ${i} Gender`, `Dependent ${i} Relationship`, `Dependent ${i} Cover`,
+            );
           }
           headers = [
             "Branch", "Member No", "Policy Number", "National ID", "First Name", "Surname", "Full Name",
@@ -15098,20 +15102,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             "Inception Date", "Effective Date", "Cover Date", "Premium", "Currency", "Payment Schedule",
             "Status", "Capture Date", "Current Cycle Start", "Current Cycle End", "Grace End",
             "Group", "Agent Name", "Agent Email",
-            "Beneficiary Name", "Beneficiary National ID", "Beneficiary Phone", "Beneficiary Relationship",
+            "Beneficiary Name", "Beneficiary National ID", "Beneficiary Phone", "Beneficiary Relationship", "Dependants",
             ...depHeaders,
           ];
           rows = reportRows.map((r: any) => {
-            const deps = depsByClient[r.clientId] || [];
+            const deps = depsByPolicy[r.policyId] || [];
             const depCols: string[] = [];
             for (let i = 0; i < maxDeps; i++) {
               const d = deps[i];
               depCols.push(
                 d ? `${d.firstName} ${d.lastName}` : "",
+                d?.memberNumber ?? "",
                 d?.nationalId ?? "",
                 d?.dateOfBirth ?? "",
                 d?.gender ?? "",
                 d?.relationship ?? "",
+                d?.coverAmount ?? "",
               );
             }
             return [
@@ -15125,7 +15131,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               r.status, r.policyCreatedAt ?? "", r.currentCycleStart ?? "", r.currentCycleEnd ?? "", r.graceEndDate ?? "",
               r.groupName ?? "", r.agentDisplayName ?? "", r.agentEmail ?? "",
               [r.beneficiaryFirstName, r.beneficiaryLastName].filter(Boolean).join(" ") || "",
-              r.beneficiaryNationalId ?? "", r.beneficiaryPhone ?? "", r.beneficiaryRelationship ?? "",
+              r.beneficiaryNationalId ?? "", r.beneficiaryPhone ?? "", r.beneficiaryRelationship ?? "", String(deps.length),
               ...depCols,
             ];
           });

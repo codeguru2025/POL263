@@ -241,7 +241,19 @@ export interface PolicyReportRow {
   beneficiaryNationalId: string | null;
   beneficiaryPhone: string | null;
   memberNumber: string | null;
-  dependents?: { firstName: string; lastName: string; nationalId: string | null; dateOfBirth: string | null; gender: string | null; relationship: string }[];
+  dependents?: PolicyReportDependent[];
+}
+
+export interface PolicyReportDependent {
+  firstName: string;
+  lastName: string;
+  nationalId: string | null;
+  dateOfBirth: string | null;
+  gender: string | null;
+  relationship: string;
+  memberNumber: string | null;
+  /** Age-rated products only — this dependant's own sum assured. */
+  coverAmount: string | null;
 }
 
 export interface FinanceReportRow extends PolicyReportRow {
@@ -431,6 +443,8 @@ export interface IStorage {
   updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined>;
   deleteAgeBandRateCard(id: string, orgId: string): Promise<void>;
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
+  countPoliciesByOrg(organizationId: string, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<number>;
+  getPolicyDependentsBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyReportDependent[]>>;
   getPolicyStatusSummary(organizationId: string, filters?: ReportFilters & { search?: string }): Promise<{ status: string; currency: string; paymentSchedule: string; count: number; premiumTotal: string }[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
@@ -1898,6 +1912,56 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(policies.createdAt)).limit(limit).offset(offset);
   }
 
+  /** How many policies match — same filters as getPoliciesByOrg / getPolicyReportByOrg. */
+  async countPoliciesByOrg(organizationId: string, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<number> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions = await this.policyListConditions(organizationId, filters);
+    const [row] = await tdb.select({ n: sql<number>`count(*)::int` }).from(policies).where(and(...conditions));
+    return row?.n ?? 0;
+  }
+
+  /** The dependants each policy actually covers right now: its active "dependent" policy_members
+   *  rows. Unlike getDependentsByClientsBatch (every dependant the client ever registered), this
+   *  leaves out dependants removed from the policy and keeps a client's two policies separate. */
+  async getPolicyDependentsBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyReportDependent[]>> {
+    const result: Record<string, PolicyReportDependent[]> = {};
+    if (policyIds.length === 0) return result;
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb
+      .select({
+        policyId: policyMembers.policyId,
+        memberNumber: policyMembers.memberNumber,
+        coverAmount: policyMembers.coverAmount,
+        firstName: dependents.firstName,
+        lastName: dependents.lastName,
+        nationalId: dependents.nationalId,
+        dateOfBirth: dependents.dateOfBirth,
+        gender: dependents.gender,
+        relationship: dependents.relationship,
+      })
+      .from(policyMembers)
+      .innerJoin(dependents, eq(policyMembers.dependentId, dependents.id))
+      .where(and(
+        inArray(policyMembers.policyId, policyIds),
+        eq(policyMembers.role, "dependent"),
+        eq(policyMembers.isActive, true),
+      ))
+      .orderBy(policyMembers.createdAt);
+    for (const r of rows) {
+      (result[r.policyId] ??= []).push({
+        firstName: r.firstName,
+        lastName: r.lastName,
+        nationalId: r.nationalId ?? null,
+        dateOfBirth: r.dateOfBirth ? String(r.dateOfBirth) : null,
+        gender: r.gender ?? null,
+        relationship: r.relationship,
+        memberNumber: r.memberNumber ?? null,
+        coverAmount: r.coverAmount != null ? String(r.coverAmount) : null,
+      });
+    }
+    return result;
+  }
+
   /** Policy counts and summed premium grouped by status × currency × schedule, over every policy
    *  matching the same filters as getPoliciesByOrg (no row limit). Any status filter is ignored on
    *  purpose — the overview's tiles always show every status side by side. */
@@ -1920,19 +1984,9 @@ export class DatabaseStorage implements IStorage {
 
   async getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]> {
     const tdb = await getDbForOrg(organizationId);
-    const conditions = [eq(policies.organizationId, organizationId)];
-    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.status) conditions.push(eq(policies.status, filters.status));
-    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else conditions.push(sql`1 = 0`);
-    }
+    // Same filter rules as the policy list/overview: excludes soft-deleted policies and cuts
+    // from/to at the tenant's local midnight.
+    const conditions = await this.policyListConditions(organizationId, filters);
     const rows = await tdb
       .select({
         policyId: policies.id,
@@ -1990,12 +2044,18 @@ export class DatabaseStorage implements IStorage {
 
     const policyIds = rows.map((r) => r.policyId);
     const memberMap: Record<string, string> = {};
+    // Age-rated products store each member's own sum assured on policy_members; when the policy
+    // holder has one it beats the product's single headline cover figure.
+    const holderCover: Record<string, string> = {};
     if (policyIds.length > 0) {
-      const members = await tdb.select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
+      // Policy holders are written as "policy_holder"; "principal" is the legacy name — accept both
+      // (matching every other policy_members lookup in this file).
+      const members = await tdb.select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber, coverAmount: policyMembers.coverAmount })
         .from(policyMembers)
-        .where(and(eq(policyMembers.role, "principal"), inArray(policyMembers.policyId, policyIds)));
+        .where(and(inArray(policyMembers.role, ["principal", "policy_holder"]), inArray(policyMembers.policyId, policyIds)));
       for (const m of members) {
         if (m.memberNumber && !memberMap[m.policyId]) memberMap[m.policyId] = m.memberNumber;
+        if (m.coverAmount != null && !holderCover[m.policyId]) holderCover[m.policyId] = String(m.coverAmount);
       }
     }
 
@@ -2012,7 +2072,7 @@ export class DatabaseStorage implements IStorage {
       clientDateOfBirth: r.clientDateOfBirth ? String(r.clientDateOfBirth) : null,
       groupName: r.groupName ?? null,
       gracePeriodDays: r.gracePeriodDays != null ? Number(r.gracePeriodDays) : null,
-      coverAmount: r.coverAmount ? String(r.coverAmount) : null,
+      coverAmount: holderCover[r.policyId] ?? (r.coverAmount ? String(r.coverAmount) : null),
       coverCurrency: r.coverCurrency ?? null,
       memberNumber: memberMap[r.policyId] ?? null,
     }));
