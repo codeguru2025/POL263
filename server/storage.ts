@@ -453,6 +453,8 @@ export interface IStorage {
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
   /** All-policies report: 45-column spreadsheet export matching the standard template. */
   getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
+  getLastPaymentsForPolicies(orgId: string, items: { policyId: string; groupId: string | null }[]): Promise<Map<string, { date: string; amount: string; currency: string; source: "receipt" | "group" }>>;
+  getLatestGroupReceipts(orgId: string, groupIds: string[]): Promise<Map<string, { date: string; amount: string; currency: string }>>;
   /** Records that are internally inconsistent and need a human — the data-integrity exception report. */
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
   /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
@@ -2104,7 +2106,7 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const policyIds = items.map((i) => i.policyId);
     const groupIds = Array.from(new Set(items.map((i) => i.groupId).filter((g): g is string => !!g)));
-    const [receipts, groupReceipts] = await Promise.all([
+    const [receipts, latestByGroup] = await Promise.all([
       tdb.selectDistinctOn([paymentReceipts.policyId], {
         policyId: paymentReceipts.policyId,
         issuedAt: paymentReceipts.issuedAt,
@@ -2118,27 +2120,36 @@ export class DatabaseStorage implements IStorage {
           or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
         ))
         .orderBy(paymentReceipts.policyId, desc(paymentReceipts.issuedAt)),
-      groupIds.length === 0 ? Promise.resolve([]) : tdb.selectDistinctOn([legacyGroupReceipts.groupId], {
-        groupId: legacyGroupReceipts.groupId,
-        paymentDate: legacyGroupReceipts.paymentDate,
-        amount: legacyGroupReceipts.amount,
-        currency: legacyGroupReceipts.currency,
-      })
-        .from(legacyGroupReceipts)
-        .where(inArray(legacyGroupReceipts.groupId, groupIds))
-        .orderBy(legacyGroupReceipts.groupId, desc(legacyGroupReceipts.paymentDate), desc(legacyGroupReceipts.recordedAt)),
+      this.getLatestGroupReceipts(orgId, groupIds),
     ]);
     const tz = await getOrgTimezone(orgId);
     for (const r of receipts) {
       if (!r.policyId) continue;
       result.set(r.policyId, { date: dateInTimezone(r.issuedAt, tz), amount: moneyString(r.amount), currency: r.currency, source: "receipt" });
     }
-    const byGroup = new Map(groupReceipts.map((g) => [g.groupId, g]));
     for (const i of items) {
       if (result.has(i.policyId) || !i.groupId) continue;
-      const g = byGroup.get(i.groupId);
-      if (g) result.set(i.policyId, { date: String(g.paymentDate), amount: moneyString(g.amount), currency: g.currency, source: "group" });
+      const g = latestByGroup.get(i.groupId);
+      if (g) result.set(i.policyId, { ...g, source: "group" });
     }
+    return result;
+  }
+
+  /** Each group's latest lump-sum group receipt (legacy_group_receipts), keyed by group id. */
+  async getLatestGroupReceipts(orgId: string, groupIds: string[]): Promise<Map<string, { date: string; amount: string; currency: string }>> {
+    const result = new Map<string, { date: string; amount: string; currency: string }>();
+    if (groupIds.length === 0) return result;
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.selectDistinctOn([legacyGroupReceipts.groupId], {
+      groupId: legacyGroupReceipts.groupId,
+      paymentDate: legacyGroupReceipts.paymentDate,
+      amount: legacyGroupReceipts.amount,
+      currency: legacyGroupReceipts.currency,
+    })
+      .from(legacyGroupReceipts)
+      .where(and(eq(legacyGroupReceipts.organizationId, orgId), inArray(legacyGroupReceipts.groupId, groupIds)))
+      .orderBy(legacyGroupReceipts.groupId, desc(legacyGroupReceipts.paymentDate), desc(legacyGroupReceipts.recordedAt));
+    for (const g of rows) result.set(g.groupId, { date: String(g.paymentDate).slice(0, 10), amount: moneyString(g.amount), currency: g.currency });
     return result;
   }
 
@@ -2245,6 +2256,7 @@ export class DatabaseStorage implements IStorage {
         branchName: r.branchName ?? "",
         productName: r.productName ?? "",
         groupName: r.groupName ?? "",
+        groupId: r.groupId ?? null,
         agentDisplayName: r.agentDisplayName ?? "",
         agentEmail: r.agentEmail ?? "",
         clientTitle: r.clientTitle ?? "",

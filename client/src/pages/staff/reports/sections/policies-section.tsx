@@ -9,6 +9,7 @@ import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 import { PolicyOverviewPanel } from "./policy-overview-panel";
 import { ActivePoliciesPanel } from "./active-policies-panel";
+import { AwaitingPaymentsPanel } from "./awaiting-payments-panel";
 
 const POLICY_DETAILS_PAGE = 500;
 
@@ -126,7 +127,6 @@ function graceListColumns(): EdtColumn<any>[] {
   ];
 }
 
-const awaitingPaymentsColumns = graceListColumns();
 const overduePoliciesColumns: EdtColumn<any>[] = graceListColumns().filter((c) => c.id !== "status");
 const preLapsePoliciesColumns = graceListColumns();
 
@@ -214,15 +214,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: awaitingPayments = [], isLoading: loadingAwaitingPayments } = useQuery<any[]>({
-    queryKey: ["reports", "awaiting-payments", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/awaiting-payments" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("awaitingPayments"),
-  });
   const { data: overduePolicies = [], isLoading: loadingOverdue } = useQuery<any[]>({
     queryKey: ["reports", "overdue", runKey, ...fk],
     queryFn: async () => {
@@ -335,18 +326,7 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="awaiting-payments">
-        <CardSection title="Policies Awaiting Payments" icon={Clock} description="Active and grace policies — awaiting premium payment. Filter by branch, product, or agent." headerRight={<ExportButton reportType="awaiting-payments" filters={filters} />} flush>
-          {loadingAwaitingPayments ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={awaitingPaymentsColumns}
-              rows={awaitingPayments}
-              getRowKey={(p) => p.policyId || p.id}
-              exportFilename="awaiting-payments"
-              storageKey="reports-awaiting-payments"
-              emptyMessage="No policies match the filters."
-            />
-          )}
-        </CardSection>
+        <AwaitingPaymentsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("awaitingPayments")} />
       </TabsContent>
 
       <TabsContent value="overdue">

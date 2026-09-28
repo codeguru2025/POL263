@@ -56,6 +56,7 @@ import { resolveAuditRefs } from "./audit-ref-resolver";
 import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { summarizePolicyOverview } from "./policy-overview";
+import { buildDueList, summarizeGroups } from "./premium-due-list";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14516,10 +14517,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
     return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, status: "active" }));
   });
+  // Premium due list (screen + CSV share this). Capture from/to dates don't apply — a due list is
+  // about when payment is due, not when the policy was captured; branch/product/agent still do.
+  const buildAwaitingPaymentsReport = async (orgId: string, filters: ReportFilters, withinDaysRaw: unknown) => {
+    const withinDays = Math.min(90, Math.max(0, parseInt(String(withinDaysRaw ?? ""), 10) || 7));
+    const { fromDate: _from, toDate: _to, status: _status, ...rest } = filters;
+    const [rows, today] = await Promise.all([
+      storage.getAllPoliciesReportByOrg(orgId, REPORT_EXPORT_MAX_ROWS, 0, { ...rest, statuses: ["active", "grace"] }),
+      todayForOrg(orgId),
+    ]);
+    const { due, undated } = buildDueList(rows, today, withinDays);
+    const groupIds = Array.from(new Set(rows.map((r: any) => r.groupId).filter(Boolean))) as string[];
+    const groups = summarizeGroups(rows, await storage.getLatestGroupReceipts(orgId, groupIds));
+    return { today, withinDays, due, undated, groups };
+  };
+
   app.get("/api/reports/awaiting-payments", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...filters, statuses: ["active", "grace"] }));
+    return res.json(await buildAwaitingPaymentsReport(user.organizationId, filters, req.query.withinDays));
   });
   app.get("/api/reports/overdue", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -15388,15 +15404,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "awaiting-payments": {
-          const awaiting = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, statuses: ["active", "grace"] });
-          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Grace End Date", "Created"];
-          currencyTotals = { Premium: {} };
-          rows = awaiting.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.graceEndDate || "", r.policyCreatedAt];
-          });
+          const report = await buildAwaitingPaymentsReport(user.organizationId, reportFilters, req.query.withinDays);
+          // One sheet, a Section column per bucket: the due list, then undated individual
+          // policies, then one line per group. Totals = amount due on the due list only.
+          headers = [
+            "Section", "Policy Number / Group", "Status", "First Name", "Surname", "Phone", "Product", "Agent",
+            "Currency", "Premium", "Schedule", "Paid Up To", "Due Date", "Days Overdue", "Cycles Due", "Amount Due",
+            ...currencyHeaders("Amount Due"), "Last Payment Date", "Last Payment Amount",
+          ];
+          currencyTotals = { "Amount Due": {} };
+          const dueCentsByCurrency: Record<string, number> = {};
+          const lastPaid = (r: any) => (r.lastPaymentDate ? [r.lastPaymentDate, `${r.lastPaymentCurrency} ${r.lastPaymentAmount}`] : ["None recorded in POL263", ""]);
+          const person = (r: any) => [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientPhone ?? "", r.productName ?? "", r.agentDisplayName || r.agentEmail || ""];
+          rows = [
+            ...report.due.map((r: any) => {
+              const c = (r.currency || "USD").toUpperCase();
+              dueCentsByCurrency[c] = (dueCentsByCurrency[c] || 0) + toCents(r.amountDue);
+              return [
+                r.daysUntilDue < 0 ? "Overdue" : "Due soon", ...person(r), r.currency, r.premiumAmount, r.paymentSchedule ?? "", r.paidUpTo || "",
+                r.dueDate, r.daysUntilDue < 0 ? String(-r.daysUntilDue) : "0", String(r.cyclesDue), r.amountDue,
+                ...currencyAmounts(r.amountDue, r.currency), ...lastPaid(r),
+              ];
+            }),
+            ...report.undated.map((r: any) => [
+              "No due date on record", ...person(r), r.currency, r.premiumAmount, r.paymentSchedule ?? "", "", "", "", "", "",
+              ...CURRENCIES.map(() => ""), ...lastPaid(r),
+            ]),
+            ...report.groups.map((g) => [
+              "Paid through group", g.groupName, `${g.policies} policies${g.inGrace ? `, ${g.inGrace} in grace` : ""}`, "", "", "", "", "",
+              Object.keys(g.monthlyPremium).join(" / "), Object.entries(g.monthlyPremium).map(([c, v]) => `${c} ${v}/mo`).join(" · "), "", "", "", "", "", "",
+              ...CURRENCIES.map(() => ""), g.lastPayment?.date ?? "No group payment recorded", g.lastPayment ? `${g.lastPayment.currency} ${g.lastPayment.amount}` : "",
+            ]),
+          ];
+          for (const [c, cents] of Object.entries(dueCentsByCurrency)) currencyTotals["Amount Due"][c] = centsToNumber(cents);
           break;
         }
         case "overdue":

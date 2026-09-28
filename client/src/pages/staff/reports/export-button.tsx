@@ -25,6 +25,8 @@ export type ReportFiltersState = {
   status?: string;
   /** Active policies report only — hide migrated policies with no POL263 payment. */
   excludeUnpaidMigrated?: boolean;
+  /** Awaiting payments due list — how many days ahead to include. */
+  withinDays?: number;
 };
 
 export function buildQuery(f: ReportFiltersState) {
@@ -37,6 +39,7 @@ export function buildQuery(f: ReportFiltersState) {
   if (f.agentId) p.set("agentId", f.agentId);
   if (f.status) p.set("status", f.status);
   if (f.excludeUnpaidMigrated) p.set("excludeUnpaidMigrated", "1");
+  if (f.withinDays != null) p.set("withinDays", String(f.withinDays));
   const q = p.toString();
   return q ? "?" + q : "";
 }
