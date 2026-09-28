@@ -13682,10 +13682,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const tdb = await getDbForOrg(user.organizationId);
-      const countRow = await tdb.execute(
-        sql`SELECT COUNT(*) AS cnt FROM legacy_group_receipts WHERE organization_id = ${user.organizationId}`
+      // Highest existing sequence + 1, not COUNT(*) + 1: with a count, deleting any receipt made the
+      // next one reuse the number of the newest existing receipt (LGR-…-250 twice).
+      const seqRow = await tdb.execute(
+        sql`SELECT COALESCE(MAX(CAST(substring(receipt_number from '([0-9]+)$') AS integer)), 0) AS seq
+            FROM legacy_group_receipts WHERE organization_id = ${user.organizationId}`
       );
-      const cnt = parseInt((countRow.rows ?? countRow)[0].cnt as string, 10) + 1;
+      const cnt = parseInt(String((seqRow.rows ?? seqRow)[0].seq ?? 0), 10) + 1;
       const datePart = paymentDate.replace(/-/g, "");
       const org = await storage.getOrganization(user.organizationId);
       const receiptPrefix = org?.legacyReceiptNumberPrefix || "LGR";
