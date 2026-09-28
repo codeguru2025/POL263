@@ -188,12 +188,13 @@ if (enableCsrf) {
     ["/api/auth/google", "/api/auth/google/callback", "/api/auth/mobile-exchange", "/api/auth/demo-login", "/api/auth/mfa/verify-login"],
     authLimiter
   );
-  app.use(["/api/agent-auth/login", "/api/agent-auth/mfa-verify"], authLimiter);
+  app.use(["/api/agent-auth/login", "/api/agent-auth/mfa-verify", "/api/agent-auth/forgot-password", "/api/agent-auth/reset-password"], authLimiter);
   app.use(
     [
       "/api/client-auth/login",
       "/api/client-auth/enroll",
       "/api/client-auth/claim",
+      "/api/client-auth/forgot-password",
       "/api/client-auth/reset-password",
       "/api/client-auth/change-password",
     ],

@@ -91,7 +91,7 @@ describe("SMS report export", () => {
     expect(Buffer.isBuffer(pdf)).toBe(true);
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(res.setHeader).toHaveBeenCalledWith("Content-Disposition", 'attachment; filename="r.pdf"');
-  });
+  }, 20_000); // 120-row PDF: well under 5s alone, but over it under full-suite load
 });
 
 describe("SMS retry sweep", () => {

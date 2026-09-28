@@ -19,6 +19,9 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants } from "@shared/control-plane-schema";
 import { validatePasswordPolicy } from "@shared/validation";
 import { auditLog, invalidateOtherSessions } from "./route-helpers";
+import { sendEmail, escapeHtml } from "./email-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
+import { createResetToken, verifyResetToken, isFingerprintCurrent, resetLinkOrigin } from "./password-reset";
 
 const PgSession = connectPgSimple(session);
 
@@ -1167,6 +1170,86 @@ export function setupAuth(app: Express) {
       structuredLog("error", "Agent login error", { error: errMsg, stack: (err as Error).stack?.split("\n")[0] });
       const detail = process.env.NODE_ENV !== "production" ? errMsg : undefined;
       return res.status(500).json({ message: "Internal server error", ...(detail && { detail }) });
+    }
+  });
+
+  // Agent self-service password reset: emails a single-use link (see server/password-reset.ts).
+  // Agents only — staff are Google-only and must never be handed a password this way. Same
+  // generic answer whatever happens, and delivery runs in the background so response timing
+  // doesn't reveal whether the email belongs to an agent.
+  app.post("/api/agent-auth/forgot-password", async (req: Request, res: Response) => {
+    const email = String(req.body?.email ?? "").toLowerCase().trim();
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    const origin = resetLinkOrigin(req);
+    (async () => {
+      if (!origin) {
+        structuredLog("error", "Agent forgot-password: APP_BASE_URL not set, cannot build reset link");
+        return;
+      }
+      // Registry lookup only — storage.updateUser (used to set the new password) writes the
+      // registry row, so a tenant-DB-only user couldn't be reset through this path anyway.
+      const user = await storage.getUserByEmail(email);
+      if (!user || !user.isActive || !user.organizationId || isPlatformOwnerEmail(user.email)) return;
+      const roles = await storage.getUserRoles(user.id, user.organizationId);
+      if (!roles.some((r) => r.name === "agent")) return;
+      const org = await storage.getOrganization(user.organizationId);
+      const token = createResetToken({ kind: "agent", id: user.id, orgId: user.organizationId, passwordHash: user.passwordHash });
+      const link = `${origin}/agent/reset-password?token=${encodeURIComponent(token)}`;
+      const name = user.displayName || "there";
+      const r = await sendEmail({
+        to: user.email,
+        fromName: org?.name || "POL263",
+        ...(await resolveTenantEmailOverrides(user.organizationId, org)),
+        subject: "Reset your agent password",
+        text: `Hi ${name},\n\nSomeone asked to reset the password for your agent account. To choose a new password, open this link within 30 minutes:\n\n${link}\n\nIf this wasn't you, ignore this email — your password stays the same.`,
+        html: `<p>Hi ${escapeHtml(name)},</p><p>Someone asked to reset the password for your agent account. To choose a new password, open this link within 30 minutes:</p><p><a href="${escapeHtml(link)}">Reset my password</a></p><p>If this wasn't you, ignore this email — your password stays the same.</p>`,
+      });
+      structuredLog("info", "AGENT_PASSWORD_RESET_REQUESTED", { userId: user.id, delivered: r.ok, ip: req.ip });
+    })().catch((err) => structuredLog("error", "Agent forgot-password delivery failed", { error: (err as Error).message }));
+    return res.json({ message: "If that email belongs to an agent account, we've sent it a reset link. It expires in 30 minutes." });
+  });
+
+  app.post("/api/agent-auth/reset-password", async (req: Request, res: Response) => {
+    const { token, newPassword } = req.body ?? {};
+    if (!token || !newPassword) return res.status(400).json({ message: "Reset link and new password are required" });
+    const policyError = validatePasswordPolicy(newPassword);
+    if (policyError) return res.status(400).json({ message: policyError });
+    const subject = verifyResetToken(token, "agent");
+    if (!subject) return res.status(400).json({ message: "This reset link is invalid or has expired. Please request a new one." });
+    try {
+      const user = await storage.getUser(subject.id);
+      if (!user || !user.isActive || user.organizationId !== subject.orgId || !isFingerprintCurrent(subject.fp, user.passwordHash)) {
+        return res.status(400).json({ message: "This reset link is invalid or has already been used. Please request a new one." });
+      }
+      const passwordHash = await argon2.hash(String(newPassword), { type: argon2.argon2id });
+      await storage.updateUser(user.id, { passwordHash, failedLoginAttempts: 0, lockedUntil: null } as any);
+      await storage.createAuditLog({
+        organizationId: user.organizationId,
+        actorEmail: user.email,
+        action: "RESET_PASSWORD",
+        entityType: "User",
+        entityId: user.id,
+        after: { method: "link" },
+        requestId: (req as any).requestId,
+        ipAddress: req.ip || null,
+      } as any).catch((err) => structuredLog("error", "Agent reset audit log failed", { error: (err as Error).message, userId: user.id }));
+      // Unauthenticated flow — no own session to keep; sign out every existing one.
+      await invalidateOtherSessions({ sessField: "passportUser", matchValue: user.id });
+      (async () => {
+        const org = await storage.getOrganization(user.organizationId!);
+        await sendEmail({
+          to: user.email,
+          fromName: org?.name || "POL263",
+          ...(await resolveTenantEmailOverrides(user.organizationId!, org)),
+          subject: "Your password was changed",
+          text: `Hi ${user.displayName || "there"},\n\nYour agent account password was just reset. If this wasn't you, contact your administrator immediately.`,
+          html: `<p>Hi ${escapeHtml(user.displayName || "there")},</p><p>Your agent account password was just reset. If this wasn't you, contact your administrator immediately.</p>`,
+        });
+      })().catch((err) => structuredLog("error", "Agent password-change notice failed", { error: (err as Error).message, userId: user.id }));
+      return res.json({ message: "Password reset successful" });
+    } catch (err) {
+      structuredLog("error", "Agent reset-password error", { error: (err as Error).message });
+      return res.status(500).json({ message: "Internal server error" });
     }
   });
 

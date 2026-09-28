@@ -51,6 +51,7 @@ const StaffLogin = lazy(() => retryLazy(() => import("@/pages/staff/login")));
 const StaffMfaVerify = lazy(() => retryLazy(() => import("@/pages/staff/mfa-verify")));
 const AgentLogin = lazy(() => retryLazy(() => import("@/pages/agent/login")));
 const AgentDownload = lazy(() => retryLazy(() => import("@/pages/agent/download")));
+const AgentResetPassword = lazy(() => retryLazy(() => import("@/pages/agent/reset-password")));
 const StaffDashboard = lazy(() => retryLazy(() => import("@/pages/staff/dashboard")));
 const AuditLogs = lazy(() => retryLazy(() => import("@/pages/staff/audit")));
 const StaffSettings = lazy(() => retryLazy(() => import("@/pages/staff/settings")));
@@ -195,6 +196,7 @@ function Router() {
       <SafeRoute path="/staff/mfa-verify" component={StaffMfaVerify} />
       <SafeRoute path="/agent/login" component={AgentLogin} />
       <SafeRoute path="/agent/download" component={AgentDownload} />
+      <SafeRoute path="/agent/reset-password" component={AgentResetPassword} />
       <SafeRoute path="/staff" component={StaffDashboard} />
       <SafeRoute path="/staff/" component={StaffDashboard} />
       <SafeRoute path="/staff/audit" component={AuditLogs} />

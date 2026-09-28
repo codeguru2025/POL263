@@ -34,7 +34,9 @@ vi.mock("../../server/customer-self-service", () => ({
   submitClientClaim: vi.fn(), setPolicyBeneficiary: vi.fn(),
   CustomerInputError: class extends Error {}, CustomerForbiddenError: class extends Error {},
 }));
-vi.mock("../../server/email-service", () => ({ sendEmail: vi.fn() }));
+vi.mock("../../server/email-service", () => ({ sendEmail: vi.fn(), escapeHtml: (v: unknown) => String(v ?? "") }));
+vi.mock("../../server/sms-service", () => ({ sendSms: vi.fn(), isSmsConfigured: vi.fn(async () => false) }));
+vi.mock("../../server/tenant-email-sending", () => ({ resolveTenantEmailOverrides: vi.fn(async () => ({})) }));
 vi.mock("../../server/module-gate", () => ({ hasModule: vi.fn(async () => false) }));
 vi.mock("../../server/route-helpers", () => ({ invalidateOtherSessions: vi.fn() }));
 vi.mock("../../server/notifications", () => ({ notifyClient: vi.fn(async () => undefined) }));

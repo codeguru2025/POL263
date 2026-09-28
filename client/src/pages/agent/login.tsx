@@ -191,7 +191,14 @@ export default function AgentLogin() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="agent-password">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="agent-password">Password</Label>
+                  <Link href="/agent/reset-password">
+                    <Button type="button" variant="link" className="p-0 h-auto text-xs text-muted-foreground" data-testid="link-agent-forgot-password">
+                      Forgot password?
+                    </Button>
+                  </Link>
+                </div>
                 <Input
                   id="agent-password"
                   type="password"

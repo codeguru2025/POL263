@@ -21,7 +21,10 @@ import { getDbForOrg } from "./tenant-db";
 import { logPolicyView } from "./policy-activity-log";
 import { enrichPoliciesWithBalance } from "./policy-balance";
 import { submitClientClaim, setPolicyBeneficiary, CustomerInputError, CustomerForbiddenError } from "./customer-self-service";
-import { sendEmail } from "./email-service";
+import { sendEmail, escapeHtml } from "./email-service";
+import { sendSms, isSmsConfigured } from "./sms-service";
+import { resolveTenantEmailOverrides } from "./tenant-email-sending";
+import { createResetToken, verifyResetToken, isFingerprintCurrent, createResetCode, verifyResetCode, resetLinkOrigin } from "./password-reset";
 import { hasModule } from "./module-gate";
 import { validatePasswordPolicy } from "@shared/validation";
 import { invalidateOtherSessions } from "./route-helpers";
@@ -641,59 +644,141 @@ export function setupClientAuth(app: Express) {
     }
   });
 
-  app.post("/api/client-auth/reset-password", async (req: Request, res: Response) => {
-    const { securityAnswer, newPassword } = req.body;
+  // Step 1 of the link/code reset: send a reset link (email) and/or a 6-digit code (SMS) to the
+  // contact details on file for the policy's client. Always answers the same generic message and
+  // delivers in the background, so the response says nothing about whether the policy exists or
+  // what contact details it has.
+  app.post("/api/client-auth/forgot-password", async (req: Request, res: Response) => {
     const policyNumber = normalizePolicyNumber(req.body.policyNumber);
-    if (!policyNumber || !securityAnswer || !newPassword) {
+    if (!policyNumber) return constantTimeResponse(res, 400, { message: "Policy number is required" });
+    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+    if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
+
+    const generic = {
+      message: "If that policy has an email address or phone number on file, we've sent it a reset link or code. It expires soon, so use it right away.",
+    };
+    const origin = resetLinkOrigin(req);
+    (async () => {
+      const orgs = await getCachedOrgIds();
+      if (orgs.length === 0) return;
+      const policy = await findAcrossOrgs(orgs, (orgId) => storage.getPolicyByNumber(policyNumber, orgId), "client-forgot");
+      if (!policy) return;
+      const client = await storage.getClient(policy.clientId, policy.organizationId);
+      // Only enrolled portal accounts — an un-enrolled client registers via /client/claim instead.
+      if (!client || !client.isEnrolled) return;
+      if (client.lockedUntil && new Date(client.lockedUntil) > new Date()) return;
+      const org = await storage.getOrganization(client.organizationId);
+      const orgName = org?.name || "POL263";
+      let delivered = false;
+
+      if (client.email && origin) {
+        const token = createResetToken({ kind: "client", id: client.id, orgId: client.organizationId, passwordHash: client.passwordHash });
+        const link = `${origin}/client/reset-password?token=${encodeURIComponent(token)}`;
+        const overrides = await resolveTenantEmailOverrides(client.organizationId, org);
+        const r = await sendEmail({
+          to: client.email,
+          fromName: orgName,
+          ...overrides,
+          subject: "Reset your password",
+          text: `Dear ${client.firstName},\n\nSomeone asked to reset the password for policy ${policyNumber}. To choose a new password, open this link within 30 minutes:\n\n${link}\n\nIf this wasn't you, ignore this email — your password stays the same.`,
+          html: `<p>Dear ${escapeHtml(client.firstName)},</p><p>Someone asked to reset the password for policy ${escapeHtml(policyNumber)}. To choose a new password, open this link within 30 minutes:</p><p><a href="${escapeHtml(link)}">Reset my password</a></p><p>If this wasn't you, ignore this email — your password stays the same.</p>`,
+        });
+        delivered = delivered || r.ok;
+      }
+      if (client.phone && (await isSmsConfigured(client.organizationId))) {
+        const code = createResetCode("client", client.id, client.passwordHash);
+        const { resolveSmsCountryCode } = await import("./notifications");
+        const r = await sendSms(client.organizationId, {
+          to: client.phone,
+          // "otp" so the code is redacted in the tenant's SMS log and routes on OTP-only senders.
+          kind: "otp",
+          message: `${orgName}: your password reset code is ${code}. It expires in 10 minutes. If you didn't ask for this, ignore it.`,
+          countryCode: await resolveSmsCountryCode(client.organizationId, policy.id),
+          meta: { source: "other", eventType: "password_reset", clientId: client.id },
+        });
+        delivered = delivered || r.ok;
+      }
+      structuredLog("info", "CLIENT_PASSWORD_RESET_REQUESTED", { clientId: client.id, delivered, ip: req.ip });
+    })().catch((err) => structuredLog("error", "Client forgot-password delivery failed", { error: (err as Error).message }));
+
+    return constantTimeResponse(res, 200, generic);
+  });
+
+  // Step 2 — sets the new password. Three ways to prove it's you: the emailed link `token`, the
+  // SMS `code` (+ policyNumber), or the original security-question answer (+ policyNumber).
+  app.post("/api/client-auth/reset-password", async (req: Request, res: Response) => {
+    const { securityAnswer, newPassword, token, code } = req.body;
+    const policyNumber = normalizePolicyNumber(req.body.policyNumber);
+    if (!newPassword || (!token && !(policyNumber && (securityAnswer || code)))) {
       return constantTimeResponse(res, 400, { message: "All fields are required" });
     }
     const resetPasswordError = validatePasswordPolicy(newPassword);
     if (resetPasswordError) {
       return constantTimeResponse(res, 400, { message: resetPasswordError });
     }
-    const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
-    if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
+    // The link itself proves inbox access and is unguessable; Turnstile guards the guessable
+    // proofs (security answer / 6-digit code).
+    if (!token) {
+      const turnstile = await verifyTurnstileToken(req.body.turnstileToken, req.ip);
+      if (!turnstile.ok) return constantTimeResponse(res, 400, { message: turnstile.reason });
+    }
 
     try {
-      const orgs = await getCachedOrgIds();
-      if (orgs.length === 0) {
-        return constantTimeResponse(res, 400, { message: "Invalid request" });
-      }
+      let client: Awaited<ReturnType<typeof storage.getClient>>;
+      let method: "link" | "sms_code" | "security_question";
 
-      const policy = await findAcrossOrgs(orgs, (orgId) => storage.getPolicyByNumber(policyNumber, orgId), "client-reset");
-      if (!policy) {
-        return constantTimeResponse(res, 400, { message: "Invalid request" });
-      }
-
-      const client = await storage.getClient(policy.clientId, policy.organizationId);
-      if (!client || !client.securityAnswerHash) {
-        return constantTimeResponse(res, 400, { message: "Invalid request" });
-      }
-
-      if (client.lockedUntil && new Date(client.lockedUntil) > new Date()) {
-        return constantTimeResponse(res, 429, { message: "Account temporarily locked. Try again later." });
-      }
-
-      const normalizedAnswer = securityAnswer.trim().toLowerCase();
-      const answerOk = await verifySecret(normalizedAnswer, client.securityAnswerHash);
-
-      if (!answerOk) {
-        const attempts = (client.failedLoginAttempts || 0) + 1;
-        const updateData: any = { failedLoginAttempts: attempts };
-        if (attempts >= LOCKOUT_THRESHOLD) {
-          updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+      if (token) {
+        const subject = verifyResetToken(token, "client");
+        if (!subject) return constantTimeResponse(res, 400, { message: "This reset link is invalid or has expired. Please request a new one." });
+        client = await storage.getClient(subject.id, subject.orgId);
+        if (!client || !client.isEnrolled || !isFingerprintCurrent(subject.fp, client.passwordHash)) {
+          return constantTimeResponse(res, 400, { message: "This reset link is invalid or has already been used. Please request a new one." });
         }
-        await storage.updateClient(client.id, updateData, client.organizationId);
-        structuredLog("warn", "CLIENT_RESET_PASSWORD_FAILED", { clientId: client.id, ip: req.ip, attempt: attempts, locked: attempts >= LOCKOUT_THRESHOLD });
-        return constantTimeResponse(res, 400, { message: "Invalid request" });
+        method = "link";
+      } else {
+        const orgs = await getCachedOrgIds();
+        if (orgs.length === 0) {
+          return constantTimeResponse(res, 400, { message: "Invalid request" });
+        }
+
+        const policy = await findAcrossOrgs(orgs, (orgId) => storage.getPolicyByNumber(policyNumber, orgId), "client-reset");
+        if (!policy) {
+          return constantTimeResponse(res, 400, { message: "Invalid request" });
+        }
+
+        client = await storage.getClient(policy.clientId, policy.organizationId);
+        if (!client || (code ? !client.isEnrolled : !client.securityAnswerHash)) {
+          return constantTimeResponse(res, 400, { message: "Invalid request" });
+        }
+
+        if (client.lockedUntil && new Date(client.lockedUntil) > new Date()) {
+          return constantTimeResponse(res, 429, { message: "Account temporarily locked. Try again later." });
+        }
+
+        const proofOk = code
+          ? verifyResetCode("client", client.id, client.passwordHash, code)
+          : await verifySecret(String(securityAnswer).trim().toLowerCase(), client.securityAnswerHash!);
+
+        if (!proofOk) {
+          const attempts = (client.failedLoginAttempts || 0) + 1;
+          const updateData: any = { failedLoginAttempts: attempts };
+          if (attempts >= LOCKOUT_THRESHOLD) {
+            updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+          }
+          await storage.updateClient(client.id, updateData, client.organizationId);
+          structuredLog("warn", "CLIENT_RESET_PASSWORD_FAILED", { clientId: client.id, ip: req.ip, attempt: attempts, locked: attempts >= LOCKOUT_THRESHOLD, method: code ? "sms_code" : "security_question" });
+          return constantTimeResponse(res, 400, { message: code ? "That code is wrong or has expired." : "Invalid request" });
+        }
+        method = code ? "sms_code" : "security_question";
       }
+      const resetClient = client!;
 
       const newHash = await hashSecret(newPassword);
-      await storage.updateClient(client.id, {
+      await storage.updateClient(resetClient.id, {
         passwordHash: newHash,
         failedLoginAttempts: 0,
         lockedUntil: null,
-      }, client.organizationId);
+      }, resetClient.organizationId);
       // Fire-and-forget, same reasoning as the notification email below: the password change has
       // already succeeded, so neither of these should turn a successful reset into a slower (or
       // failed) response. Not awaiting also matters for a subtler reason here specifically —
@@ -703,37 +788,38 @@ export function setupClientAuth(app: Express) {
       // reopening exactly the timing side-channel constantTimeResponse exists to close.
       (async () => {
         await storage.createAuditLog({
-          organizationId: client.organizationId,
-          actorEmail: client.email,
+          organizationId: resetClient.organizationId,
+          actorEmail: resetClient.email,
           action: "RESET_PASSWORD",
           entityType: "Client",
-          entityId: client.id,
+          entityId: resetClient.id,
+          after: { method },
           requestId: (req as any).requestId,
           ipAddress: req.ip || (req.socket as any)?.remoteAddress || null,
         } as any);
         // No session of the requester's own to preserve (this flow is unauthenticated) — kill
         // every existing session for this client, including any attacker who reset the password
         // hoping to ride an already-open legitimate session.
-        await invalidateOtherSessions({ sessField: "clientId", matchValue: client.id });
-      })().catch((err) => structuredLog("error", "Post-reset audit log / session invalidation failed", { error: (err as Error).message, clientId: client.id }));
+        await invalidateOtherSessions({ sessField: "clientId", matchValue: resetClient.id });
+      })().catch((err) => structuredLog("error", "Post-reset audit log / session invalidation failed", { error: (err as Error).message, clientId: resetClient.id }));
 
       // Security notice, not an admin-editable template — sent directly so an org admin
       // can't disable or reword the one signal a client gets if someone else reset their
-      // password via the security-question flow. Best-effort: the password change above has
-      // already succeeded, so a failure here (including hasModule() itself throwing on a
-      // transient control-plane DB hiccup — it isn't defensively wrapped internally) must
-      // never turn a successful reset into a 500 for the caller.
+      // password. Best-effort: the password change above has already succeeded, so a failure
+      // here (including hasModule() itself throwing on a transient control-plane DB hiccup —
+      // it isn't defensively wrapped internally) must never turn a successful reset into a 500
+      // for the caller.
       (async () => {
-        if (!client.email || !(await hasModule(client.organizationId, "email_notifications"))) return;
-        const org = await storage.getOrganization(client.organizationId);
+        if (!resetClient.email || !(await hasModule(resetClient.organizationId, "email_notifications"))) return;
+        const org = await storage.getOrganization(resetClient.organizationId);
         await sendEmail({
-          to: client.email,
+          to: resetClient.email,
           fromName: org?.name || "POL263",
           subject: "Your password was changed",
-          text: `Dear ${client.firstName},\n\nYour account password was just reset. If this wasn't you, please contact us immediately.`,
-          html: `<p>Dear ${client.firstName},</p><p>Your account password was just reset. If this wasn't you, please contact us immediately.</p>`,
+          text: `Dear ${resetClient.firstName},\n\nYour account password was just reset. If this wasn't you, please contact us immediately.`,
+          html: `<p>Dear ${resetClient.firstName},</p><p>Your account password was just reset. If this wasn't you, please contact us immediately.</p>`,
         });
-      })().catch((err) => structuredLog("error", "Password-change notice email failed", { error: (err as Error).message, clientId: client.id }));
+      })().catch((err) => structuredLog("error", "Password-change notice email failed", { error: (err as Error).message, clientId: resetClient.id }));
 
       return constantTimeResponse(res, 200, { message: "Password reset successful" });
     } catch (err) {
