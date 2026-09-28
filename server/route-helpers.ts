@@ -152,17 +152,6 @@ function ageAt(dateOfBirth: string | null | undefined, asOf = new Date()): numbe
   return age;
 }
 
-function monthlyToScheduleFactor(paymentSchedule: string): number {
-  if (paymentSchedule === "weekly") return 12 / 52;
-  if (paymentSchedule === "biweekly") return 12 / 26;
-  if (paymentSchedule === "quarterly") return 3;
-  // "yearly" is the value actually used elsewhere (policies.paymentSchedule, cycleDays() in
-  // policy-status-on-payment.ts) — "annually" was never a real value anywhere else, so it
-  // silently fell through to the factor-of-1 default, undercharging a yearly surcharge by 12x.
-  if (paymentSchedule === "yearly" || paymentSchedule === "annually") return 12;
-  return 1;
-}
-
 /**
  * Rate for one additional (chargeable) member, by age band. "Child" uses this product
  * version's own dependentMaxAge cutoff; the rest split into 21-65 / 66-84 / 85+.
@@ -569,6 +558,7 @@ export async function resolvePolicyWaitingPeriodEndDate(policy: any, orgId: stri
 // policy-status-on-payment.ts can reuse the same arrears formula without a circular import
 // through storage.ts. Re-exported here so existing `from "./route-helpers"` imports keep working.
 import { periodDaysForSchedule, periodsBetween, computePolicyOutstanding } from "./policy-outstanding";
+import { monthlyToScheduleFactor } from "./policy-overview";
 export { periodDaysForSchedule, periodsBetween, computePolicyOutstanding };
 export type { OutstandingResult } from "./policy-outstanding";
 

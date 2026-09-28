@@ -72,6 +72,32 @@ export async function getOrgTimezone(orgId: string): Promise<string> {
   return tz;
 }
 
+/** The day after a "YYYY-MM-DD" date, as "YYYY-MM-DD" (pure calendar arithmetic, no timezone). */
+function nextCalendarDay(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * A report's inclusive from/to calendar dates as UTC instants for filtering a timestamp column:
+ * `start` = local midnight at the start of `fromDate`, `endExclusive` = local midnight at the start
+ * of the day AFTER `toDate` (use `>= start` and `< endExclusive`). Replaces the old
+ * `fromDate + "T00:00:00.000Z"` pattern, which cut days at UTC midnight — 02:00 in Harare — so
+ * anything captured between local midnight and 02:00 landed on the previous day.
+ */
+export function dayRangeInTimezone(fromDate: string | undefined, toDate: string | undefined, tz: string): { start?: Date; endExclusive?: Date } {
+  const valid = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  return {
+    start: valid(fromDate) ? localToUtcDate(fromDate!, "00:00", tz) : undefined,
+    endExclusive: valid(toDate) ? localToUtcDate(nextCalendarDay(toDate!), "00:00", tz) : undefined,
+  };
+}
+
+export async function dayRangeForOrg(orgId: string, fromDate?: string, toDate?: string): Promise<{ start?: Date; endExclusive?: Date }> {
+  if (!fromDate && !toDate) return {};
+  return dayRangeInTimezone(fromDate, toDate, await getOrgTimezone(orgId));
+}
+
 /** Convenience: today's date in an org's configured timezone, as "YYYY-MM-DD". */
 export async function todayForOrg(orgId: string): Promise<string> {
   return todayInTimezone(await getOrgTimezone(orgId));

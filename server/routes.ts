@@ -55,6 +55,7 @@ import { requireModule, hasModule, ALL_KNOWN_MODULES, invalidateTenantModuleCach
 import { resolveAuditRefs } from "./audit-ref-resolver";
 import { REPORT_EXPORT_PERMISSIONS, csvEscape, reportExportLabel } from "./report-export";
 import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
+import { summarizePolicyOverview } from "./policy-overview";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -3847,6 +3848,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     let list = await storage.getPoliciesByOrg(user.organizationId, limit, offset, hasFilter ? filters : undefined);
     list = await batchRecalculatePolicyPremiums(list, user.organizationId);
     return res.json(list);
+  });
+
+  // Reports → Policies → Policy overview. The status tiles and monthly premium are computed in the
+  // database over EVERY matching policy (previously the page counted just the first 200 rows it
+  // had fetched); the table pages through the same filter set. `status` narrows the table only.
+  app.get("/api/reports/policy-overview", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
+    res.set("Cache-Control", "private, no-cache");
+    const user = req.user as any;
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
+    const filters: ReportFilters & { search?: string } = {};
+    for (const key of ["fromDate", "toDate", "branchId", "productId"] as const) {
+      const v = str(req.query[key]);
+      if (v) filters[key] = v;
+    }
+    const userRoles = await storage.getUserRoles(user.id, user.organizationId);
+    if (isAgentScoped(userRoles)) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    else if (str(req.query.agentId)) filters.agentId = str(req.query.agentId);
+    const status = str(req.query.status);
+
+    const [summaryRows, page] = await Promise.all([
+      storage.getPolicyStatusSummary(user.organizationId, filters),
+      storage.getPoliciesByOrg(user.organizationId, limit, offset, status ? { ...filters, status } : filters),
+    ]);
+    const policiesPage = await batchRecalculatePolicyPremiums(page, user.organizationId);
+    const clientIds = Array.from(new Set(policiesPage.map((p: any) => p.clientId).filter(Boolean)));
+    const agentIds = Array.from(new Set(policiesPage.map((p: any) => p.agentId).filter(Boolean)));
+    const [clientList, agentList, versions] = await Promise.all([
+      storage.getClientsByIds(clientIds, user.organizationId),
+      storage.getUsersByIds(agentIds, user.organizationId),
+      storage.getAllProductVersions(user.organizationId),
+    ]);
+    const clientsById = new Map(clientList.map((c) => [c.id, c]));
+    const agentsById = new Map(agentList.map((a) => [a.id, a]));
+    const productByVersion = new Map(versions.map((v) => [v.id, v.productName ?? ""]));
+    const summary = summarizePolicyOverview(summaryRows);
+    return res.json({
+      summary,
+      // Rows the table can page through — the status tile total when a status is picked.
+      matchingTotal: status ? summary.counts[status] ?? 0 : summary.total,
+      rows: policiesPage.map((p: any) => {
+        const c = clientsById.get(p.clientId);
+        const a = p.agentId ? agentsById.get(p.agentId) : undefined;
+        return {
+          id: p.id,
+          policyNumber: p.policyNumber,
+          status: p.status,
+          clientName: c ? [c.firstName, c.lastName].filter(Boolean).join(" ") : "",
+          productName: productByVersion.get(p.productVersionId) ?? "",
+          agentName: a ? a.displayName || a.email : "",
+          currency: p.currency,
+          premiumAmount: p.premiumAmount,
+          paymentSchedule: p.paymentSchedule,
+          createdAt: p.createdAt,
+        };
+      }),
+    });
   });
 
   app.get("/api/policies/:id", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {

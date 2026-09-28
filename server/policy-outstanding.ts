@@ -9,7 +9,7 @@
 import { toCents, centsToNumber } from "@shared/money";
 
 // "yearly" is the value actually used for policies.paymentSchedule everywhere else (see
-// monthlyToScheduleFactor in route-helpers.ts) — this map used "annually" instead, so
+// monthlyToScheduleFactor in policy-overview.ts) — this map used "annually" instead, so
 // periodDaysForSchedule never matched a yearly policy's real schedule value and silently fell
 // through to the 30.44-day monthly default via the `??` below, inflating a yearly policy's
 // computed arrears by ~12x (computePolicyOutstanding and periodsBetween both depend on this).

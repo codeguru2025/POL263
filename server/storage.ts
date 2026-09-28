@@ -11,7 +11,7 @@ import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
-import { todayForOrg } from "./date-utils";
+import { todayForOrg, dayRangeForOrg } from "./date-utils";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
@@ -431,6 +431,7 @@ export interface IStorage {
   updateAgeBandRateCard(id: string, data: Partial<InsertAgeBandRateCard>, orgId: string): Promise<AgeBandRateCard | undefined>;
   deleteAgeBandRateCard(id: string, orgId: string): Promise<void>;
   getPoliciesByOrg(organizationId: string, limit?: number, offset?: number, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]>;
+  getPolicyStatusSummary(organizationId: string, filters?: ReportFilters & { search?: string }): Promise<{ status: string; currency: string; paymentSchedule: string; count: number; premiumTotal: string }[]>;
   /** Policy report rows with client, product, branch, agent details for reports/export. */
   getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]>;
   /** All-policies report: 45-column spreadsheet export matching the standard template. */
@@ -1857,11 +1858,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ─── Policies ──────────────────────────────────────────────
-  async getPoliciesByOrg(organizationId: string, limit = 50, offset = 0, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]> {
+  /** WHERE conditions shared by the policy list and its status summary, so the counts on the
+   *  Policy overview report always describe exactly the rows the table can page through. Capture
+   *  dates are cut at the tenant's local midnight (dayRangeForOrg), not UTC midnight. */
+  private async policyListConditions(organizationId: string, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<SQL[]> {
     const tdb = await getDbForOrg(organizationId);
-    const conditions = [eq(policies.organizationId, organizationId), isNull(policies.deletedAt)];
-    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    const conditions: SQL[] = [eq(policies.organizationId, organizationId), isNull(policies.deletedAt)];
+    const { start, endExclusive } = await dayRangeForOrg(organizationId, filters?.fromDate, filters?.toDate);
+    if (start) conditions.push(gte(policies.createdAt, start));
+    if (endExclusive) conditions.push(lt(policies.createdAt, endExclusive));
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
     if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
     if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
@@ -1883,8 +1888,34 @@ export class DatabaseStorage implements IStorage {
           : ilike(policies.policyNumber, q)
       );
     }
+    return conditions;
+  }
+
+  async getPoliciesByOrg(organizationId: string, limit = 50, offset = 0, filters?: ReportFilters & { status?: string; statuses?: string[]; search?: string }): Promise<Policy[]> {
+    const tdb = await getDbForOrg(organizationId);
+    const conditions = await this.policyListConditions(organizationId, filters);
     return tdb.select().from(policies).where(and(...conditions))
       .orderBy(desc(policies.createdAt)).limit(limit).offset(offset);
+  }
+
+  /** Policy counts and summed premium grouped by status × currency × schedule, over every policy
+   *  matching the same filters as getPoliciesByOrg (no row limit). Any status filter is ignored on
+   *  purpose — the overview's tiles always show every status side by side. */
+  async getPolicyStatusSummary(organizationId: string, filters?: ReportFilters & { search?: string }) {
+    const tdb = await getDbForOrg(organizationId);
+    const { status: _ignored, ...rest } = (filters ?? {}) as ReportFilters & { status?: string; search?: string };
+    const conditions = await this.policyListConditions(organizationId, rest);
+    return tdb
+      .select({
+        status: policies.status,
+        currency: policies.currency,
+        paymentSchedule: policies.paymentSchedule,
+        count: sql<number>`count(*)::int`,
+        premiumTotal: sql<string>`coalesce(sum(${policies.premiumAmount}), 0)::text`,
+      })
+      .from(policies)
+      .where(and(...conditions))
+      .groupBy(policies.status, policies.currency, policies.paymentSchedule);
   }
 
   async getPolicyReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<PolicyReportRow[]> {

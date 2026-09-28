@@ -3,22 +3,10 @@ import { getApiBase } from "@/lib/queryClient";
 import { CardSection, EnhancedDataTable, type EdtColumn, EmptyState, StatusBadge } from "@/components/ds";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, FileText, Loader2, CheckCircle, Clock, AlertCircle, UserCheck, RotateCcw } from "lucide-react";
+import { FileText, Loader2, CheckCircle, Clock, AlertCircle, UserCheck, RotateCcw } from "lucide-react";
 import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
-
-const policiesOverviewColumns: EdtColumn<any>[] = [
-  { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm">{p.policyNumber}</span> },
-  { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
-  { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="tabular-nums">{p.currency} {p.premiumAmount}</span> },
-  { id: "schedule", header: "Schedule", accessor: (p) => p.paymentSchedule },
-  {
-    id: "created",
-    header: "Created",
-    accessor: (p) => new Date(p.createdAt),
-    cell: (p) => <span className="text-sm text-muted-foreground">{new Date(p.createdAt).toLocaleDateString()}</span>,
-  },
-];
+import { PolicyOverviewPanel } from "./policy-overview-panel";
 
 const policyDetailsColumns: EdtColumn<any>[] = [
   { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
@@ -203,15 +191,6 @@ const conversionsColumns = statusHistoryColumns("Converted at", (r) => r.convert
 const reinstatementsColumns = statusHistoryColumns("Reinstated date", (r) => r.reinstatedAt ? new Date(r.reinstatedAt) : "");
 
 export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: ReportSectionBaseProps) {
-  const { data: policies = [], isLoading: loadingPolicies } = useQuery<any[]>({
-    queryKey: ["reports", "policies", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/policies?limit=200" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("policies"),
-  });
   const { data: policyDetails = [], isLoading: loadingPolicyDetails } = useQuery<any[]>({
     queryKey: ["reports", "policy-details", runKey, ...fk],
     queryFn: async () => {
@@ -303,44 +282,10 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
     enabled: need("reinstatements"),
   });
 
-  const policySummary = {
-    inactive: policies.filter((p: any) => p.status === "inactive").length,
-    active: policies.filter((p: any) => p.status === "active").length,
-    grace: policies.filter((p: any) => p.status === "grace").length,
-    lapsed: policies.filter((p: any) => p.status === "lapsed").length,
-    cancelled: policies.filter((p: any) => p.status === "cancelled").length,
-  };
-
   return (
     <>
       <TabsContent value="policies">
-        <CardSection
-          title="Policy overview"
-          description="Quick counts and a short policy list. From/to limit policies by capture date, same as CSV exports."
-          icon={BarChart3}
-          headerRight={<ExportButton reportType="policies" filters={filters} />}
-        >
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
-            {Object.entries(policySummary).map(([status, count]) => (
-              <div key={status} className="text-center p-3 rounded-lg bg-muted">
-                <p className="text-xl font-bold tabular-nums">{count}</p>
-                <p className="text-xs text-muted-foreground capitalize">{status.replace(/_/g, " ")}</p>
-              </div>
-            ))}
-          </div>
-          {loadingPolicies ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={policiesOverviewColumns}
-              rows={policies}
-              getRowKey={(p) => p.id}
-              exportFilename="policies-overview"
-              storageKey="reports-policies-overview"
-              emptyMessage="No policies found."
-            />
-          )}
-        </CardSection>
+        <PolicyOverviewPanel filters={filters} runKey={runKey} fk={fk} enabled={need("policies")} />
       </TabsContent>
 
       <TabsContent value="policy-details">
