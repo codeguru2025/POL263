@@ -2173,7 +2173,9 @@ export class DatabaseStorage implements IStorage {
       tdb.select({
         policyId: policyStatusHistory.policyId,
         lapsedAt: sql<Date>`max(${policyStatusHistory.createdAt})`,
-        times: sql<number>`count(*)::int`,
+        // Distinct lapse events, not rows: before 68a79a4 (24 Sep 2026) the sweep ran on both app
+        // instances and wrote every transition twice in the same instant.
+        times: sql<number>`count(distinct date_trunc('minute', ${policyStatusHistory.createdAt}))::int`,
       })
         .from(policyStatusHistory)
         .where(and(inArray(policyStatusHistory.policyId, policyIds), eq(policyStatusHistory.toStatus, "lapsed")))
