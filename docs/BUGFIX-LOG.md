@@ -10,6 +10,34 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-28 — Policy overview report counted only the newest 200 policies
+
+**Symptom:** Reports → Policies → Policy overview showed 200 policies for Falakhe (real: 800),
+with Grace and Lapsed at 0 (real: 37 and 27). The table stopped at 200 rows with no sign more
+existed. Archived had no tile.
+
+**Root cause:** the page fetched `/api/policies?limit=200` and counted statuses in the browser,
+so the "summary" only described one page of the list. The newest 200 were all active or
+inactive. Separately, the from/to filter cut days at UTC midnight (`fromDate + "T00:00:00.000Z"`),
+which is 02:00 in Harare, so policies captured between 00:00 and 02:00 local time counted
+toward the previous day.
+
+**Fix:** new `GET /api/reports/policy-overview` counts every matching policy in SQL
+(`storage.getPolicyStatusSummary`) and pages the rows; `server/policy-overview.ts` builds the
+tiles, including monthly premium per currency in exact cents. The list and the summary share
+`policyListConditions`, so they can't disagree. New `dayRangeForOrg()` in `server/date-utils.ts`
+cuts days at the tenant's local midnight. UI: `client/src/pages/staff/reports/sections/policy-overview-panel.tsx`.
+
+**Verified:** ran the summary against Falakhe's live DB (800 total / 521 active / 37 grace /
+27 lapsed / 215 inactive, matching a direct SQL count); 821/821 tests.
+
+**Lesson for next time:** a count or total computed in the browser from a `limit=` fetch is a
+page summary, not a report. Grep report pages for `.filter(...).length` or `.reduce(` over a
+limited fetch. The UTC-midnight date pattern still appears ~28 more times in `storage.ts`;
+fix each report as it comes up by switching it to `dayRangeForOrg()`.
+
+---
+
 ## 2026-09-27 — Suspending a tenant hid it from the platform owner entirely
 
 **Symptom:** after Falakhe was suspended, it disappeared from the platform dashboard's tenant
