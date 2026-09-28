@@ -10,6 +10,33 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-28 — Active policies report: float premium totals, UTC dates, no payment info
+
+**Symptom:** the Active policies CSV summed premium totals with `parseFloat` + (float drift on
+money). From/to cut days at UTC midnight. The report couldn't show when a policy was last paid,
+so 134 of Falakhe's 521 "active" policies (all migrated, with no payment in POL263) looked the
+same as ones paid last week.
+
+**Root cause:** `getAllPoliciesReportByOrg` built its own UTC-midnight filter list rather than
+using the shared one. The export case summed floats. No payment data was joined at all.
+
+**Fix:** `getAllPoliciesReportByOrg` now uses `policyListConditions` (local-time dates; this
+also fixes Awaiting payments / Overdue / Pre-lapse / Lapsed, which share it). It returns
+payment schedule, paid-up-to, migrated, and last payment from the new batched
+`getLastPaymentsForPolicies`: the policy's own latest valid receipt, else its group's latest
+`legacy_group_receipts` lump sum (no per-member split exists). New
+`excludeUnpaidMigrated` filter. The export's totals use `toCents`. UI:
+`client/src/pages/staff/reports/sections/active-policies-panel.tsx`.
+
+**Verified:** Falakhe live: 521 active = 305 own receipt + 82 group + 134 none (all migrated);
+the filter leaves 387, and the DB summary agrees.
+
+**Lesson for next time:** `legacy_group_receipts.member_breakdown` is empty for every Falakhe
+row, so group premiums can only be traced to the group, never to a member. Any "has this
+policy paid?" logic must check the group's receipts for group policies or it will call them unpaid.
+
+---
+
 ## 2026-09-28 — Policy report (full details): blank Member No, phantom dependants, 500-row cap
 
 **Symptom:** in Reports → Policies → Policy report (full details) and its CSV, Member No was blank

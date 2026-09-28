@@ -16,12 +16,17 @@ const DEFAULT_TZ = "Africa/Harare";
 
 /** Today's date in the given IANA timezone, as "YYYY-MM-DD". */
 export function todayInTimezone(tz: string): string {
+  return dateInTimezone(new Date(), tz);
+}
+
+/** The calendar date an instant falls on in the given IANA timezone, as "YYYY-MM-DD". */
+export function dateInTimezone(instant: Date | string, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: tz || DEFAULT_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
+  }).format(new Date(instant));
 }
 
 /**

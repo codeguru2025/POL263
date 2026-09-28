@@ -3864,6 +3864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const v = str(req.query[key]);
       if (v) filters[key] = v;
     }
+    if (req.query.excludeUnpaidMigrated === "1") filters.excludeUnpaidMigrated = true;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
     if (isAgentScoped(userRoles)) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     else if (str(req.query.agentId)) filters.agentId = str(req.query.agentId);
@@ -14453,7 +14454,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const agentId = typeof q.agentId === "string" && q.agentId ? q.agentId : undefined;
     const status = typeof q.status === "string" && q.status ? q.status : undefined;
     const statuses = Array.isArray(q.statuses) ? q.statuses.filter((s: unknown) => typeof s === "string") : undefined;
-    return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses };
+    const excludeUnpaidMigrated = q.excludeUnpaidMigrated === "1" || q.excludeUnpaidMigrated === "true";
+    return { fromDate, toDate, userId, branchId, productId, agentId, status, statuses, excludeUnpaidMigrated };
   };
 
 
@@ -15362,14 +15364,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "active-policies": {
           const active = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, status: "active" });
-          headers = ["Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Currency", "Premium", ...currencyHeaders("Premium"), "Inception Date", "Created"];
+          headers = [
+            "Policy Number", "Status", "First Name", "Surname", "National ID", "Phone", "Product", "Branch", "Agent", "Group",
+            "Currency", "Premium", ...currencyHeaders("Premium"), "Payment Schedule", "Paid Up To",
+            "Last Payment Date", "Last Payment Amount", "Last Payment Type", "Migrated", "Inception Date", "Created",
+          ];
           currencyTotals = { Premium: {} };
+          const premiumCentsByCurrency: Record<string, number> = {};
           rows = active.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + amt;
-            return [r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "", r.productName ?? "", r.branchName ?? "", r.agentDisplayName ?? r.agentEmail ?? "", r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.inceptionDate || "", r.policyCreatedAt];
+            premiumCentsByCurrency[c] = (premiumCentsByCurrency[c] || 0) + toCents(r.premiumAmount);
+            const lastPayment = r.lastPaymentDate
+              ? [r.lastPaymentDate, `${r.lastPaymentCurrency} ${r.lastPaymentAmount}`, r.lastPaymentSource === "group" ? "Group payment" : "Receipt"]
+              : ["None recorded in POL263", "", ""];
+            return [
+              r.policyNumber, r.status, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
+              r.productName ?? "", r.branchName ?? "", r.agentDisplayName || r.agentEmail || "", r.groupName ?? "",
+              r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency), r.paymentSchedule ?? "", r.paidUpTo || "",
+              ...lastPayment, r.isLegacy ? "Yes" : "No", r.inceptionDate || "", r.policyCreatedAt,
+            ];
           });
+          for (const [c, cents] of Object.entries(premiumCentsByCurrency)) currencyTotals.Premium[c] = centsToNumber(cents);
           break;
         }
         case "awaiting-payments": {

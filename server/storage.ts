@@ -11,7 +11,7 @@ import { cpDb } from "./control-plane-db";
 import { tenantBranding as cpTenantBranding } from "../shared/control-plane-schema";
 import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
-import { todayForOrg, dayRangeForOrg } from "./date-utils";
+import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
@@ -21,7 +21,7 @@ import {
   ageBandConfigs, ageBandRateCards, policies, policyMembers, policyStatusHistory, policyAddOns,
   orgMemberSequences, orgPolicySequences,
   paymentTransactions, receipts, reversalEntries, cashups,
-  paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens,
+  paymentIntents, paymentEvents, paymentReceipts, paymentLinks, paymentLinkTokens, legacyGroupReceipts,
   quotes, quoteTokens,
   claims, claimDocuments, claimStatusHistory,
   funeralCases, funeralTasks, fleetVehicles, driverAssignments,
@@ -194,6 +194,9 @@ export interface ReportFilters {
   branchId?: string;
   productId?: string;
   agentId?: string;
+  /** Leave out migrated (is_legacy) policies that have no payment recorded in POL263 — no
+   *  issued receipt and, for a group policy, no group receipt either. */
+  excludeUnpaidMigrated?: boolean;
 }
 
 export interface PolicyReportRow {
@@ -1881,6 +1884,14 @@ export class DatabaseStorage implements IStorage {
     const { start, endExclusive } = await dayRangeForOrg(organizationId, filters?.fromDate, filters?.toDate);
     if (start) conditions.push(gte(policies.createdAt, start));
     if (endExclusive) conditions.push(lt(policies.createdAt, endExclusive));
+    if (filters?.excludeUnpaidMigrated) {
+      // Migrated policy with no payment in POL263: no valid receipt of its own, and (group
+      // policies) no group receipt for its group — group receipts are lump sums per group.
+      conditions.push(sql`NOT (${policies.isLegacy}
+        AND NOT EXISTS (SELECT 1 FROM payment_receipts pr WHERE pr.policy_id = ${policies.id}
+          AND pr.status = 'issued' AND (pr.approval_status IS NULL OR pr.approval_status = 'approved'))
+        AND (${policies.groupId} IS NULL OR NOT EXISTS (SELECT 1 FROM legacy_group_receipts g WHERE g.group_id = ${policies.groupId})))`);
+    }
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
     if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
     if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
@@ -2078,21 +2089,63 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  /**
+   * Latest payment per policy, in two batched queries: the policy's own latest valid receipt
+   * (issued, and approved if it went through approval), else — for a group policy — its group's
+   * latest lump-sum group receipt (legacy_group_receipts has no per-member split). A policy with
+   * neither gets no entry.
+   */
+  async getLastPaymentsForPolicies(
+    orgId: string,
+    items: { policyId: string; groupId: string | null }[],
+  ): Promise<Map<string, { date: string; amount: string; currency: string; source: "receipt" | "group" }>> {
+    const result = new Map<string, { date: string; amount: string; currency: string; source: "receipt" | "group" }>();
+    if (items.length === 0) return result;
+    const tdb = await getDbForOrg(orgId);
+    const policyIds = items.map((i) => i.policyId);
+    const groupIds = Array.from(new Set(items.map((i) => i.groupId).filter((g): g is string => !!g)));
+    const [receipts, groupReceipts] = await Promise.all([
+      tdb.selectDistinctOn([paymentReceipts.policyId], {
+        policyId: paymentReceipts.policyId,
+        issuedAt: paymentReceipts.issuedAt,
+        amount: paymentReceipts.amount,
+        currency: paymentReceipts.currency,
+      })
+        .from(paymentReceipts)
+        .where(and(
+          inArray(paymentReceipts.policyId, policyIds),
+          eq(paymentReceipts.status, "issued"),
+          or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
+        ))
+        .orderBy(paymentReceipts.policyId, desc(paymentReceipts.issuedAt)),
+      groupIds.length === 0 ? Promise.resolve([]) : tdb.selectDistinctOn([legacyGroupReceipts.groupId], {
+        groupId: legacyGroupReceipts.groupId,
+        paymentDate: legacyGroupReceipts.paymentDate,
+        amount: legacyGroupReceipts.amount,
+        currency: legacyGroupReceipts.currency,
+      })
+        .from(legacyGroupReceipts)
+        .where(inArray(legacyGroupReceipts.groupId, groupIds))
+        .orderBy(legacyGroupReceipts.groupId, desc(legacyGroupReceipts.paymentDate), desc(legacyGroupReceipts.recordedAt)),
+    ]);
+    const tz = await getOrgTimezone(orgId);
+    for (const r of receipts) {
+      if (!r.policyId) continue;
+      result.set(r.policyId, { date: dateInTimezone(r.issuedAt, tz), amount: moneyString(r.amount), currency: r.currency, source: "receipt" });
+    }
+    const byGroup = new Map(groupReceipts.map((g) => [g.groupId, g]));
+    for (const i of items) {
+      if (result.has(i.policyId) || !i.groupId) continue;
+      const g = byGroup.get(i.groupId);
+      if (g) result.set(i.policyId, { date: String(g.paymentDate), amount: moneyString(g.amount), currency: g.currency, source: "group" });
+    }
+    return result;
+  }
+
   async getAllPoliciesReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);
-    const conditions: SQL[] = [eq(policies.organizationId, organizationId), isNull(policies.deletedAt)];
-    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.status) conditions.push(eq(policies.status, filters.status));
-    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else return [];
-    }
+    // Shared rules: soft-deleted excluded, from/to at the tenant's local midnight.
+    const conditions = await this.policyListConditions(organizationId, filters);
 
     const rows = await tdb
       .select({
@@ -2122,6 +2175,10 @@ export class DatabaseStorage implements IStorage {
         clientPostalAddress: clients.postalAddress,
         productName: products.name,
         groupName: groups.name,
+        groupId: policies.groupId,
+        paymentSchedule: policies.paymentSchedule,
+        currentCycleEnd: policies.currentCycleEnd,
+        isLegacy: policies.isLegacy,
       })
       .from(policies)
       .innerJoin(clients, eq(policies.clientId, clients.id))
@@ -2137,6 +2194,10 @@ export class DatabaseStorage implements IStorage {
 
     const policyIds = rows.map((r) => r.policyId);
     const clientIds = Array.from(new Set(rows.map((r) => r.clientId).filter(Boolean)));
+    const lastPayments = await this.getLastPaymentsForPolicies(
+      organizationId,
+      rows.map((r) => ({ policyId: r.policyId, groupId: r.groupId })),
+    );
 
     const memberMap: Record<string, string> = {};
     if (policyIds.length > 0) {
@@ -2192,6 +2253,14 @@ export class DatabaseStorage implements IStorage {
         clientNationalId: r.clientNationalId ?? "",
         clientPhone: r.clientPhone ?? "",
         clientEmail: r.clientEmail ?? "",
+        paymentSchedule: r.paymentSchedule ?? "",
+        paidUpTo: r.currentCycleEnd ? String(r.currentCycleEnd) : "",
+        isLegacy: !!r.isLegacy,
+        lastPaymentDate: lastPayments.get(r.policyId)?.date ?? "",
+        lastPaymentAmount: lastPayments.get(r.policyId)?.amount ?? "",
+        lastPaymentCurrency: lastPayments.get(r.policyId)?.currency ?? "",
+        /** "receipt" = the policy's own receipt; "group" = its group's latest lump-sum receipt. */
+        lastPaymentSource: lastPayments.get(r.policyId)?.source ?? "",
         // ── Easipol-format keys (policies / agent-portfolio / broker-policies / new-joinings) ──
         Branch_ID: r.branchId ?? "",
         BranchName: r.branchName ?? "",

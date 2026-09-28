@@ -4,10 +4,11 @@ import { getApiBase } from "@/lib/queryClient";
 import { CardSection, EnhancedDataTable, type EdtColumn, EmptyState, StatusBadge } from "@/components/ds";
 import { TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Loader2, CheckCircle, Clock, AlertCircle, UserCheck, RotateCcw } from "lucide-react";
+import { FileText, Loader2, Clock, AlertCircle, UserCheck, RotateCcw } from "lucide-react";
 import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 import { PolicyOverviewPanel } from "./policy-overview-panel";
+import { ActivePoliciesPanel } from "./active-policies-panel";
 
 const POLICY_DETAILS_PAGE = 500;
 
@@ -96,7 +97,6 @@ function policyListColumns(dateHeader: string, dateAccessor: (p: any) => any): E
   ];
 }
 
-const activePoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
 const lapsedPoliciesColumns = policyListColumns("Inception Date", (p) => p.inceptionDate ? new Date(p.inceptionDate) : "");
 
 function graceListColumns(): EdtColumn<any>[] {
@@ -214,15 +214,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: activePolicies = [], isLoading: loadingActivePolicies } = useQuery<any[]>({
-    queryKey: ["reports", "active-policies", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/active-policies" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("activePolicies"),
-  });
   const { data: awaitingPayments = [], isLoading: loadingAwaitingPayments } = useQuery<any[]>({
     queryKey: ["reports", "awaiting-payments", runKey, ...fk],
     queryFn: async () => {
@@ -340,18 +331,7 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="active-policies">
-        <CardSection title="Active policies" icon={CheckCircle} description="Policies with status active. When from/to are set, results are limited to policies captured in that window." headerRight={<ExportButton reportType="active-policies" filters={filters} />} flush>
-          {loadingActivePolicies ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={activePoliciesColumns}
-              rows={activePolicies}
-              getRowKey={(p) => p.policyId || p.id}
-              exportFilename="active-policies"
-              storageKey="reports-active-policies"
-              emptyMessage="No active policies match the filters."
-            />
-          )}
-        </CardSection>
+        <ActivePoliciesPanel filters={filters} runKey={runKey} fk={fk} enabled={need("activePolicies")} />
       </TabsContent>
 
       <TabsContent value="awaiting-payments">
