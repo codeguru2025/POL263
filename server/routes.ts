@@ -15316,6 +15316,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             const payrollRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
             headers = [
               "Agent Name",
+              "Currency",
               "Number Of Policies",
               "Groups Count",
               "Groups Commission",
@@ -15341,6 +15342,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             currencyTotals = null;
             rows = payrollRows.map((r: any) => [
               r.agentName,
+              r.currency,
               r.numberOfPolicies,
               r.groupsCount,
               r.groupsCommission,
@@ -15372,8 +15374,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           currencyTotals = { "Amount Paid": {}, "Commission Payable": {} };
           rows = cpRows.map((r: any) => {
             const c = (r.currency || "USD").toUpperCase();
+            const cc = (r.commissionCurrency || r.currency || "USD").toUpperCase();
             currencyTotals!["Amount Paid"][c] = (currencyTotals!["Amount Paid"][c] || 0) + (parseFloat(String(r.amountPaid ?? 0)) || 0);
-            currencyTotals!["Commission Payable"][c] = (currencyTotals!["Commission Payable"][c] || 0) + (parseFloat(String(r.commissionPayable ?? 0)) || 0);
+            currencyTotals!["Commission Payable"][cc] = (currencyTotals!["Commission Payable"][cc] || 0) + (parseFloat(String(r.commissionPayable ?? 0)) || 0);
             return [
               r.receiptNumber, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
               r.policyNumber, r.policyStatus ?? "", r.policyPremium ?? "", r.amountDue ?? "", r.amountPaid ?? "", r.currency,
@@ -15961,34 +15964,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         case "agent-total-commission":
         case "joining-comms-summary": {
           const ledger2 = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, reportFilters.agentId || undefined);
-          const summaryMap: Record<string, { name: string; total: number; currency: string; count: number }> = {};
+          // One row per agent per currency — rands were being added into the dollar total.
+          const summaryMap: Record<string, { name: string; cents: number; currency: string; count: number }> = {};
           for (const r of ledger2) {
-            const key = r.agentEmail || r.agentDisplayName || "Unknown";
-            if (!summaryMap[key]) summaryMap[key] = { name: r.agentDisplayName || key, total: 0, currency: r.currency || "USD", count: 0 };
-            summaryMap[key].total += parseFloat(String(r.amount ?? 0)) || 0;
+            const currency = String(r.currency || "USD").toUpperCase();
+            const agentKey = r.agentEmail || r.agentDisplayName || "Unknown";
+            const key = `${agentKey}|${currency}`;
+            if (!summaryMap[key]) summaryMap[key] = { name: r.agentDisplayName || agentKey, cents: 0, currency, count: 0 };
+            summaryMap[key].cents += toCents(r.amount);
             summaryMap[key].count++;
           }
           headers = ["Agent", "Entries", "Total Commission", "Currency"];
-          rows = Object.values(summaryMap).sort((a, b) => b.total - a.total).map((a) => [a.name, a.count, a.total.toFixed(2), a.currency]);
+          rows = Object.values(summaryMap).sort((a, b) => a.name.localeCompare(b.name) || a.currency.localeCompare(b.currency)).map((a) => [a.name, a.count, fromCents(a.cents), a.currency]);
           break;
         }
         case "agent-commission-by-count": {
           const ledger3 = await storage.getCommissionLedgerDetailedByOrg(user.organizationId, reportFilters.agentId || undefined);
-          const countMap: Record<string, { name: string; total: number; receiptCount: number }> = {};
+          const countMap: Record<string, { name: string; cents: number; currency: string; receipts: Set<string> }> = {};
           for (const r of ledger3) {
-            const key = r.agentEmail || r.agentDisplayName || "Unknown";
-            if (!countMap[key]) countMap[key] = { name: r.agentDisplayName || key, total: 0, receiptCount: 0 };
-            countMap[key].total += parseFloat(String(r.amount ?? 0)) || 0;
-            if (r.transactionId) countMap[key].receiptCount++;
+            const currency = String(r.currency || "USD").toUpperCase();
+            const agentKey = r.agentEmail || r.agentDisplayName || "Unknown";
+            const key = `${agentKey}|${currency}`;
+            if (!countMap[key]) countMap[key] = { name: r.agentDisplayName || agentKey, cents: 0, currency, receipts: new Set() };
+            countMap[key].cents += toCents(r.amount);
+            // A payment spanning two rate tiers has two entries — count the payment once.
+            if (r.transactionId) countMap[key].receipts.add(r.transactionId);
           }
-          headers = ["Agent", "Receipt Count", "Total Commission"];
-          rows = Object.values(countMap).sort((a, b) => b.receiptCount - a.receiptCount).map((a) => [a.name, a.receiptCount, a.total.toFixed(2)]);
+          headers = ["Agent", "Receipt Count", "Total Commission", "Currency"];
+          rows = Object.values(countMap).sort((a, b) => b.receipts.size - a.receipts.size).map((a) => [a.name, a.receipts.size, fromCents(a.cents), a.currency]);
           break;
         }
         case "manager-commission": {
           const mgrRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
-          headers = ["Agent Name", "Number of Policies", "Total", "Net Pay"];
-          rows = mgrRows.map((r: any) => [r.agentName, r.numberOfPolicies, r.total, r.netPay]);
+          headers = ["Agent Name", "Currency", "Number of Policies", "Total", "Net Pay"];
+          rows = mgrRows.map((r: any) => [r.agentName, r.currency, r.numberOfPolicies, r.total, r.netPay]);
           break;
         }
         case "select-count": {

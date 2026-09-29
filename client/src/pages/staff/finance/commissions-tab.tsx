@@ -99,24 +99,31 @@ export function CommissionsTab() {
           const newBusiness = commissionLedger.filter((e: any) => e.entryType === "first_months");
           const existingBusiness = commissionLedger.filter((e: any) => e.entryType === "recurring");
           const clawbacks = commissionLedger.filter((e: any) => e.entryType === "clawback");
-          const rollbacks = commissionLedger.filter((e: any) => e.entryType === "rollback");
-          const sumOf = (arr: any[]) => arr.reduce((s: number, e: any) => s + parseFloat(e.amount || "0"), 0);
-          const newBizTotal = sumOf(newBusiness);
-          const existBizTotal = sumOf(existingBusiness);
-          const clawbackTotal = sumOf(clawbacks);
-          const rollbackTotal = sumOf(rollbacks);
-          const netTotal = newBizTotal + existBizTotal + clawbackTotal + rollbackTotal;
-          const defaultCurrency = commissionLedger[0]?.currency || "USD";
-          const fmt = (v: number) => `${defaultCurrency} ${Math.abs(v).toFixed(2)}`;
+          const rollbacks = commissionLedger.filter((e: any) => e.entryType === "rollback" || e.entryType === "clawback_reversal");
+          // Totals per currency — rands and dollars must never be added together.
+          const sumOf = (arr: any[]) => {
+            const cents: Record<string, number> = {};
+            for (const e of arr) {
+              const c = String(e.currency || "USD").toUpperCase();
+              cents[c] = (cents[c] || 0) + Math.round(parseFloat(e.amount || "0") * 100);
+            }
+            return cents;
+          };
+          const fmt = (m: Record<string, number>) => {
+            const parts = Object.entries(m).filter(([, v]) => v !== 0).sort(([a], [b]) => a.localeCompare(b))
+              .map(([c, v]) => `${v < 0 ? "−" : ""}${c} ${(Math.abs(v) / 100).toFixed(2)}`);
+            return parts.length ? parts.map((p) => <span key={p} className="block">{p}</span>) : "0.00";
+          };
+          const netTotal = sumOf([...newBusiness, ...existingBusiness, ...clawbacks, ...rollbacks]);
 
           return (
             <>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <KpiStatCard label="New Business" value={<span className="text-blue-700" data-testid="stat-comm-new-biz">{fmt(newBizTotal)}</span>} hint={`${newBusiness.length} entries`} className="bg-blue-50 dark:bg-blue-950/20 border-blue-200" />
-                <KpiStatCard label="Existing Business" value={<span className="text-emerald-700" data-testid="stat-comm-existing-biz">{fmt(existBizTotal)}</span>} hint={`${existingBusiness.length} entries`} className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200" />
-                <KpiStatCard label="Clawbacks" value={<span className="text-red-700" data-testid="stat-comm-clawbacks">{clawbackTotal !== 0 ? `−${fmt(clawbackTotal)}` : fmt(0)}</span>} hint={`${clawbacks.length} entries`} className="bg-red-50 dark:bg-red-950/20 border-red-200" />
-                <KpiStatCard label="Rollbacks" value={<span className="text-amber-700" data-testid="stat-comm-rollbacks">{fmt(rollbackTotal)}</span>} hint={`${rollbacks.length} entries`} className="bg-amber-50 dark:bg-amber-950/20 border-amber-200" />
-                <KpiStatCard label="Total Commissions" value={<span className={netTotal < 0 ? "text-red-600" : "text-indigo-700"} data-testid="stat-comm-total">{netTotal < 0 ? `−${fmt(netTotal)}` : fmt(netTotal)}</span>} hint={`${commissionLedger.length} entries`} className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200" />
+                <KpiStatCard label="New Business" value={<span className="text-blue-700" data-testid="stat-comm-new-biz">{fmt(sumOf(newBusiness))}</span>} hint={`${newBusiness.length} entries`} className="bg-blue-50 dark:bg-blue-950/20 border-blue-200" />
+                <KpiStatCard label="Existing Business" value={<span className="text-emerald-700" data-testid="stat-comm-existing-biz">{fmt(sumOf(existingBusiness))}</span>} hint={`${existingBusiness.length} entries`} className="bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200" />
+                <KpiStatCard label="Clawbacks" value={<span className="text-red-700" data-testid="stat-comm-clawbacks">{fmt(sumOf(clawbacks))}</span>} hint={`${clawbacks.length} entries`} className="bg-red-50 dark:bg-red-950/20 border-red-200" />
+                <KpiStatCard label="Clawbacks reversed" value={<span className="text-amber-700" data-testid="stat-comm-rollbacks">{fmt(sumOf(rollbacks))}</span>} hint={`${rollbacks.length} entries`} className="bg-amber-50 dark:bg-amber-950/20 border-amber-200" />
+                <KpiStatCard label="Total Commissions" value={<span className="text-indigo-700" data-testid="stat-comm-total">{fmt(netTotal)}</span>} hint={`${commissionLedger.length} entries`} className="bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200" />
               </div>
             </>
           );

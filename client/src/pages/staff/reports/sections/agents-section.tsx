@@ -51,6 +51,7 @@ const agentProductivityColumns: EdtColumn<any>[] = [
 
 const commissionSummaryColumns: EdtColumn<any>[] = [
   { id: "agentName", header: "Agent Name", accessor: (row) => row.agentName, cell: (row) => <span className="font-medium whitespace-nowrap">{row.agentName}</span> },
+  { id: "currency", header: "Currency", accessor: (row) => row.currency, cell: (row) => <span className="font-mono text-xs">{row.currency}</span> },
   { id: "numberOfPolicies", header: "Number of Policies", accessor: (row) => row.numberOfPolicies },
   { id: "groupsCount", header: "Groups Count", accessor: (row) => row.groupsCount },
   { id: "groupsCommission", header: "Groups Commission", accessor: (row) => row.groupsCommission, cell: (row) => <span className="font-mono text-xs">{row.groupsCommission}</span> },
@@ -114,7 +115,7 @@ const commissionPaymentsColumns: EdtColumn<any>[] = [
     accessor: (r) => r.commissionPayable != null ? parseFloat(String(r.commissionPayable)) : "",
     cell: (r) => (
       <span className="tabular-nums whitespace-nowrap text-emerald-700 font-medium">
-        {r.commissionPayable != null ? `${r.currency} ${parseFloat(String(r.commissionPayable)).toFixed(2)}` : "—"}
+        {r.commissionPayable != null ? `${r.commissionCurrency || r.currency} ${parseFloat(String(r.commissionPayable)).toFixed(2)}` : "—"}
       </span>
     ),
   },
@@ -296,8 +297,8 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
             <EnhancedDataTable
               columns={commissionSummaryColumns}
               rows={commissionSummary}
-              getRowKey={(row) => row.agentId}
-              rowTestId={(row) => `row-commission-summary-${row.agentId}`}
+              getRowKey={(row) => `${row.agentId}-${row.currency}`}
+              rowTestId={(row) => `row-commission-summary-${row.agentId}-${row.currency}`}
               exportFilename="commissions-summary"
               storageKey="reports-commissions-summary"
               emptyMessage="No commission ledger activity in this period."

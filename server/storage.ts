@@ -4715,15 +4715,14 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
+  /** Per-agent commission totals, one row per agent per currency — a rand entry must never be
+   *  added into a dollar total. Dates are cut at the tenant's local midnight. */
   async getCommissionReportByOrg(orgId: string, filters?: ReportFilters): Promise<any[]> {
     const tdb = await getDbForOrg(orgId);
     const conditions: SQL[] = [eq(commissionLedgerEntries.organizationId, orgId)];
-    if (filters?.fromDate) {
-      conditions.push(gte(commissionLedgerEntries.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    }
-    if (filters?.toDate) {
-      conditions.push(lte(commissionLedgerEntries.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    }
+    const { start, endExclusive } = await dayRangeForOrg(orgId, filters?.fromDate, filters?.toDate);
+    if (start) conditions.push(gte(commissionLedgerEntries.createdAt, start));
+    if (endExclusive) conditions.push(lt(commissionLedgerEntries.createdAt, endExclusive));
     if (filters?.agentId) conditions.push(eq(commissionLedgerEntries.agentId, filters.agentId));
     if (filters?.branchId) {
       const branchId = filters.branchId;
@@ -4735,6 +4734,7 @@ export class DatabaseStorage implements IStorage {
       .select({
         entryType: commissionLedgerEntries.entryType,
         amount: commissionLedgerEntries.amount,
+        currency: commissionLedgerEntries.currency,
         policyId: commissionLedgerEntries.policyId,
         policyGroupId: policies.groupId,
         paymentMethod: paymentTransactions.paymentMethod,
@@ -4751,7 +4751,9 @@ export class DatabaseStorage implements IStorage {
       .limit(50_000);
 
     type Agg = {
+      agentId: string;
       agentName: string;
+      currency: string;
       policies: Set<string>;
       groupPolicies: Set<string>;
       individPolicies: Set<string>;
@@ -4764,11 +4766,14 @@ export class DatabaseStorage implements IStorage {
       sumAll: number;
     };
     const byAgent = new Map<string, Agg>();
-    const getAgg = (agentId: string, name: string): Agg => {
-      let a = byAgent.get(agentId);
+    const getAgg = (agentId: string, name: string, currency: string): Agg => {
+      const key = `${agentId}|${currency}`;
+      let a = byAgent.get(key);
       if (!a) {
         a = {
+          agentId,
           agentName: name,
+          currency,
           policies: new Set(),
           groupPolicies: new Set(),
           individPolicies: new Set(),
@@ -4780,7 +4785,7 @@ export class DatabaseStorage implements IStorage {
           sumCash: 0,
           sumAll: 0,
         };
-        byAgent.set(agentId, a);
+        byAgent.set(key, a);
       }
       return a;
     };
@@ -4789,14 +4794,15 @@ export class DatabaseStorage implements IStorage {
       const agentId = r.agentId as string;
       if (!agentId) continue;
       const name = (r.agentDisplayName || r.agentEmail || "").trim() || agentId;
-      const a = getAgg(agentId, name);
+      const a = getAgg(agentId, name, String(r.currency || "USD").toUpperCase());
       // Sums are kept in integer cents; fmt() converts back.
       const amt = toCents(r.amount);
       a.sumAll += amt;
       const et = String(r.entryType || "");
       if (et === "first_months" || et === "recurring") a.sumBasic += amt;
-      if (et === "clawback" || et === "rollback") a.sumClawb += amt;
-      if (et === "clawback_reversal") a.sumOvertim += amt;
+      // Clawbacks net of any reversals (a reversal gives back a clawback, so it belongs here,
+      // not in "Overtime" — which has no system source).
+      if (et === "clawback" || et === "clawback_reversal" || et === "rollback") a.sumClawb += amt;
       const pm = String(r.paymentMethod || "").toLowerCase();
       if (pm === "cash") a.sumCash += amt;
       const pid = r.policyId as string | null;
@@ -4814,12 +4820,13 @@ export class DatabaseStorage implements IStorage {
 
     const fmt = (cents: number) => (Number.isFinite(cents) ? fromCents(cents) : "0.00");
 
-    const out = Array.from(byAgent.entries()).map(([agentId, a]) => {
+    const out = Array.from(byAgent.values()).map((a) => {
       const total = a.sumAll;
       const net = total;
       return {
-        agentId,
+        agentId: a.agentId,
         agentName: a.agentName,
+        currency: a.currency,
         numberOfPolicies: a.policies.size,
         groupsCount: a.groupPolicies.size,
         groupsCommission: fmt(a.sumGroupsCommission),
@@ -4843,7 +4850,7 @@ export class DatabaseStorage implements IStorage {
         netPay: fmt(net),
       };
     });
-    out.sort((a, b) => a.agentName.localeCompare(b.agentName));
+    out.sort((a, b) => a.agentName.localeCompare(b.agentName) || a.currency.localeCompare(b.currency));
     return out;
   }
 
@@ -4851,15 +4858,30 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const policyBranches = alias(branches, "policy_branches");
     const paymentBranches = alias(branches, "payment_branches");
-    const commissionAlias = alias(commissionLedgerEntries, "commission_alias");
+    // Commission per payment. Entries used to be matched on period_start = receipt.period_from,
+    // but no commission entry ever sets period_start, so the column was always empty. Match on
+    // the payment the receipt belongs to instead; a payment spanning two tiers has two entries,
+    // so sum them. Commission keeps its own currency.
+    const commissionByTx = tdb
+      .select({
+        transactionId: commissionLedgerEntries.transactionId,
+        amount: sql<string>`sum(${commissionLedgerEntries.amount}::numeric)::text`.as("comm_amount"),
+        currency: sql<string>`min(${commissionLedgerEntries.currency})`.as("comm_currency"),
+        entryTypes: sql<string>`string_agg(distinct ${commissionLedgerEntries.entryType}, ', ')`.as("comm_types"),
+      })
+      .from(commissionLedgerEntries)
+      .where(and(eq(commissionLedgerEntries.organizationId, orgId), isNotNull(commissionLedgerEntries.transactionId)))
+      .groupBy(commissionLedgerEntries.transactionId)
+      .as("commission_by_tx");
 
     const conditions: SQL[] = [
       eq(paymentReceipts.organizationId, orgId),
       eq(paymentReceipts.status, "issued"),
       isNull(paymentReceipts.deletedAt),
     ];
-    if (filters?.fromDate) conditions.push(gte(paymentReceipts.issuedAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(paymentReceipts.issuedAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    const { start: cpStart, endExclusive: cpEnd } = await dayRangeForOrg(orgId, filters?.fromDate, filters?.toDate);
+    if (cpStart) conditions.push(gte(paymentReceipts.issuedAt, cpStart));
+    if (cpEnd) conditions.push(lt(paymentReceipts.issuedAt, cpEnd));
     if (filters?.branchId) conditions.push(eq(paymentReceipts.branchId, filters.branchId));
     if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     if (filters?.productId) {
@@ -4892,8 +4914,9 @@ export class DatabaseStorage implements IStorage {
         agentEmail: users.email,
         policyBranchName: policyBranches.name,
         paymentBranchName: paymentBranches.name,
-        commissionAmount: commissionAlias.amount,
-        commissionType: commissionAlias.entryType,
+        commissionAmount: commissionByTx.amount,
+        commissionCurrency: commissionByTx.currency,
+        commissionType: commissionByTx.entryTypes,
       })
       .from(paymentReceipts)
       .innerJoin(clients, eq(paymentReceipts.clientId, clients.id))
@@ -4901,11 +4924,7 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(users, eq(policies.agentId, users.id))
       .leftJoin(policyBranches, eq(policies.branchId, policyBranches.id))
       .leftJoin(paymentBranches, eq(paymentReceipts.branchId, paymentBranches.id))
-      .leftJoin(commissionAlias, and(
-        eq(commissionAlias.policyId, paymentReceipts.policyId),
-        eq(commissionAlias.organizationId, orgId),
-        eq(commissionAlias.periodStart, paymentReceipts.periodFrom),
-      ))
+      .leftJoin(commissionByTx, sql`${commissionByTx.transactionId}::text = coalesce(${paymentReceipts.metadataJson}->>'transactionId', ${paymentReceipts.metadataJson}->>'approvedTransactionId')`)
       .where(and(...conditions))
       .orderBy(desc(paymentReceipts.issuedAt))
       .limit(limit)
@@ -4940,6 +4959,7 @@ export class DatabaseStorage implements IStorage {
       amountPaid: r.amountPaid,
       currency: r.currency,
       commissionPayable: r.commissionAmount ?? null,
+      commissionCurrency: r.commissionCurrency ?? r.currency,
       commissionType: r.commissionType ?? null,
       agentName: (r.agentDisplayName || r.agentEmail || "").trim(),
       monthsPaidFor: calcMonths(r.periodFrom, r.periodTo, r.paymentSchedule),

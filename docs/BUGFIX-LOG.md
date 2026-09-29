@@ -10,6 +10,40 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-29 — Commission reports added rands into dollar totals; commission-per-payment column always empty
+
+**Symptom:** Several commission totals added rand and dollar entries together. Nqobile's R480 turned
+into "480" inside a USD total. In the Commission Payments report, "Commission Payable" was always "—".
+
+**Root cause:**
+1. `getCommissionReportByOrg` (the per-agent payroll summary on screen, its CSV, and the manager
+   export) summed every entry for an agent into one number, whatever the currency. The
+   "agent-commission-summary" and "agent-commission-by-count" exports did the same. The first one
+   also labelled the total with the currency of whichever entry came first.
+2. The Finance → Commissions cards summed every currency and labelled the total with the first
+   entry's currency. They also left `clawback_reversal` out of the total.
+3. `getCommissionPaymentReportByOrg` matched commission on
+   `commission.period_start = receipt.period_from`, but no commission entry has ever set
+   `period_start`, so nothing ever matched.
+
+**Fix:** `server/storage.ts` `getCommissionReportByOrg` now returns one row per agent per
+currency (a new `currency` field), counts reversals under Clawback, and cuts dates at local
+midnight (`dayRangeForOrg`). The payment report now finds commission by the receipt's payment
+(`metadata_json.transactionId` or `approvedTransactionId`), adds up split entries, and returns
+`commissionCurrency`. The exports in `server/routes.ts` total per agent per currency and
+include a Currency column. `client/.../finance/commissions-tab.tsx` totals per currency, and
+`agents-section.tsx` has a Currency column.
+
+**Verified:** called both functions directly against Falakhe for 18 Aug to 29 Sep. Nqobile shows
+as a USD row (31.20) and a ZAR row (480.00). The payment report shows commission on 29 payments,
+and its USD total (129.40) matches the ledger's first-months plus recurring total exactly.
+
+**Lesson for next time:** in any code that adds up money (`+=`, `reduce`, `SUM(`), check that the
+currency is part of the grouping key. If a total is labelled with `rows[0].currency`, it is
+almost certainly mixing currencies.
+
+---
+
 ## 2026-09-29 — Commission missing on most payment paths; prepayments over-paid; clawbacks doubled
 
 **Symptom:** Checking Falakhe's commission payable from 18 Aug turned up these problems. 34 cleared

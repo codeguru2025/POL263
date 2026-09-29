@@ -50,7 +50,7 @@ export async function streamCommissionStatementPdf(
     return parts.length ? parts.join("   ·   ") : "—";
   };
 
-  const earned = sumBy(inPeriod, (t) => EARN_TYPES.has(t) || (!t.includes("clawback") && !t.includes("advance") && !t.includes("deduction")));
+  const earned = sumBy(inPeriod, (t) => EARN_TYPES.has(t) || (!t.includes("clawback") && !t.includes("advance") && !t.includes("deduction") && !t.includes("adjustment")));
   const clawback = sumBy(inPeriod, (t) => t.includes("clawback"));
   const other = sumBy(inPeriod, (t) => t.includes("advance") || t.includes("deduction") || t.includes("adjustment"));
   const net: Record<string, number> = {};
