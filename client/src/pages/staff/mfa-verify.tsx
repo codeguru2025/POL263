@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,16 @@ import { AppChrome } from "@/components/layout/app-chrome";
 
 type AltChannel = { channel: "sms" | "whatsapp"; maskedNumber: string };
 type Step = "totp" | "channel-select" | "confirm-number" | "code-entry";
+/** Admins and the platform owner get a code texted (or emailed) automatically at sign-in —
+ *  see sendLoginMfaCode in server/auth.ts. The "totp" step's code box accepts that code too. */
+type LoginStatus = {
+  loginCode: boolean;
+  sentVia: "sms" | "email" | null;
+  destination: string | null;
+  hasAuthenticator: boolean;
+  canEmail: boolean;
+  resendsLeft: number;
+};
 
 async function postJson(path: string, body: unknown) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -48,6 +58,35 @@ export default function StaffMfaVerify() {
   const [selectedChannel, setSelectedChannel] = useState<AltChannel | null>(null);
   const [confirmNumber, setConfirmNumber] = useState("");
   const [altCode, setAltCode] = useState("");
+  const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
+  const [notice, setNotice] = useState("");
+  const [resending, setResending] = useState(false);
+
+  useEffect(() => {
+    fetch(getApiBase() + "/api/auth/mfa/login-status", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => data && setLoginStatus(data))
+      .catch(() => {});
+  }, []);
+
+  const resendLoginCode = async (channel?: "email") => {
+    setResending(true);
+    setError("");
+    setNotice("");
+    try {
+      const { ok, data } = await postJson("/api/auth/mfa/resend-login-code", channel ? { channel } : {});
+      if (!ok) {
+        setError(data.message || "Couldn't send a new code. Please try again.");
+        return;
+      }
+      setLoginStatus((s) => s && { ...s, sentVia: data.sentVia, destination: data.destination, resendsLeft: Math.max(0, s.resendsLeft - 1) });
+      setNotice(`New code sent ${data.sentVia === "sms" ? "by SMS" : "by email"} to ${data.destination}.`);
+    } catch {
+      setError("Connection error. Please check your internet and try again.");
+    } finally {
+      setResending(false);
+    }
+  };
 
   const finishLogin = (redirectUrl?: string) => {
     window.location.href = redirectUrl || "/staff";
@@ -151,7 +190,11 @@ export default function StaffMfaVerify() {
           </div>
           <CardTitle className="text-2xl font-display">Two-factor verification</CardTitle>
           <CardDescription className="text-base mt-2">
-            {step === "totp" && "Enter the code from your authenticator app, or one of your backup codes."}
+            {step === "totp" && (loginStatus?.loginCode
+              ? loginStatus.sentVia
+                ? `We sent a 6-digit code ${loginStatus.sentVia === "sms" ? "by SMS" : "by email"} to ${loginStatus.destination}.${loginStatus.hasAuthenticator ? " You can also use your authenticator app or a backup code." : ""}`
+                : "We couldn't send your sign-in code. Tap \"Send code again\" below."
+              : "Enter the code from your authenticator app, or one of your backup codes.")}
             {step === "channel-select" && "Choose where to receive a verification code."}
             {step === "confirm-number" && selectedChannel && `Confirm your number to receive a code via ${selectedChannel.channel === "sms" ? "SMS" : "WhatsApp"}.`}
             {step === "code-entry" && selectedChannel && `Enter the code sent via ${selectedChannel.channel === "sms" ? "SMS" : "WhatsApp"}.`}
@@ -163,11 +206,16 @@ export default function StaffMfaVerify() {
               {error}
             </p>
           )}
+          {notice && (
+            <p className="text-sm text-muted-foreground bg-muted p-3 rounded text-center" data-testid="text-mfa-notice">
+              {notice}
+            </p>
+          )}
 
           {step === "totp" && (
             <form onSubmit={handleTotpSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="mfa-code">Authentication code</Label>
+                <Label htmlFor="mfa-code">{loginStatus?.loginCode ? "Sign-in code" : "Authentication code"}</Label>
                 <Input
                   id="mfa-code"
                   autoFocus
@@ -185,17 +233,45 @@ export default function StaffMfaVerify() {
                 {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Verify
               </Button>
-              <div className="text-center">
-                <Button
-                  type="button"
-                  variant="link"
-                  className="text-muted-foreground text-xs"
-                  onClick={openTryAnotherWay}
-                  data-testid="link-mfa-try-another-way"
-                >
-                  Try another way
-                </Button>
-              </div>
+              {loginStatus?.loginCode && loginStatus.resendsLeft > 0 && (
+                <div className="flex flex-wrap justify-center gap-x-4">
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="text-muted-foreground text-xs"
+                    disabled={resending}
+                    onClick={() => resendLoginCode()}
+                    data-testid="button-mfa-resend-code"
+                  >
+                    Send code again
+                  </Button>
+                  {loginStatus.sentVia !== "email" && loginStatus.canEmail && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="text-muted-foreground text-xs"
+                      disabled={resending}
+                      onClick={() => resendLoginCode("email")}
+                      data-testid="button-mfa-email-code"
+                    >
+                      Email me the code instead
+                    </Button>
+                  )}
+                </div>
+              )}
+              {(!loginStatus?.loginCode || loginStatus.hasAuthenticator) && (
+                <div className="text-center">
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="text-muted-foreground text-xs"
+                    onClick={openTryAnotherWay}
+                    data-testid="link-mfa-try-another-way"
+                  >
+                    Try another way
+                  </Button>
+                </div>
+              )}
             </form>
           )}
 

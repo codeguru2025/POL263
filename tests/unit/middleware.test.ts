@@ -147,6 +147,23 @@ describe("requirePermission middleware", () => {
     expect(next).toHaveBeenCalled();
   });
 
+  it("allows manage:settings when this session passed a texted/emailed sign-in code", async () => {
+    vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["manage:settings"]);
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false }, session: { mfaVerified: true } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requirePermission("manage:settings") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it("allows a platform owner whose session passed a sign-in code", async () => {
+    const req = mockReq({ user: { id: "u1", organizationId: "org1", isPlatformOwner: true, mfaEnabled: false }, session: { mfaVerified: true } });
+    const res = mockRes();
+    const next = vi.fn();
+    await (requireAnyPermission("manage:settings") as any)(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
   it("does not require MFA for a permission outside the privileged set", async () => {
     vi.mocked(storage.getUserEffectivePermissions).mockResolvedValue(["read:policy"]);
     const req = mockReq({ user: { id: "u1", organizationId: "org1", mfaEnabled: false } });

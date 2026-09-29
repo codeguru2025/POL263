@@ -183,7 +183,7 @@ function baseUrlFromEnv() {
  * still works from the verify-login request because that session (and those fields, written
  * during the original OAuth callback) persists across the MFA-challenge round trip.
  */
-async function completeGoogleLogin(req: Request, res: Response, next: NextFunction, user: any, opts: { asJson?: boolean } = {}) {
+async function completeGoogleLogin(req: Request, res: Response, next: NextFunction, user: any, opts: { asJson?: boolean; mfaVerified?: boolean } = {}) {
   const finish = (url: string) => (opts.asJson ? res.json({ redirectUrl: url }) : res.redirect(url));
   req.login(user, async (loginErr) => {
     if (loginErr) return next(loginErr);
@@ -200,6 +200,9 @@ async function completeGoogleLogin(req: Request, res: Response, next: NextFuncti
       );
       const newSess = req.session as any;
       newSess.passport = passportData;
+      // Marks this session as having passed a second factor at login (authenticator, backup
+      // code, or a code texted/emailed by sendLoginMfaCode) — what requirePermission checks.
+      if (opts.mfaVerified) newSess.mfaVerified = true;
       await new Promise<void>((resolve, reject) =>
         req.session.save((e) => (e ? reject(e) : resolve()))
       );
@@ -320,12 +323,26 @@ async function completeGoogleLogin(req: Request, res: Response, next: NextFuncti
  * short-lived pending marker in the session instead of completing req.login, and send them to
  * the code-entry step. Mirrors requireClientAuth's session shape convention on the client side.
  */
-function beginStaffMfaChallenge(req: Request, res: Response, next: NextFunction, user: any, respond: (challenge: true) => void) {
+async function beginStaffMfaChallenge(
+  req: Request, res: Response, next: NextFunction, user: any, respond: (challenge: true) => void,
+  opts: { sendLoginCode?: boolean } = {},
+) {
   const sessionAny = req.session as any;
   sessionAny.pendingMfaUserId = user.id;
   sessionAny.pendingMfaOrgId = user.organizationId || null;
-  sessionAny.pendingMfaExpiresAt = Date.now() + 5 * 60_000;
+  // Ten minutes rather than five when a code is texted/emailed, to allow for a slow SMS or email.
+  sessionAny.pendingMfaExpiresAt = Date.now() + (opts.sendLoginCode ? 10 : 5) * 60_000;
   sessionAny.pendingMfaFailedAttempts = 0;
+  if (opts.sendLoginCode) {
+    sessionAny.pendingMfaLoginCode = true;
+    sessionAny.pendingMfaLoginSends = 0;
+    try {
+      await issueLoginMfaCode(sessionAny, user);
+    } catch (err) {
+      // Never block the challenge on a send failure — the verify page offers "Resend".
+      structuredLog("error", "Login MFA code send failed", { userId: user.id, error: (err as Error).message });
+    }
+  }
   sessionAny.save((err: Error | null) => {
     if (err) return next(err);
     respond(true);
@@ -373,6 +390,74 @@ function generateBackupCodes(count = 8): string[] {
 }
 
 const MFA_PENDING_MAX_ATTEMPTS = 5;
+/** Texted/emailed login codes per challenge (first send + resends) — SMS costs credits. */
+const MFA_LOGIN_CODE_MAX_SENDS = 4;
+
+/** Platform owners and anyone holding a privileged permission (MFA_REQUIRED_PERMISSIONS) must
+ *  pass a second factor at login; they get a code texted (or emailed) automatically. */
+async function isMfaPrivileged(user: any): Promise<boolean> {
+  if (user.isPlatformOwner || isPlatformOwnerEmail(user.email)) return true;
+  if (!user.organizationId) return false;
+  const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+  return perms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p));
+}
+
+function maskEmailForDisplay(email: string): string {
+  const [local, domain] = email.split("@");
+  return `${local.slice(0, 2)}•••@${domain || ""}`;
+}
+
+/**
+ * Sends a one-time login code: by SMS to the number on file, or by email when there's no number,
+ * the SMS didn't go out (credits used up, sending paused, provider down), or `forceEmail` is set.
+ * Stores only the argon2 hash in the pending session. Returns where it went, or null if neither
+ * channel worked.
+ */
+async function sendLoginMfaCode(
+  sessionAny: any, user: any, opts: { forceEmail?: boolean } = {},
+): Promise<{ channel: "sms" | "email"; destination: string } | null> {
+  const otp = String(crypto.randomInt(100000, 1000000));
+  const orgId: string | null = user.organizationId || null;
+  let sent: { channel: "sms" | "email"; destination: string } | null = null;
+
+  if (!opts.forceEmail && user.phone) {
+    const countryCode = orgId ? (await storage.getCountryFlagSettings(orgId)).homeCountryCode : undefined;
+    const { sendSms, sendPlatformSms } = await import("./sms-service");
+    const message = `Your POL263 sign-in code is ${otp}. It expires in 10 minutes. Do not share it.`;
+    const r = orgId
+      ? await sendSms(orgId, { to: user.phone, message, kind: "otp", countryCode, meta: { source: "mfa", sentByUserId: user.id } })
+      : await sendPlatformSms({ to: user.phone, message, kind: "otp" });
+    if (r.ok) sent = { channel: "sms", destination: maskPhoneForDisplay(user.phone) };
+    else structuredLog("warn", "Login MFA SMS failed — falling back to email", { userId: user.id, error: r.message });
+  }
+
+  if (!sent && user.email) {
+    const org = orgId ? await storage.getOrganization(orgId) : null;
+    const r = await sendEmail({
+      to: user.email,
+      ...(orgId ? await resolveTenantEmailOverrides(orgId, org) : {}),
+      fromName: org?.name || "POL263",
+      subject: "Your sign-in code",
+      text: `Your POL263 sign-in code is ${otp}. It expires in 10 minutes.\n\nIf you didn't just try to sign in, ignore this email and tell your administrator.`,
+      html: `<p>Your POL263 sign-in code is <strong style="font-size:18px;letter-spacing:2px">${otp}</strong>.</p><p>It expires in 10 minutes.</p><p>If you didn't just try to sign in, ignore this email and tell your administrator.</p>`,
+    });
+    if (r.ok) sent = { channel: "email", destination: maskEmailForDisplay(user.email) };
+    else structuredLog("error", "Login MFA email failed", { userId: user.id, error: r.message });
+  }
+
+  if (!sent) return null;
+  sessionAny.pendingMfaAltCodeHash = await argon2.hash(otp);
+  sessionAny.pendingMfaAltChannel = sent.channel;
+  sessionAny.pendingMfaLoginDestination = sent.destination;
+  return sent;
+}
+
+/** sendLoginMfaCode plus the per-challenge send counter and resend-throttle timestamp. */
+async function issueLoginMfaCode(sessionAny: any, user: any, opts: { forceEmail?: boolean } = {}) {
+  sessionAny.pendingMfaLoginSends = ((sessionAny.pendingMfaLoginSends as number) || 0) + 1;
+  sessionAny.pendingMfaAltLastSentAt = Date.now();
+  return sendLoginMfaCode(sessionAny, user, opts);
+}
 
 /** Re-derives the user a pending MFA challenge (see beginStaffMfaChallenge) is for, from the
  *  session marker rather than req.user — the user isn't logged in yet at this point. Mirrors
@@ -422,6 +507,9 @@ async function verifyPendingMfaCode(req: Request, res: Response): Promise<any | 
       }
     }
   }
+  // A code texted/emailed at login (sendLoginMfaCode) or via "Try another way".
+  const altHash = sessionAny.pendingMfaAltCodeHash as string | undefined;
+  if (!ok && code && altHash) ok = await argon2.verify(altHash, code);
   if (!ok) {
     sessionAny.pendingMfaFailedAttempts = attempts + 1;
     res.status(400).json({ message: "Invalid code" });
@@ -441,6 +529,9 @@ function clearPendingMfa(sessionAny: any) {
   delete sessionAny.pendingMfaAltCodeHash;
   delete sessionAny.pendingMfaAltChannel;
   delete sessionAny.pendingMfaAltLastSentAt;
+  delete sessionAny.pendingMfaLoginCode;
+  delete sessionAny.pendingMfaLoginSends;
+  delete sessionAny.pendingMfaLoginDestination;
 }
 
 /** Shows only the last 4 digits — a hint so the legitimate user recognizes their own number
@@ -771,12 +862,15 @@ export function setupAuth(app: Express) {
           }
         }
 
-        if (user.mfaEnabled) {
+        // Admins and the platform owner always get a second factor: a code texted to them
+        // (emailed if SMS can't go out). Others only when they've enrolled an authenticator.
+        const privileged = await isMfaPrivileged(user);
+        if (user.mfaEnabled || privileged) {
           return beginStaffMfaChallenge(req, res, next, user, () => {
             const baseUrl = baseUrlFromEnv();
             const challengePath = "/staff/mfa-verify";
             return res.redirect(baseUrl ? `${baseUrl}${challengePath}` : challengePath);
-          });
+          }, { sendLoginCode: privileged });
         }
 
         return completeGoogleLogin(req, res, next, user);
@@ -892,7 +986,44 @@ export function setupAuth(app: Express) {
   app.post("/api/auth/mfa/verify-login", async (req: Request, res: Response, next: NextFunction) => {
     const user = await verifyPendingMfaCode(req, res);
     if (!user) return;
-    return completeGoogleLogin(req, res, next, user, { asJson: true });
+    return completeGoogleLogin(req, res, next, user, { asJson: true, mfaVerified: true });
+  });
+
+  /** What the verify page should say: where the login code went, and what else the user can use. */
+  app.get("/api/auth/mfa/login-status", async (req: Request, res: Response) => {
+    const sessionAny = req.session as any;
+    const user = await resolvePendingMfaUser(req);
+    if (!user) return res.status(401).json({ message: "MFA challenge expired — please log in again" });
+    const loginCode = sessionAny.pendingMfaLoginCode === true;
+    return res.json({
+      loginCode,
+      sentVia: loginCode && sessionAny.pendingMfaAltCodeHash ? sessionAny.pendingMfaAltChannel : null,
+      destination: loginCode ? sessionAny.pendingMfaLoginDestination ?? null : null,
+      hasAuthenticator: !!user.mfaEnabled,
+      canEmail: !!user.email,
+      resendsLeft: Math.max(0, MFA_LOGIN_CODE_MAX_SENDS - ((sessionAny.pendingMfaLoginSends as number) || 0)),
+    });
+  });
+
+  /** Resend the login code (SMS, falling back to email), or `{ channel: "email" }` to force email. */
+  app.post("/api/auth/mfa/resend-login-code", async (req: Request, res: Response) => {
+    const sessionAny = req.session as any;
+    const user = await resolvePendingMfaUser(req);
+    if (!user) return res.status(401).json({ message: "MFA challenge expired — please log in again" });
+    if (sessionAny.pendingMfaLoginCode !== true) return res.status(400).json({ message: "No sign-in code for this login" });
+    if (((sessionAny.pendingMfaLoginSends as number) || 0) >= MFA_LOGIN_CODE_MAX_SENDS) {
+      return res.status(429).json({ message: "Too many codes requested — please log in again" });
+    }
+    const lastSentAt = sessionAny.pendingMfaAltLastSentAt as number | undefined;
+    if (lastSentAt && Date.now() - lastSentAt < 30_000) {
+      return res.status(429).json({ message: "Please wait 30 seconds before requesting another code" });
+    }
+    const sent = await issueLoginMfaCode(sessionAny, user, { forceEmail: req.body?.channel === "email" });
+    sessionAny.save((err: Error | null) => {
+      if (err) return res.status(500).json({ message: "Internal server error" });
+      if (!sent) return res.status(503).json({ message: "Couldn't send a code by SMS or email right now. Please try again shortly." });
+      return res.json({ sentVia: sent.channel, destination: sent.destination });
+    });
   });
 
   /**
@@ -997,7 +1128,7 @@ export function setupAuth(app: Express) {
 
     structuredLog("info", "MFA verified via alt channel", { userId: user.id, channel: sessionAny.pendingMfaAltChannel });
     clearPendingMfa(sessionAny);
-    return completeGoogleLogin(req, res, next, user, { asJson: true });
+    return completeGoogleLogin(req, res, next, user, { asJson: true, mfaVerified: true });
   });
 
   app.post("/api/agent-auth/mfa-verify", async (req: Request, res: Response) => {
@@ -1450,6 +1581,11 @@ export { enforceTenantViewOnly } from "./tenant-view-only";
  */
 const MFA_REQUIRED_PERMISSIONS = new Set(["manage:settings", "manage:users"]);
 
+/** Enrolled an authenticator, or passed a second factor when this session signed in. */
+function hasMfa(req: Request, user: any): boolean {
+  return !!user.mfaEnabled || (req.session as any)?.mfaVerified === true;
+}
+
 function rejectForMissingMfa(req: Request, res: Response, user: any, perms: string[]) {
   structuredLog("warn", "Blocked for missing MFA on privileged permission", {
     userId: user.id,
@@ -1457,7 +1593,7 @@ function rejectForMissingMfa(req: Request, res: Response, user: any, perms: stri
     requestId: (req as any).requestId,
   });
   return res.status(403).json({
-    message: "This action requires multi-factor authentication. Enroll MFA in Settings to continue.",
+    message: "This action needs a sign-in code. Sign out and sign back in and we will text or email you one.",
     code: "MFA_REQUIRED",
   });
 }
@@ -1472,7 +1608,7 @@ export function requirePermission(...requiredPerms: string[]) {
     // Platform owners are superusers — they bypass all permission checks — but still need MFA,
     // since they hold every permission implicitly, including the ones gated below.
     if (user.isPlatformOwner) {
-      if (!user.mfaEnabled) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
+      if (!hasMfa(req, user)) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
       return next();
     }
 
@@ -1494,7 +1630,7 @@ export function requirePermission(...requiredPerms: string[]) {
       return res.status(403).json({ message: "Insufficient permissions" });
     }
 
-    if (!user.mfaEnabled && requiredPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
+    if (!hasMfa(req, user) && requiredPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
       return rejectForMissingMfa(req, res, user, requiredPerms);
     }
 
@@ -1512,7 +1648,7 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
     // Platform owners are superusers — they bypass all permission checks — but still need MFA,
     // since they hold every permission implicitly, including the ones gated below.
     if (user.isPlatformOwner) {
-      if (!user.mfaEnabled) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
+      if (!hasMfa(req, user)) return rejectForMissingMfa(req, res, user, ["isPlatformOwner"]);
       return next();
     }
 
@@ -1534,7 +1670,7 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
       return res.status(403).json({ message: "Insufficient permissions" });
     }
 
-    if (!user.mfaEnabled && grantedPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
+    if (!hasMfa(req, user) && grantedPerms.some((p) => MFA_REQUIRED_PERMISSIONS.has(p))) {
       return rejectForMissingMfa(req, res, user, grantedPerms);
     }
 
