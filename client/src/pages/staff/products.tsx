@@ -1535,7 +1535,7 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
       cashInLieuChild: cashInLieuChild || undefined,
       commissionFirstMonthsCount: commFirstMonths ? parseInt(commFirstMonths) : undefined,
       commissionFirstMonthsRate: commFirstRate || undefined,
-      commissionRecurringStartMonth: commRecurringStart ? parseInt(commRecurringStart) : undefined,
+      commissionRecurringStartMonth: (parseInt(commFirstMonths) || 2) + 1,
       commissionRecurringRate: commRecurringRate || undefined,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : undefined,
       commissionFuneralIncentive: commFuneralIncentive || undefined,
@@ -1742,7 +1742,8 @@ function CreateVersionDialog({ productId, open, onClose, onSubmit, isPending }: 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="comm-recurring-start">Recurring Start Month</Label>
-              <Input id="comm-recurring-start" type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-version-comm-recurring-start" />
+              <Input id="comm-recurring-start" type="number" value={String((parseInt(commFirstMonths) || 2) + 1)} readOnly disabled className="bg-muted" data-testid="input-version-comm-recurring-start" />
+              <p className="text-xs text-muted-foreground">Always the month after the first-months period — every payment earns commission.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="comm-recurring-rate">Recurring Rate (%)</Label>
@@ -1963,7 +1964,7 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
       reinstatementNewWaitingPeriod,
       commissionFirstMonthsCount: commFirstMonths ? parseInt(commFirstMonths) : null,
       commissionFirstMonthsRate: commFirstRate || null,
-      commissionRecurringStartMonth: commRecurringStart ? parseInt(commRecurringStart) : null,
+      commissionRecurringStartMonth: (parseInt(commFirstMonths) || 2) + 1,
       commissionRecurringRate: commRecurringRate || null,
       commissionClawbackThreshold: commClawback ? parseInt(commClawback) : null,
       commissionFuneralIncentive: commFuneralIncentive || null,
@@ -2162,7 +2163,8 @@ function EditVersionDialog({ version, open, onClose, onSubmit, isPending }: {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="comm-recurring-start-2">Recurring Start Month</Label>
-              <Input id="comm-recurring-start-2" type="number" value={commRecurringStart} onChange={(e) => setCommRecurringStart(e.target.value)} placeholder="e.g. 5" data-testid="input-edit-version-comm-recurring-start" />
+              <Input id="comm-recurring-start-2" type="number" value={String((parseInt(commFirstMonths) || 2) + 1)} readOnly disabled className="bg-muted" data-testid="input-edit-version-comm-recurring-start" />
+              <p className="text-xs text-muted-foreground">Always the month after the first-months period — every payment earns commission.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="comm-recurring-rate-2">Recurring Rate (%)</Label>

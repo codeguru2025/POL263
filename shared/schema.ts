@@ -2619,7 +2619,7 @@ export const commissionPlans = pgTable(
     description: text("description"),
     firstMonthsCount: integer("first_months_count").default(2),
     firstMonthsRate: numeric("first_months_rate").default("50"),
-    recurringStartMonth: integer("recurring_start_month").default(5),
+    recurringStartMonth: integer("recurring_start_month").default(3),
     recurringRate: numeric("recurring_rate").default("10"),
     clawbackThresholdPayments: integer("clawback_threshold_payments").default(4),
     funeralServiceIncentive: numeric("funeral_service_incentive").default("50"),

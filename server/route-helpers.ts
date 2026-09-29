@@ -641,7 +641,7 @@ async function resolveCommissionRates(orgId: string, policy: any): Promise<{ rat
         rates: {
           firstMonths,
           firstRate: Number(pv.commissionFirstMonthsRate) || 0,
-          recurringStart: Number(pv.commissionRecurringStartMonth) || firstMonths + 1,
+          recurringStart: firstMonths + 1, // recurring follows straight on — no unpaid months (Augustus, 2026-09-29)
           recurringRate: Number(pv.commissionRecurringRate) || 0,
         },
         source: "product version",
@@ -656,7 +656,7 @@ async function resolveCommissionRates(orgId: string, policy: any): Promise<{ rat
       rates: {
         firstMonths,
         firstRate: Number(activePlan.firstMonthsRate) || 0,
-        recurringStart: Number(activePlan.recurringStartMonth) || firstMonths + 1,
+        recurringStart: firstMonths + 1,
         recurringRate: Number(activePlan.recurringRate) || 0,
       },
       source: "org plan",
