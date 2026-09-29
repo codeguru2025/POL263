@@ -10,6 +10,31 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-29 — Falakhe went read-only in production (receipting 500s) — caused by an ad-hoc script
+
+**Symptom:** Receipting payments returned "internal server error". The logs showed every write on
+Falakhe's database failing with `cannot execute … in a read-only transaction`: `POST
+/api/payments`, the `users` updates behind `/api/notifications`, and startup tenant auto-migration.
+
+**Root cause:** ad-hoc report scripts run from a dev machine connected through Falakhe's
+PgBouncer pool (`FALAKHE_DATABASE_URL`, port 25061) and ran `SET default_transaction_read_only =
+on` to stay read-only. The pool is in transaction mode and doesn't reset server connections, so
+the session setting stayed on the server connections it used. The live app then borrowed those
+connections and every write failed. The database itself was fine: not in recovery and only 50 MB.
+
+**Fix:** terminated the pool's server connections (doadmin from 127.0.0.1) over a direct
+connection (port 25060, `defaultdb`) so PgBouncer opened fresh ones
+(`script/.tmp/reset-pool.mjs`). Verified: a check through the pool shows the connections are
+writable, and the app logs have had no 500s since 15:07 UTC.
+
+**Lesson for next time:** never run a session-level `SET` through a PgBouncer pool URL. For
+ad-hoc queries, connect directly (25060/defaultdb), or use `BEGIN READ ONLY … COMMIT`, which is
+scoped to the transaction. If writes suddenly fail with "read-only transaction" while
+`pg_is_in_recovery()` is false and the disk isn't full, look for a leaked session setting on the
+pool.
+
+---
+
 ## 2026-09-29 — Legacy group/product policies earned 50% joining commission
 
 **Symptom:** Andile's 7 receipts on VUSANANI B/S (LEGACY GROUP product) each earned 50% ($7.50),
