@@ -359,7 +359,8 @@ export function useDetailDialogs({
                   <SelectValue placeholder="Select product..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {(products || []).map((p: any) => (
+                  {/* Legacy products are for legacy policies only. A legacy policy can still move to a current product (conversion). */}
+                  {(products || []).filter((p: any) => !p.isLegacy || !!displayPolicy?.isLegacy).map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
                   ))}
                 </SelectContent>

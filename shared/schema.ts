@@ -753,6 +753,8 @@ export const products = pgTable(
     coverAmount: numeric("cover_amount"),
     coverCurrency: text("cover_currency").default("USD"),
     isActive: boolean("is_active").default(true).notNull(),
+    /** Migrated book: agents earn the recurring rate only on every month (no joining commission). */
+    isLegacy: boolean("is_legacy").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     /**
      * Generalizes the risk/protection engine beyond funeral cash plans (see

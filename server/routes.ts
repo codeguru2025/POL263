@@ -2949,7 +2949,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!isLegacyGroupCapture && req.body.legacyProductVersionId) {
       const pv = await storage.getProductVersion(String(req.body.legacyProductVersionId), user.organizationId);
       const product = pv ? await storage.getProduct(pv.productId, user.organizationId) : null;
-      if (product && (product.code === "LEGIND" || product.code === "LEGGRP")) {
+      if (product && (product.isLegacy || product.code === "LEGIND" || product.code === "LEGGRP")) {
         isLegacyGroupCapture = true;
       }
     }
@@ -3093,7 +3093,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!isLegacyDependentCapture && body.legacyProductVersionId) {
       const pv = await storage.getProductVersion(String(body.legacyProductVersionId), user.organizationId);
       const product = pv ? await storage.getProduct(pv.productId, user.organizationId) : null;
-      if (product && (product.code === "LEGIND" || product.code === "LEGGRP")) {
+      if (product && (product.isLegacy || product.code === "LEGIND" || product.code === "LEGGRP")) {
         isLegacyDependentCapture = true;
       }
     }
@@ -4225,7 +4225,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // premiumAmount) so it survives recalculatePolicyPremiumIfNeeded, which otherwise
     // silently resets premiumAmount back to the product's 0 base on the next policy-list view.
     const issuedProduct = await storage.getProduct(productVersion.productId, user.organizationId);
-    const isCustomPremiumProduct = issuedProduct?.code === "LEGIND" || issuedProduct?.code === "LEGGRP";
+    // Legacy policies go on legacy products only, and new business on non-legacy products only —
+    // mixing them paid 50% joining commission on migrated business (see BUGFIX-LOG 2026-09-29).
+    if (issuedProduct && !!issuedProduct.isLegacy !== !!(parsed as any).isLegacy) {
+      return res.status(400).json({
+        message: issuedProduct.isLegacy
+          ? `${issuedProduct.name} is a legacy product — tick "legacy / pre-existing policy" to use it.`
+          : `A legacy policy must use a legacy product, not ${issuedProduct.name}.`,
+      });
+    }
+    const isCustomPremiumProduct = !!issuedProduct?.isLegacy || issuedProduct?.code === "LEGIND" || issuedProduct?.code === "LEGGRP";
     if (isCustomPremiumProduct) {
       const customAmt = parseFloat(String(userSubmittedPremium ?? ""));
       if (Number.isFinite(customAmt) && customAmt >= 0) {
@@ -4587,6 +4596,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const isLegacyRequest = canEditPremium && body.isLegacy === true && !before.isLegacy;
     delete body.isLegacy;
+    if (isLegacyRequest && before.productVersionId) {
+      // Legacy policies go on legacy products only — change the product first.
+      const pvForLegacy = await storage.getProductVersion(before.productVersionId, user.organizationId);
+      const productForLegacy = pvForLegacy ? await storage.getProduct(pvForLegacy.productId, user.organizationId) : undefined;
+      if (productForLegacy && !productForLegacy.isLegacy) {
+        return res.status(400).json({ message: `${productForLegacy.name} is not a legacy product. Move the policy to a legacy product before marking it legacy.` });
+      }
+    }
 
     // Premium override for legacy policies: preserves original premiumAmount for reference.
     const rawPremiumOverride = canEditPremium ? body.premiumOverride : undefined;
@@ -4643,7 +4660,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (manualPremium != null && premiumOverrideUpdate == null) {
       const editedPv = await storage.getProductVersion(before.productVersionId, user.organizationId);
       const editedProduct = editedPv ? await storage.getProduct(editedPv.productId, user.organizationId) : null;
-      if (editedProduct?.code === "LEGIND" || editedProduct?.code === "LEGGRP") {
+      if (editedProduct?.isLegacy || editedProduct?.code === "LEGIND" || editedProduct?.code === "LEGGRP") {
         premiumOverrideUpdate = {
           premiumOverride: manualPremium.toFixed(2),
           premiumOverrideNote: "Legacy custom premium set on edit",
@@ -4727,6 +4744,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!targetProductVersionId) return res.status(400).json({ message: "productVersionId is required" });
       const targetPv = await storage.getProductVersion(targetProductVersionId, user.organizationId);
       if (!targetPv) return res.status(400).json({ message: "Invalid target product version" });
+      // New business can't move onto a legacy product. A legacy policy may move to any product —
+      // that's how migrated policies are converted to a current product.
+      const targetProductForLegacy = await storage.getProduct(targetPv.productId, user.organizationId);
+      if (targetProductForLegacy?.isLegacy && !policy.isLegacy) {
+        return res.status(400).json({ message: `${targetProductForLegacy.name} is a legacy product — only legacy policies can use it.` });
+      }
 
       const currentPv = await storage.getProductVersion(policy.productVersionId, user.organizationId);
       if (!currentPv) return res.status(400).json({ message: "Current policy product version is invalid" });

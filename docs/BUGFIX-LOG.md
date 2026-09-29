@@ -10,6 +10,33 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-29 — Legacy group/product policies earned 50% joining commission
+
+**Symptom:** Andile's 7 receipts on VUSANANI B/S (LEGACY GROUP product) each earned 50% ($7.50),
+but legacy business is meant to earn 10% only.
+
+**Root cause:** there are three ways to mark something legacy: `policies.is_legacy`,
+`groups.is_legacy`, and being on a legacy product. `resolveCommissionRates` only checked the
+policy flag, so it missed the other two. Products had no legacy flag at all. The code recognised
+Falakhe's product codes `LEGIND`/`LEGGRP` by hard-coding them.
+
+**Fix:** migration `0132_products_is_legacy.sql` adds `products.is_legacy` and turns it on for
+LEGIND/LEGGRP. A "Legacy product" checkbox is added to the edit-product dialog.
+`resolveCommissionRates` (server/route-helpers.ts) now treats a policy as legacy if the policy,
+its group or its product is legacy. The legacy-product checks in routes.ts read the new flag and
+keep the code check as a fallback. New rule: when the policy wizard's legacy tick is on, only
+legacy products are listed, and when it's off, legacy products are hidden. `POST /api/policies`
+rejects a mismatch. Marking an existing policy legacy is rejected if its product isn't legacy.
+Change-product won't move new business onto a legacy product, but a legacy policy can still
+convert to a current product. The Falakhe ledger correction reruns
+`script/.tmp/recalc-commissions.ts` with the three-way legacy rule.
+
+**Lesson for next time:** when a concept is marked in several places (policy, group, product),
+grep for every one before you rely on it. Mark a category with a flag, not a list of product
+codes.
+
+---
+
 ## 2026-09-29 — Commission reports added rands into dollar totals; commission-per-payment column always empty
 
 **Symptom:** Several commission totals added rand and dollar entries together. Nqobile's R480 turned

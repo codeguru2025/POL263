@@ -193,7 +193,9 @@ export function CreatePolicyWizard({
   // Legacy Individual/Legacy Group products are for quickly capturing historical clients —
   // same relaxation as a legacy group, since full details are frequently unknown up front.
   const selectedProductForCreate = products.find((p: any) => p.id === createForm.selectedProductId);
-  const isLegacyProductIssuance = selectedProductForCreate?.code === "LEGIND" || selectedProductForCreate?.code === "LEGGRP";
+  const isLegacyProductIssuance = !!selectedProductForCreate?.isLegacy;
+  // A legacy policy may only use a legacy product, and a new policy only a non-legacy one.
+  const productsForLegacyFlag = (products || []).filter((p: any) => !!p.isLegacy === !!createForm.isLegacy);
   const isLegacyIssuance = isLegacyGroupIssuance || isLegacyProductIssuance;
 
   const { data: dependents } = useQuery<any[]>({
@@ -518,7 +520,12 @@ export function CreatePolicyWizard({
                   <Checkbox
                     id="create-legacy-flag"
                     checked={createForm.isLegacy}
-                    onCheckedChange={(v) => setCreateForm({ ...createForm, isLegacy: !!v })}
+                    onCheckedChange={(v) => {
+                      const selected = products.find((p: any) => p.id === createForm.selectedProductId);
+                      // Ticking/unticking legacy clears a product that no longer matches.
+                      const keep = selected && !!selected.isLegacy === !!v;
+                      setCreateForm({ ...createForm, isLegacy: !!v, ...(keep ? {} : { selectedProductId: "", productVersionId: "" }) });
+                    }}
                     data-testid="checkbox-is-legacy"
                   />
                   <div className="space-y-1 leading-none">
@@ -1037,11 +1044,14 @@ export function CreatePolicyWizard({
                       <SelectValue placeholder="Select product..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {products?.map((p: any) => (
+                      {productsForLegacyFlag.map((p: any) => (
                         <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {createForm.isLegacy ? "Legacy policy: only legacy products are shown." : "Only products for new business are shown. Tick 'legacy' in step 1 to use a legacy product."}
+                  </p>
                 </div>
                 {createForm.selectedProductId && (
                   <div>

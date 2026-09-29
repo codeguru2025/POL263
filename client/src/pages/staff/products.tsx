@@ -60,6 +60,7 @@ type Product = {
   /** 'bundled_family' (default) | 'individual_age_rated' — see server/route-helpers.ts computePolicyPremium. */
   pricingModel: string;
   isActive: boolean;
+  isLegacy?: boolean;
   createdAt: string;
 };
 
@@ -1177,6 +1178,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
   const [coverCurrency, setCoverCurrency] = useState(product.coverCurrency || "USD");
   const [pricingModel, setPricingModel] = useState(product.pricingModel || "bundled_family");
   const [isActive, setIsActive] = useState(product.isActive);
+  const [isLegacy, setIsLegacy] = useState(!!product.isLegacy);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1220,6 +1222,7 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
       coverCurrency,
       pricingModel,
       isActive,
+      isLegacy,
     });
   };
 
@@ -1299,6 +1302,13 @@ function EditProductDialog({ product, open, onClose, onSubmit, isPending }: {
           <div className="flex items-center gap-2">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} id="edit-active" data-testid="input-edit-product-active" />
             <Label htmlFor="edit-active">Active</Label>
+          </div>
+          <div className="flex items-start gap-2">
+            <input type="checkbox" checked={isLegacy} onChange={(e) => setIsLegacy(e.target.checked)} id="edit-legacy" className="mt-1" data-testid="input-edit-product-legacy" />
+            <Label htmlFor="edit-legacy" className="font-normal">
+              <span className="font-medium">Legacy product</span>
+              <span className="block text-xs text-muted-foreground">Policies moved over from an old system. Agents earn 10% on every payment, with no joining commission, because the old system already paid it.</span>
+            </Label>
           </div>
 
           <DialogFooter>

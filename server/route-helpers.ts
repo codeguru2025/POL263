@@ -620,13 +620,21 @@ export async function reconcilePremiumChange(params: {
   return { reconciliation: R, periods, direction };
 }
 
-/** Rates for this policy: legacy (migrated) policies pay the recurring rate only; otherwise the
+/** Rates for this policy: legacy (migrated) business pays the recurring rate only; otherwise the
  *  product version's rates, then the org's active plan, then DEFAULT_COMMISSION_RATES. A product
- *  with no rates used to earn nothing at all — every payment on it went uncommissioned. */
+ *  with no rates used to earn nothing at all — every payment on it went uncommissioned.
+ *  Legacy is marked in three places and any one counts: the policy, its group, or its product.
+ *  Checking only the policy flag paid 50% joining commission on LEGACY GROUP policies. */
 async function resolveCommissionRates(orgId: string, policy: any): Promise<{ rates: CommissionRates; source: string }> {
   if (policy.isLegacy) return { rates: LEGACY_COMMISSION_RATES, source: "legacy policy" };
+  if (policy.groupId) {
+    const group = await storage.getGroup(policy.groupId, orgId);
+    if (group?.isLegacy) return { rates: LEGACY_COMMISSION_RATES, source: "legacy group" };
+  }
   if (policy.productVersionId) {
     const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+    const product = pv ? await storage.getProduct(pv.productId, orgId) : undefined;
+    if (product?.isLegacy) return { rates: LEGACY_COMMISSION_RATES, source: "legacy product" };
     if (pv?.commissionFirstMonthsRate != null) {
       const firstMonths = Number(pv.commissionFirstMonthsCount) || 2;
       return {
