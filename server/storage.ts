@@ -2356,7 +2356,7 @@ export class DatabaseStorage implements IStorage {
         EmailAddress: r.clientEmail ?? "",
         UsualPremium: `${r.currency || "USD"} ${r.premiumAmount ?? ""}`.trim(),
         Currency: r.currency ?? "",
-        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim(),
+        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim() || "Walk-in",
         Payment_Method: r.clientId ? (payMethodMap[r.clientId] ?? "") : "",
         IsDebiCheck: "",
         User_Code: "",
@@ -2945,7 +2945,7 @@ export class DatabaseStorage implements IStorage {
       if (r.graceEndDate) maturityParts.push(`Grace end ${r.graceEndDate}`);
       const MaturityTerm = maturityParts.join(" · ") || "";
       const InternalReferenceNumber = [r.productCode, r.policyNumber].filter(Boolean).join(" · ") || String(r.policyId);
-      const agentName = r.agentDisplayName || r.agentEmail || "";
+      const agentName = r.agentDisplayName || r.agentEmail || "Walk-in";
 
       return {
         _policyId: r.policyId,
@@ -3106,7 +3106,7 @@ export class DatabaseStorage implements IStorage {
       return {
         policyId: r.policyId,
         agent_id: r.agentId ?? "",
-        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim(),
+        AgentsName: (r.agentDisplayName || r.agentEmail || "").trim() || "Walk-in",
         Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
         Policy_Number: r.policyNumber ?? "",
         FullName: fullName,
@@ -4072,7 +4072,7 @@ export class DatabaseStorage implements IStorage {
       const inceptionStr = r.inceptionDate ? String(r.inceptionDate) : "";
       const ActualPen =
         periodPremiumCents > 0 ? fromCents(amountCents - periodPremiumCents) : "";
-      const agentsName = r.agentDisplayName || r.agentEmail || "";
+      const agentsName = r.agentDisplayName || r.agentEmail || "Walk-in";
       const ReceiptCount = receiptCountByPolicy.get(r.policyId) ?? 0;
       const DTSTAMP = issuedDate ? toICalDTSTAMP(issuedDate) : "";
       return {

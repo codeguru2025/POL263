@@ -28,7 +28,7 @@ const personColumns: EdtColumn<any>[] = [
   { id: "name", header: "Client", accessor: (p) => `${p.clientFirstName ?? ""} ${p.clientLastName ?? ""}`.trim(), cell: (p) => <span className="whitespace-nowrap">{`${p.clientFirstName ?? ""} ${p.clientLastName ?? ""}`.trim() || "—"}</span> },
   { id: "phone", header: "Phone", accessor: (p) => p.clientPhone || "" },
   { id: "product", header: "Product", accessor: (p) => p.productName || "" },
-  { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
+  { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "Walk-in" },
 ];
 
 const lastPaymentColumn: EdtColumn<any> = {

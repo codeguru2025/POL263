@@ -9,6 +9,7 @@ import { currencyField } from "@shared/premium-currency";
 import type { AgeBand } from "@shared/schema";
 import type { OrgDataDb } from "./tenant-db";
 import { toCents, fromCents, sumCents, centsToNumber, moneyString, percentOf } from "@shared/money";
+import { commissionSplits, periodsCovered, DEFAULT_COMMISSION_RATES, LEGACY_COMMISSION_RATES, type CommissionRates } from "./commission-calc";
 
 export { currencyField };
 
@@ -619,77 +620,108 @@ export async function reconcilePremiumChange(params: {
   return { reconciliation: R, periods, direction };
 }
 
+/** Rates for this policy: legacy (migrated) policies pay the recurring rate only; otherwise the
+ *  product version's rates, then the org's active plan, then DEFAULT_COMMISSION_RATES. A product
+ *  with no rates used to earn nothing at all — every payment on it went uncommissioned. */
+async function resolveCommissionRates(orgId: string, policy: any): Promise<{ rates: CommissionRates; source: string }> {
+  if (policy.isLegacy) return { rates: LEGACY_COMMISSION_RATES, source: "legacy policy" };
+  if (policy.productVersionId) {
+    const pv = await storage.getProductVersion(policy.productVersionId, orgId);
+    if (pv?.commissionFirstMonthsRate != null) {
+      const firstMonths = Number(pv.commissionFirstMonthsCount) || 2;
+      return {
+        rates: {
+          firstMonths,
+          firstRate: Number(pv.commissionFirstMonthsRate) || 0,
+          recurringStart: Number(pv.commissionRecurringStartMonth) || firstMonths + 1,
+          recurringRate: Number(pv.commissionRecurringRate) || 0,
+        },
+        source: "product version",
+      };
+    }
+  }
+  const plans = await storage.getCommissionPlans(orgId);
+  const activePlan = plans.find((p) => p.isActive);
+  if (activePlan) {
+    const firstMonths = Number(activePlan.firstMonthsCount) || 2;
+    return {
+      rates: {
+        firstMonths,
+        firstRate: Number(activePlan.firstMonthsRate) || 0,
+        recurringStart: Number(activePlan.recurringStartMonth) || firstMonths + 1,
+        recurringRate: Number(activePlan.recurringRate) || 0,
+      },
+      source: "org plan",
+    };
+  }
+  return { rates: DEFAULT_COMMISSION_RATES, source: "default rates" };
+}
+
+/**
+ * Records the agent's commission on one cleared payment. Every payment path must reach this
+ * (cash, PayNow, group receipts, month-end run, approved override receipts) —
+ * it is idempotent per transaction, so calling it twice is safe. Walk-in policies (no agent)
+ * earn no commission.
+ *
+ * Commission is per month paid (see commission-calc.ts): months already paid on the policy decide
+ * the rate, and a 4-month prepayment is months 1-4, not "payment #1" at 50% on the lot.
+ */
 export async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
   if (!policy.agentId) return;
   try {
-    let firstMonths = 0, firstRate = 0, recurringStart = 0, recurringRate = 0;
-    let sourceLabel = "org plan";
-
-    if (policy.productVersionId) {
-      const pv = await storage.getProductVersion(policy.productVersionId, orgId);
-      if (pv?.commissionFirstMonthsRate != null) {
-        firstMonths = Number(pv.commissionFirstMonthsCount) || 2;
-        firstRate = Number(pv.commissionFirstMonthsRate) || 0;
-        recurringStart = Number(pv.commissionRecurringStartMonth) || firstMonths + 1;
-        recurringRate = Number(pv.commissionRecurringRate) || 0;
-        sourceLabel = "product version";
-      }
-    }
-
-    if (firstRate === 0 && recurringRate === 0) {
-      const plans = await storage.getCommissionPlans(orgId);
-      const activePlan = plans.find((p) => p.isActive);
-      if (!activePlan) return;
-      firstMonths = Number(activePlan.firstMonthsCount) || 2;
-      firstRate = Number(activePlan.firstMonthsRate) || 50;
-      recurringStart = Number(activePlan.recurringStartMonth) || 5;
-      recurringRate = Number(activePlan.recurringRate) || 10;
-      sourceLabel = "org plan";
-    }
-
-    const existingPayments = await storage.getPaymentsByPolicy(policy.id, orgId);
-    const clearedCount = existingPayments.filter((p: any) => p.status === "cleared").length;
-
-    // `recurringStart` was computed above but never read here — the recurring rate fired
-    // immediately once `firstMonths` cleared payments passed, ignoring any gap the config
-    // implies between the first-months tier and when the recurring tier is meant to start
-    // (e.g. months 1-2 at firstRate, then nothing until recurring kicks in at month 5). Gate on
-    // it explicitly: no commission in that gap, matching what the two-tier config implies.
-    let rate = 0;
-    let entryType = "recurring";
-    if (clearedCount <= firstMonths) {
-      rate = firstRate;
-      entryType = "first_months";
-    } else if (clearedCount < recurringStart) {
-      return; // gap between first-months tier and recurring start — no commission this payment
-    } else {
-      rate = recurringRate;
-      entryType = "recurring";
-    }
-
-    if (rate <= 0) return;
-
-    const amount = moneyString(percentOf(paymentAmount, rate));
-    await storage.createCommissionLedgerEntry({
-      organizationId: orgId,
-      agentId: policy.agentId,
-      policyId: policy.id,
-      transactionId,
-      entryType,
-      amount,
-      currency: policy.currency || "USD",
-      description: `${rate}% commission on payment #${clearedCount} (${entryType === "first_months" ? "initial" : "recurring"}, ${sourceLabel})`,
-      status: "earned",
+    if (await storage.hasCommissionLedgerForTransaction(orgId, transactionId)) return;
+    const payments = await storage.getPaymentsByPolicy(policy.id, orgId);
+    const self = payments.find((p: any) => p.id === transactionId);
+    // Credit-balance payments spend an earlier overpayment, which already earned commission in
+    // full when it came in — commissioning it again (or counting it twice below) would double up.
+    if (self?.paymentMethod === "credit_balance") return;
+    const cleared = payments.filter((p: any) => p.status === "cleared" && !p.deletedAt && p.paymentMethod !== "credit_balance");
+    const { rates, source } = await resolveCommissionRates(orgId, policy);
+    const selfAt = self?.createdAt ? new Date(self.createdAt).getTime() : Number.POSITIVE_INFINITY;
+    const prior = cleared.filter((p: any) => {
+      if (p.id === transactionId) return false;
+      const at = p.createdAt ? new Date(p.createdAt).getTime() : 0;
+      return at < selfAt || (at === selfAt && String(p.id) < String(transactionId));
     });
-    // Notify agent of commission earned
+
+    const schedule = policy.paymentSchedule;
+    const priorMonths = prior.reduce((n: number, p: any) => n + periodsCovered(p.periodFrom, p.periodTo, schedule), 0);
+    const months = periodsCovered(self?.periodFrom, self?.periodTo, schedule);
+    const splits = commissionSplits(priorMonths, toCents(paymentAmount), months, rates);
+    if (splits.length === 0) return;
+
+    const currency = self?.currency || policy.currency || "USD";
+    for (const s of splits) {
+      const span = s.fromMonth === s.toMonth ? `month ${s.fromMonth}` : `months ${s.fromMonth}-${s.toMonth}`;
+      await storage.createCommissionLedgerEntry({
+        organizationId: orgId,
+        agentId: policy.agentId,
+        policyId: policy.id,
+        transactionId,
+        entryType: s.entryType,
+        amount: s.commission,
+        currency,
+        description: `${s.rate}% commission on ${currency} ${fromCents(s.baseCents)} (${span}, ${s.entryType === "first_months" ? "initial" : "recurring"}, ${source})`,
+        status: "earned",
+      });
+    }
+    const total = fromCents(sumCents(splits.map((s) => s.commission)));
     notifyUser(orgId, policy.agentId, {
       type: "COMMISSION_EARNED",
       title: "Commission Earned",
-      body: `${policy.currency || "USD"} ${amount} commission credited for policy ${policy.policyNumber || policy.id}.`,
-      metadata: { policyId: policy.id, transactionId, amount, currency: policy.currency || "USD" },
+      body: `${currency} ${total} commission credited for policy ${policy.policyNumber || policy.id}.`,
+      metadata: { policyId: policy.id, transactionId, amount: total, currency },
     }).catch(() => {});
   } catch (err) {
     structuredLog("error", "Commission calculation failed", { error: (err as Error).message, policyId: policy.id });
+  }
+}
+
+/** recordAgentCommission for payments written inside a transaction — call after it commits. */
+export async function recordAgentCommissionForTransactions(orgId: string, items: { policyId: string; transactionId: string; amount: string }[]) {
+  for (const it of items) {
+    const policy = await storage.getPolicy(it.policyId, orgId);
+    if (policy) await recordAgentCommission(orgId, policy, it.transactionId, String(it.amount));
   }
 }
 
@@ -729,7 +761,9 @@ export async function rollbackClawbacks(orgId: string, policy: any) {
   try {
     const entries = await storage.getCommissionEntriesByPolicy(policy.id, orgId);
     const unreversedCents = sumCents(entries
-      .filter((e: any) => e.entryType === "clawback" && e.status === "earned")
+      // Net of earlier reversals — summing clawbacks alone re-reversed the same clawback on
+      // every later payment (FLK00346 got its $7 clawback back twice).
+      .filter((e: any) => ["clawback", "clawback_reversal", "rollback"].includes(e.entryType) && e.status === "earned")
       .map((e: any) => e.amount));
     if (unreversedCents >= 0) return;
     await storage.createCommissionLedgerEntry({
@@ -754,7 +788,9 @@ export async function rollbackClawbacksInTx(txDb: any, orgId: string, policy: an
     const entries = await txDb.select().from(commissionLedgerEntries)
       .where(and(eq(commissionLedgerEntries.policyId, policy.id), eq(commissionLedgerEntries.organizationId, orgId)));
     const unreversedCents = sumCents(entries
-      .filter((e: any) => e.entryType === "clawback" && e.status === "earned")
+      // Net of earlier reversals — summing clawbacks alone re-reversed the same clawback on
+      // every later payment (FLK00346 got its $7 clawback back twice).
+      .filter((e: any) => ["clawback", "clawback_reversal", "rollback"].includes(e.entryType) && e.status === "earned")
       .map((e: any) => e.amount));
     if (unreversedCents >= 0) return;
     await txDb.insert(commissionLedgerEntries).values({

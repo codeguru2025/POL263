@@ -22,7 +22,7 @@ const columns: EdtColumn<any>[] = [
   { id: "product", header: "Product", accessor: (p) => p.productName || "" },
   { id: "group", header: "Group", accessor: (p) => p.groupName || "" },
   { id: "branch", header: "Branch", accessor: (p) => p.branchName || "" },
-  { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "" },
+  { id: "agent", header: "Agent", accessor: (p) => p.agentDisplayName || p.agentEmail || "Walk-in" },
   { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || 0), cell: (p) => <span className="whitespace-nowrap tabular-nums">{p.currency} {p.premiumAmount}</span> },
   { id: "schedule", header: "Schedule", accessor: (p) => p.paymentSchedule || "" },
   { id: "paidUpTo", header: "Paid up to", accessor: (p) => (p.paidUpTo ? new Date(p.paidUpTo) : ""), cell: (p) => dateCell(p.paidUpTo) },

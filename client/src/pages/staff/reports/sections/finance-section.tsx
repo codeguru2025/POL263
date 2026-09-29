@@ -72,7 +72,7 @@ const financeReportColumns: EdtColumn<any>[] = [
   { id: "productCode", header: "Product code", accessor: (r) => r.productCode || "", cell: (r) => <span className="font-mono text-sm">{r.productCode || "—"}</span> },
   { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
   { id: "group", header: "Group", accessor: (r) => r.groupName || "" },
-  { id: "agent", header: "Agent", accessor: (r) => r.agentDisplayName || r.agentEmail || "" },
+  { id: "agent", header: "Agent", accessor: (r) => r.agentDisplayName || r.agentEmail || "Walk-in" },
 ];
 
 const underwriterPayableColumns: EdtColumn<any>[] = [
@@ -103,7 +103,7 @@ const receiptsColumns: EdtColumn<any>[] = [
   { id: "premiumDue", header: "Premium Due", align: "right", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap tabular-nums">{r.PremiumDue || "—"}</span> },
   { id: "monthsPaid", header: "Months Paid", align: "right", accessor: (r) => r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "—"}</span> },
   { id: "paymentMethod", header: "Method", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
-  { id: "agentsName", header: "Agent", accessor: (r) => r.agentsName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.agentsName}>{r.agentsName || "—"}</span> },
+  { id: "agentsName", header: "Agent", accessor: (r) => r.agentsName || "Walk-in", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.agentsName}>{r.agentsName || "Walk-in"}</span> },
   { id: "capturedBy", header: "Captured By", accessor: (r) => r.CapturedBy || r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.CapturedBy || r.CollectedBy}>{r.CapturedBy || r.CollectedBy || "—"}</span> },
   { id: "groupName", header: "Group", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
   { id: "dtstamp", header: "Timestamp (UTC)", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },

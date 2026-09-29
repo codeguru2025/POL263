@@ -3,7 +3,6 @@
  * Handlers must be idempotent: the same outbox row may be retried after partial failure.
  */
 
-import { moneyString, percentOf } from "@shared/money";
 import { storage } from "./storage";
 import { structuredLog } from "./logger";
 import { computePlatformFee } from "./platform-fee";
@@ -261,47 +260,9 @@ async function runPaynowApplyFollowup(orgId: string, payload: PaynowPayload): Pr
     }
   }
 
-  if (policy?.agentId) {
-    const hasComm = await storage.hasCommissionLedgerForTransaction(orgId, transaction.id);
-    if (!hasComm) {
-      try {
-        const plans = await storage.getCommissionPlans(orgId);
-        const activePlan = plans.find((p) => p.isActive);
-        if (activePlan) {
-          const existingPayments = await storage.getPaymentsByPolicy(policy.id!, orgId);
-          const clearedCount = existingPayments.filter((p: { status?: string }) => p.status === "cleared").length;
-          const firstMonths = Number(activePlan.firstMonthsCount) || 2;
-          const firstRate = Number(activePlan.firstMonthsRate) || 50;
-          const recurringRate = Number(activePlan.recurringRate) || 10;
-          let rate = 0;
-          let entryType = "recurring";
-          if (clearedCount <= firstMonths) {
-            rate = firstRate;
-            entryType = "first_months";
-          } else {
-            rate = recurringRate;
-            entryType = "recurring";
-          }
-          if (rate > 0) {
-            const commAmount = moneyString(percentOf(intent.amount, rate));
-            await storage.createCommissionLedgerEntry({
-              organizationId: orgId,
-              agentId: policy.agentId,
-              policyId: policy.id!,
-              transactionId: transaction.id,
-              entryType,
-              amount: commAmount,
-              currency: intent.currency || "USD",
-              description: `${rate}% commission on Paynow payment (${entryType === "first_months" ? "initial" : "recurring"})`,
-              status: "earned",
-            });
-          }
-        }
-      } catch (err) {
-        structuredLog("error", "Commission calculation failed (Paynow outbox)", { error: (err as Error).message });
-      }
-    }
-  }
+  // Same calculation as every other payment path. This used to compute its own commission from
+  // the org plan only, so on orgs with no plan (rates set per product) PayNow payments earned nothing.
+  if (policy?.agentId) await recordAgentCommission(orgId, policy, transaction.id, String(transaction.amount));
 }
 
 async function runServiceReceiptFollowup(orgId: string, payload: ServiceReceiptPayload): Promise<void> {

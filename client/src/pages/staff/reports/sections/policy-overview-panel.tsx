@@ -41,7 +41,7 @@ const columns: EdtColumn<OverviewRow>[] = [
   { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
   { id: "premium", header: "Premium", accessor: (p) => parseFloat(p.premiumAmount || "0"), cell: (p) => <span className="tabular-nums whitespace-nowrap">{p.currency} {p.premiumAmount}</span> },
   { id: "schedule", header: "Schedule", accessor: (p) => p.paymentSchedule },
-  { id: "agent", header: "Agent", accessor: (p) => p.agentName || "" },
+  { id: "agent", header: "Agent", accessor: (p) => p.agentName || "Walk-in" },
   {
     id: "created",
     header: "Captured",

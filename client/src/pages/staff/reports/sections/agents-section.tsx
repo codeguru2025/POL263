@@ -16,7 +16,7 @@ interface AgentsSectionProps extends ReportSectionBaseProps {
 }
 
 const agentPortfolioColumns: EdtColumn<any>[] = [
-  { id: "agent", header: "Agent", accessor: (p) => p.AgentsName || "", cell: (p) => <span className="text-sm whitespace-nowrap">{p.AgentsName || "—"}</span> },
+  { id: "agent", header: "Agent", accessor: (p) => p.AgentsName || "Walk-in", cell: (p) => <span className="text-sm whitespace-nowrap">{p.AgentsName || "Walk-in"}</span> },
   { id: "policyNumber", header: "Policy #", accessor: (p) => p.Policy_Number || "", cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.Policy_Number || "—"}</span> },
   { id: "status", header: "Status", accessor: (p) => p.currstatus, cell: (p) => <StatusBadge status={p.currstatus} variant="policy" /> },
   { id: "firstName", header: "First Name", accessor: (p) => (p.fullname ?? "").split(" ")[0] || "", cell: (p) => <span className="whitespace-nowrap">{(p.fullname ?? "").split(" ")[0] || "—"}</span> },
@@ -37,7 +37,7 @@ const agentPortfolioColumns: EdtColumn<any>[] = [
 ];
 
 const agentProductivityColumns: EdtColumn<any>[] = [
-  { id: "agentsName", header: "Agent", accessor: (r) => r.AgentsName || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[140px] truncate block" title={r.AgentsName}>{r.AgentsName || "—"}</span> },
+  { id: "agentsName", header: "Agent", accessor: (r) => r.AgentsName || "Walk-in", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[140px] truncate block" title={r.AgentsName}>{r.AgentsName || "Walk-in"}</span> },
   { id: "inceptionDate", header: "Inception Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
   { id: "policyNumber", header: "Policy #", accessor: (r) => r.Policy_Number, cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Policy_Number}</span> },
   { id: "fullName", header: "Member", accessor: (r) => r.FullName || "", cell: (r) => <span className="text-xs max-w-[160px] truncate block" title={r.FullName}>{r.FullName || "—"}</span> },
@@ -119,7 +119,7 @@ const commissionPaymentsColumns: EdtColumn<any>[] = [
     ),
   },
   { id: "commType", header: "Comm. Type", accessor: (r) => r.commissionType || "", cell: (r) => <span className="text-xs">{r.commissionType ? <Badge variant="outline" className="text-xs">{r.commissionType}</Badge> : "—"}</span> },
-  { id: "agent", header: "Agent", accessor: (r) => r.agentName || "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.agentName || "—"}</span> },
+  { id: "agent", header: "Agent", accessor: (r) => r.agentName || "Walk-in", cell: (r) => <span className="text-sm whitespace-nowrap">{r.agentName || "Walk-in"}</span> },
   { id: "monthsPaid", header: "Months Paid", accessor: (r) => r.monthsPaidFor, cell: (r) => <span className="tabular-nums text-center block">{r.monthsPaidFor}</span> },
   { id: "receiptCount", header: "Receipt Count", accessor: (r) => r.receiptCount, cell: (r) => <span className="tabular-nums text-center block">{r.receiptCount}</span> },
   { id: "policyBranch", header: "Policy Branch", accessor: (r) => r.policyBranch || "" },

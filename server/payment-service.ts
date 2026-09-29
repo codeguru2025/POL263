@@ -6,7 +6,7 @@
 import { storage, findPaymentIntentById } from "./storage";
 import { computePlatformFee } from "./platform-fee";
 import { withOrgTransaction, ensureRegistryUserMirroredToOrgDataDbInTx } from "./tenant-db";
-import { rollbackClawbacks } from "./route-helpers";
+import { rollbackClawbacks, recordAgentCommission } from "./route-helpers";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { getOrgPaynowConfig, getPaynowConfig } from "./paynow-config";
 import { verifyPaynowHash, generatePaynowHash } from "./paynow-hash";
@@ -981,6 +981,7 @@ export async function applyGroupPaymentToPolicies(
           });
         });
       }
+      await recordAgentCommission(orgId, policy, newTx.id, amount);
 
       if (!notifiedClients.has(policy.clientId!)) {
         notifiedClients.add(policy.clientId!);

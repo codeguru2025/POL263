@@ -16,7 +16,7 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
 import { toCents, tryToCents, fromCents, centsToNumber, roundMoney, moneyString, moneyEquals, sumMoney, sumCents, subMoney, allocateProRata } from "@shared/money";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, recordAgentCommission, recordAgentCommissionForTransactions, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -3901,7 +3901,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: p.status,
           clientName: c ? [c.firstName, c.lastName].filter(Boolean).join(" ") : "",
           productName: productByVersion.get(p.productVersionId) ?? "",
-          agentName: a ? a.displayName || a.email : "",
+          agentName: a ? a.displayName || a.email : "Walk-in",
           currency: p.currency,
           premiumAmount: p.premiumAmount,
           paymentSchedule: p.paymentSchedule,
@@ -6480,6 +6480,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // compute it first and write the receivable inside the same transaction as the payment
         // instead of in a detached, unawaited .then() after commit (see createPlatformReceivableInTx).
         const feeAmount = await computePlatformFee(user.organizationId, premium);
+        let merTxId: string | undefined;
         await withOrgTransaction(user.organizationId, async (txDb) => {
           // Lock the policy row to prevent concurrent status changes
           await txDb.execute(sql`SELECT id FROM policies WHERE id = ${policy.id} FOR UPDATE`);
@@ -6512,6 +6513,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             status: "issued",
             metadataJson: { monthEndRunId: run.id, transactionId: tx.id },
           });
+          merTxId = tx.id;
           await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, today, " (month-end)", recordedByForLedger ?? undefined);
           if (policy.status === "lapsed") {
             await rollbackClawbacksInTx(txDb, user.organizationId, policy);
@@ -6526,6 +6528,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
         });
         receipted++;
+        if (merTxId) await recordAgentCommission(user.organizationId, policy, merTxId, String(premium));
         // Post-transaction best-effort side effects
         if (policy.status === "lapsed") {
           if (policy.clientId) {
@@ -6670,6 +6673,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const results: { id: string; policyId: string; policyNumber: string; amount: string; receiptNumber: string; currency: string; approvalStatus?: string }[] = [];
     const groupRef = `GRP-${groupId.slice(0, 8)}-${Date.now()}`;
+    const commissionItems: { policyId: string; transactionId: string; amount: string }[] = [];
     // Stable lock order avoids deadlocks when multiple group receipts overlap. Itemized mode
     // drops any policy with nothing checked (amount 0) — it wasn't part of this receipt.
     const sortedPolicies = (isItemized ? valid.filter((p) => (perPolicyAmount![p.id] ?? 0) > 0) : [...valid])
@@ -6753,12 +6757,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (policy.status === "lapsed") {
             await rollbackClawbacksInTx(txDb, user.organizationId, policy);
           }
+          commissionItems.push({ policyId: policy.id, transactionId: tx.id, amount });
           results.push({ id: clearedReceipt.id, policyId: policy.id, policyNumber: policy.policyNumber, amount, receiptNumber: receiptNum, currency: polyCurrency });
         }
       }
       await auditLog(req, "CREATE_GROUP_RECEIPT", "PaymentReceiptGroup", groupRef, null, { groupId, results, amountNum, isBackdated }, undefined, txDb);
     });
     if (!isBackdated) {
+      // Group receipts never recorded agent commission — every member payment went uncommissioned.
+      await recordAgentCommissionForTransactions(user.organizationId, commissionItems);
       // Platform fee on each cleared group receipt (not on pending approvals). Awaited (not a
       // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
       // before the response returns, not a lost promise nobody was ever watching — see
@@ -6881,6 +6888,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // compute it first and write the receivable inside the same transaction as the payment
       // instead of in a detached, unawaited .then() after commit.
       const feeAmount = await computePlatformFee(user.organizationId, receipt.amount);
+      let approvedTxId: string | undefined;
       await withOrgTransaction(user.organizationId, async (txDb) => {
         await ensureRegistryUserMirroredToOrgDataDbInTx(txDb, user.organizationId, user.id);
         const [actorRow] = await txDb.select({ id: users.id }).from(users).where(eq(users.id, user.id)).limit(1);
@@ -6944,6 +6952,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             metadataJson: { ...(receipt.metadataJson as any || {}), approvedTransactionId: tx.id },
           } as any)
           .where(eq(paymentReceipts.id, receiptId));
+        approvedTxId = tx.id;
         await applyPolicyStatusForClearedPayment(txDb, policy.id, policy, effectiveDate, isPremiumOverride ? " (premium override, approved)" : " (backdated group receipt, approved)", recordedBy ?? undefined);
         if (policy.status === "lapsed") {
           await rollbackClawbacksInTx(txDb, user.organizationId, policy);
@@ -6960,6 +6969,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       });
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
+      // Approved override/backdated receipts never recorded agent commission.
+      if (approvedTxId) await recordAgentCommission(user.organizationId, policy, approvedTxId, String(receipt.amount));
       // Backdated group receipts credit the group ledger here (per-policy, at approval time)
       // rather than at submission — the non-backdated path credits immediately in POST
       // /api/group-receipt since that money is already cleared. Only fires for receipts that
@@ -15985,7 +15996,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const scRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           const scMap: Record<string, number> = {};
           for (const r of scRaw as any[]) {
-            const key = r.AgentsName || r.agentDisplayName || "Unassigned";
+            const key = r.AgentsName || r.agentDisplayName || "Walk-in";
             scMap[key] = (scMap[key] || 0) + 1;
           }
           headers = ["Agent", "Policy Count"];

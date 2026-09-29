@@ -10,6 +10,54 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-29 — Commission missing on most payment paths; prepayments over-paid; clawbacks doubled
+
+**Symptom:** Checking Falakhe's commission payable from 18 Aug turned up these problems. 34 cleared
+payments on agent policies had no commission. FLK00806 (R960 paid for 4 months) earned R480, which
+is 50% on all four months. Two clawbacks were recorded twice (FLK00329, FLK00344). FLK00346's
+clawback was reversed twice.
+
+**Root cause:**
+1. Only the cash route (via the outbox) called `recordAgentCommission`. The following paths never did:
+   group receipts (`POST /api/group-receipt`), approved override/backdated receipts
+   (`/api/payment-receipts/:id/approve`), month-end run, and group PayNow. The single-PayNow outbox
+   handler had its own copy of the logic that used only the org commission plan. Falakhe has no
+   plan (its rates are set per product), so PayNow payments earned nothing.
+2. Products with no rates and no org plan returned early, which meant zero commission. That covered
+   479 policies on the LEGACY INDIVIDUAL / LEGACY GROUP products.
+3. The tier was chosen by counting payment transactions, so one payment covering 4 months was
+   "payment #1" and got the first-months rate on the whole amount.
+4. `rollbackClawbacks(InTx)` summed only `clawback` rows, not earlier reversals, so each later
+   payment on a reinstated policy reversed the same clawback again. credit-apply.ts had its own
+   copy, which wrote a third entry type, `rollback`.
+5. The duplicate clawbacks came from the lapse sweep running on both app instances. That was
+   already fixed on 2026-09-24 (68a79a4, transaction-level advisory lock). Only the data was left
+   to clean up.
+
+**Fix:** `server/commission-calc.ts` is new pure code. It works in months, which it reads from
+each payment's `period_from..period_to` (`periodsCovered`), not from amount ÷ premium, because
+`premium_amount` is often not what the client pays (FLK00005 is set at $20 but pays $7). Rates
+come from `resolveCommissionRates` in route-helpers.ts: a legacy policy gets 10% every month;
+otherwise product version, then org plan, then the new default (50% for months 1-2, then 10%).
+`recordAgentCommission` is idempotent per transaction and is now called on every payment path
+listed above. The PayNow handler uses it too. Credit-balance payments earn nothing and aren't
+counted as months, because that money already earned commission when it was overpaid.
+Reversals are now netted. Blank-agent policies show as "Walk-in" in reports and exports and earn
+no commission. Tests are in `tests/unit/commission-calc.test.ts`.
+Data: `script/.tmp/recalc-commissions.ts` recomputes Falakhe's entries from 18 Aug and removes the
+duplicate clawback/reversal rows. It's a dry run by default and needs `--apply`.
+
+**Verified:** `npm run check`, 844/844 tests, and a dry run against Falakhe (22 payments corrected,
+3 duplicate rows).
+
+**Lesson for next time:** when a side effect (commission, platform fee, notifications) is keyed
+off "a payment was recorded", grep every `insert(paymentTransactions)` and check that each one
+reaches it. Don't let a path keep its own copy of the calculation. Don't count billing months
+by counting transactions, and don't derive them from the policy's current premium. Use the
+period the payment actually bought.
+
+---
+
 ## 2026-09-28 — Group policy stuck in grace forever (FLK00616); undated policies invisible to lapsing
 
 **Symptom:** FLK00616, a group (burial-society) policy, sat in grace with a 5 Oct grace end

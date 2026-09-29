@@ -12,7 +12,8 @@ import { applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { paymentTransactions, paymentReceipts, policyCreditBalances, users } from "@shared/schema";
 import { sql, eq, and } from "drizzle-orm";
 import { todayForOrg } from "./date-utils";
-import { toCents, sumCents, fromCents, centsToNumber } from "@shared/money";
+import { toCents, fromCents, centsToNumber } from "@shared/money";
+import { rollbackClawbacks } from "./route-helpers";
 
 export async function runApplyCreditBalances(orgId: string, actorUserId: string | null = null): Promise<{ applied: number; errors: string[] }> {
   const rows = await storage.getPolicyCreditBalancesWithPositiveBalance(orgId);
@@ -150,29 +151,9 @@ export async function applyCreditBalanceToPolicy(
   }
 
   // Post-transaction best-effort side effects
-  if (policy.status === "lapsed" && policy.agentId) {
-    try {
-      const entries = await storage.getCommissionEntriesByPolicy(policyId, orgId);
-      const clawbacks = entries.filter((e: any) => e.entryType === "clawback" && e.status === "earned");
-      const existingRollbacks = entries.filter((e: any) => e.entryType === "rollback");
-      const unreversedCents =
-        sumCents(clawbacks.map((e: any) => e.amount)) + sumCents(existingRollbacks.map((e: any) => e.amount));
-      if (unreversedCents < 0) {
-        await storage.createCommissionLedgerEntry({
-          organizationId: orgId,
-          agentId: policy.agentId,
-          policyId,
-          entryType: "rollback",
-          amount: fromCents(Math.abs(unreversedCents)),
-          currency: policy.currency || "USD",
-          description: `Rollback — policy reinstated, clawback reversed`,
-          status: "earned",
-        });
-      }
-    } catch (err) {
-      structuredLog("error", "Rollback recording failed", { error: (err as Error).message, policyId });
-    }
-  }
+  // No commission on this payment: the credit came from an earlier overpayment whose full amount
+  // already earned commission when it was received (see recordAgentCommission).
+  if (policy.status === "lapsed") await rollbackClawbacks(orgId, policy);
 
   await storage.createNotificationLog(orgId, {
     recipientType: "client",
