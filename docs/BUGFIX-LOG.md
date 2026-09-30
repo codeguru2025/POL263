@@ -10,6 +10,31 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Agents couldn't capture burial-society (Legacy Group) policies
+
+**Symptom:** Agents issuing policies for burial societies got "Legacy Group is a legacy product —
+tick 'legacy / pre-existing policy' to use it", or couldn't find Legacy Group in the product list.
+
+**Root cause:** 6dea625 paired legacy products with legacy policies: the product list filters on the
+step-1 "pre-existing" tick, and the server rejects a mismatch. That tickbox was wrapped in
+`canEditPremium` (edit:premium), which agents don't have. Agents could never tick it, so they could
+never use a legacy product. The premium box was gated the same way, so even with the tick a
+legacy-product policy (priced at 0) would have saved at $0.
+
+**Fix:** `client/src/pages/staff/policies/create-policy-wizard.tsx`: the tickbox is shown to everyone
+who can capture a policy. A new `canEnterPremium = canEditPremium || isLegacyProductIssuance`
+shows a "Premium the client already pays" box on legacy products, and Save is blocked until it is
+above 0. No server change was needed. POST /api/policies already honours a typed premium only on
+legacy products and recomputes it for everything else, so agents still can't override normal
+premiums.
+
+**Verified:** `tsc` clean.
+
+**Lesson for next time:** when a new rule depends on a UI control, check who can *see* that control.
+A control gated on a permission some roles lack turns the rule into a hard block for those roles.
+
+---
+
 ## 2026-09-30 — Agents couldn't take Paynow payments; agents could pay into other agents' policies
 
 **Symptoms:**

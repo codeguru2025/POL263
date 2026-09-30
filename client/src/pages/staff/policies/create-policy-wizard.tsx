@@ -197,6 +197,10 @@ export function CreatePolicyWizard({
   // A legacy policy may only use a legacy product, and a new policy only a non-legacy one.
   const productsForLegacyFlag = (products || []).filter((p: any) => !!p.isLegacy === !!createForm.isLegacy);
   const isLegacyIssuance = isLegacyGroupIssuance || isLegacyProductIssuance;
+  // Legacy products price at 0, so the client's existing premium must be typed in. Agents can't
+  // override premiums generally, but may enter one here (the server only honours a typed premium
+  // on legacy products).
+  const canEnterPremium = canEditPremium || isLegacyProductIssuance;
 
   const { data: dependents } = useQuery<any[]>({
     queryKey: ["/api/clients", createForm.clientId, "dependents"],
@@ -515,7 +519,7 @@ export function CreatePolicyWizard({
         <div className={"space-y-4 " + (policyWizardFlag ? "overflow-y-auto flex-1 pr-1" : "")}>
           {createStep === 1 && (
             <>
-              {canEditPremium && (
+              {(
                 <div className="flex items-start gap-3 border rounded-md p-3 bg-amber-50/50 dark:bg-amber-950/20">
                   <Checkbox
                     id="create-legacy-flag"
@@ -1174,16 +1178,16 @@ export function CreatePolicyWizard({
                     Base: {createForm.currency} {calculatedPremium.base.toFixed(2)} · Add-ons: {createForm.currency} {calculatedPremium.addOnTotal.toFixed(2)} · Additional: {createForm.currency} {calculatedPremium.dependantSurcharge.toFixed(2)}
                   </p>
                 )}
-                {canEditPremium ? (
+                {canEnterPremium ? (
                   <p className="text-xs text-muted-foreground">Auto-calculated above. Enter an override below only if needed.</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">Premium is calculated from the selected product version, members, and add-ons.</p>
                 )}
               </div>
-              {canEditPremium && (
+              {canEnterPremium && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="create-form-premium-amount">Override premium ({createForm.currency})</Label>
+                    <Label htmlFor="create-form-premium-amount">{isLegacyProductIssuance ? "Premium the client already pays" : "Override premium"} ({createForm.currency})</Label>
                     <Input id="create-form-premium-amount"
                       type="number"
                       step="0.01"
@@ -1355,7 +1359,7 @@ export function CreatePolicyWizard({
             <Button
               onClick={() => createMutation.mutate({
                 ...createForm,
-                premiumAmount: (canEditPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium?.total ?? ""),
+                premiumAmount: (canEnterPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium?.total ?? ""),
               })}
               disabled={
                 createMutation.isPending ||
@@ -1371,7 +1375,8 @@ export function CreatePolicyWizard({
                   ))
                 )) ||
                 !createForm.productVersionId ||
-                !calculatedPremium?.total
+                !calculatedPremium?.total ||
+                (isLegacyProductIssuance && !(Number(createForm.premiumAmount) > 0))
               }
               data-testid="btn-submit-policy"
             >
