@@ -208,6 +208,7 @@ export default function StaffUsers() {
       superuser: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
       administrator: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
       manager: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+      finance_manager: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
       executive: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
       agent: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
       cashier: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-400",

@@ -117,20 +117,38 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     // permission definitions would let them self-escalate past any restriction placed on
     // them here. Only the platform owner (isPlatformOwner bypass) manages RBAC definitions;
     // admins can still assign existing roles to users via write:user.
+    //
+    // Day-to-day administrator (Augustus, 2026-09-30): runs the office but can't change money
+    // after the fact. No editing/deleting/backdating payments or receipts, no premium overrides,
+    // no finance posting or finance/settlement/waiver approvals, no payroll, no commission edits
+    // — those belong to finance_manager, so the person who takes money in isn't the one who can
+    // quietly change it. Finance and commissions stay visible read-only.
     "read:organization", "write:organization", "read:branch", "write:branch",
     "read:user", "write:user", "delete:user", "read:role",
-    "read:audit_log", "read:policy", "write:policy", "edit:premium",
+    "read:audit_log", "read:policy", "write:policy",
     "read:claim", "write:claim", "approve:claim", "read:client", "write:client",
     "read:product", "write:product", "manage:settings", "read:funeral_ops",
-    "write:funeral_ops", "read:finance", "write:finance", "approve:finance",
-    "read:fleet", "write:fleet", "use:fleet", "read:commission", "write:commission",
-    "read:payroll", "write:payroll", "read:report", "write:report",
+    "write:funeral_ops", "read:finance",
+    "read:fleet", "write:fleet", "use:fleet", "read:commission",
+    "read:report", "write:report",
     "read:lead", "write:lead", "read:notification", "write:notification",
-    "approve:waivers", "approve:settlements", "approve:requests", "backdate:payment",
+    "approve:requests",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
-    "delete:policy", "delete:payment", "delete:receipt", "edit:payment", "edit:receipt",
-    "delete:requisition", "delete:expenditure", "use:ai", "manage:attendance",
+    "delete:policy", "use:ai", "manage:attendance",
+  ],
+  finance_manager: [
+    // The money powers taken out of administrator. Usually held alongside administrator by
+    // the business owner / accountant.
+    "read:organization", "read:branch", "read:user", "read:audit_log",
+    "read:policy", "read:client", "read:claim", "read:product", "read:report", "write:report",
+    "read:finance", "write:finance", "approve:finance", "approve:settlements", "approve:waivers",
+    "approve:requests", "edit:premium", "backdate:payment",
+    "edit:payment", "delete:payment", "edit:receipt", "delete:receipt",
+    "delete:requisition", "delete:expenditure",
+    "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
+    "read:commission", "write:commission", "read:payroll", "write:payroll",
+    "read:notification", "view:all_clients", "use:ai",
   ],
   cashier: [
     "read:policy", "read:client", "read:finance", "write:finance", "read:report",

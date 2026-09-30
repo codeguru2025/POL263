@@ -5969,7 +5969,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Staff-side Paynow: create intent, initiate, submit OTP
-  app.post("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/payment-intents", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const { policyId, clientId, amount, currency, purpose, idempotencyKey: clientKey } = req.body;
     if (!policyId || !clientId || amount == null) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
@@ -5999,7 +5999,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/payment-intents/:id/initiate", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/payment-intents/:id/initiate", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
@@ -6031,7 +6031,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/payment-intents/:id/otp", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/payment-intents/:id/otp", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
@@ -6328,7 +6328,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return streamGroupBatchReceiptToResponse(groupRef, user.organizationId, res, { attachment: false });
   });
 
-  app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/admin/receipts/cash", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     try {
     const userRolesForCash = await storage.getUserRoles(user.id, user.organizationId);
@@ -7098,7 +7098,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Group PayNow (create intent, initiate, poll) ───
-  app.post("/api/group-payment-intents", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/group-payment-intents", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const { groupId, policyIds, totalAmount, currency, idempotencyKey: clientKey } = req.body;
     if (!groupId || !Array.isArray(policyIds) || policyIds.length === 0 || totalAmount == null) {
@@ -7160,7 +7160,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(intent);
   });
 
-  app.post("/api/group-payment-intents/:id/initiate", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/group-payment-intents/:id/initiate", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!id) return res.status(400).json({ message: "Missing id" });
@@ -7178,7 +7178,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ redirectUrl: result.redirectUrl, pollUrl: result.pollUrl });
   });
 
-  app.post("/api/group-payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/group-payment-intents/:id/poll", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!id) return res.status(400).json({ message: "Missing id" });
@@ -11740,6 +11740,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (action === "investigate") {
       return res.status(400).json({ message: "Only claim reviews can be sent for investigation." });
     }
+    // approve:requests alone must not let someone approve a deletion they couldn't do
+    // themselves — e.g. an administrator (no delete:receipt) approving a receipt deletion.
+    const deletePermFor: Record<string, string> = { delete_receipt: "delete:receipt", delete_policy: "delete:policy" };
+    const neededDeletePerm = deletePermFor[approval.requestType];
+    if (action === "approve" && neededDeletePerm && !user.isPlatformOwner) {
+      const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+      if (!effPerms.includes(neededDeletePerm)) {
+        return res.status(403).json({ message: "You can't approve this deletion — it needs someone who is allowed to delete it (a finance manager or owner)." });
+      }
+    }
     const updated = await storage.updateApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
       approvedBy: effectiveUserId,
@@ -13376,7 +13386,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getGroupContributions(user.organizationId, groupId));
   });
 
-  app.post("/api/groups/:id/contributions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/groups/:id/contributions", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     try {
@@ -13742,7 +13752,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), requireModule("legacy_records"), async (req, res) => {
+  app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:group"), requireModule("legacy_records"), async (req, res) => {
     const user = req.user as any;
     const { groupId, amount, currency, paymentDate, notes, memberBreakdown, includedPolicyIds } = req.body;
     if (!groupId || !amount || !currency || !paymentDate) {

@@ -10,6 +10,30 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Approving a receipt-deletion request didn't need permission to delete receipts
+
+**Symptom:** found while splitting the administrator role. Anyone with `approve:requests` could
+approve a `delete_receipt` (or `delete_policy`) request, which deletes the receipt and its payment,
+even without `delete:receipt` themselves. So taking `delete:receipt` away from a role didn't stop
+that role from getting receipts deleted: one person raised the request, another approved it.
+
+**Root cause:** `POST /api/approvals/:id/resolve` is gated only by `approve:requests`, a generic
+"resolve maker-checker requests" permission. The side effect (the actual delete) never
+re-checked the domain permission it stands in for.
+
+**Fix:** `server/routes.ts` approvals resolve: approving `delete_receipt` needs `delete:receipt`,
+and approving `delete_policy` needs `delete:policy` (platform owner exempt). Refused with a plain
+message naming who can approve it.
+
+**Verified:** type check and full suite. The role split is covered by
+`tests/unit/role-templates.test.ts`.
+
+**Lesson for next time:** a generic approval permission is a back door to every action it can
+trigger. When removing a destructive permission from a role, grep every place that performs that
+action (approval side effects, imports, bulk tools), not just the route named after it.
+
+---
+
 ## 2026-09-30 — Receipt SMS never sent (Falakhe: 0 in 5 days, ~250 receipts); claim texts cost 2 credits
 
 **Symptom:** Falakhe kept its "Payment Receipted" SMS template on while saving credits, but not one
