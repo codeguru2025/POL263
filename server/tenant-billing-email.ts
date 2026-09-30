@@ -169,6 +169,7 @@ export async function sendGracePeriodEmail(invoice: TenantInvoice, graceDeadline
     `Your POL263 subscription payment is overdue. Access will be suspended on ${deadline} if payment isn't received.\nPay now: ${link}`,
     await billingPdfAttachment(invoice, "invoice"),
   );
+  await sendText(invoice.tenantId, `POL263: ${name}, your bill of ${invoice.currency} ${invoice.amount} is overdue. Your system will be switched off on ${smsDate(graceDeadline)} if it is not paid. Pay here: ${link}`);
 }
 
 export async function sendSuspendedEmail(invoice: TenantInvoice): Promise<void> {
