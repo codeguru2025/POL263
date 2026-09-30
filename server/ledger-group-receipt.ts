@@ -28,6 +28,9 @@ export interface LedgerGroupReceiptPayload {
   currency: string;
   /** Members this payment covers. Missing on jobs queued before ticking existed = everyone. */
   includedPolicyIds?: string[];
+  /** The group's agent when the receipt was recorded (null = none). Missing on older jobs =
+   *  use the group's current agent. */
+  agentId?: string | null;
 }
 
 /** Policies that belong to the group for receipting: not deleted, not cancelled. */
@@ -52,12 +55,13 @@ export async function runLedgerGroupReceiptFollowup(orgId: string, payload: Ledg
   //    whatever the group paid. No agent on the group = nobody earns. Idempotent on retry.
   const rate = LEGACY_COMMISSION_RATES.recurringRate;
   const commissionCents = ledgerGroupCommissionCents(toCents(payload.amount), rate);
-  if (group.agentId && commissionCents > 0) {
+  const agentId = payload.agentId !== undefined ? payload.agentId : group.agentId;
+  if (agentId && commissionCents > 0) {
     const marker = commissionMarker(payload.receiptNumber);
     if (!(await storage.hasCommissionWithDescriptionMarker(orgId, marker))) {
       await storage.createCommissionLedgerEntry({
         organizationId: orgId,
-        agentId: group.agentId,
+        agentId,
         policyId: null,
         transactionId: null,
         entryType: "recurring",
@@ -66,7 +70,7 @@ export async function runLedgerGroupReceiptFollowup(orgId: string, payload: Ledg
         description: `${rate}% commission on ${payload.currency} ${fromCents(toCents(payload.amount))} paid by ${group.name} — ${marker}`,
         status: "earned",
       });
-      notifyUser(orgId, group.agentId, {
+      notifyUser(orgId, agentId, {
         type: "COMMISSION_EARNED",
         title: "Commission Earned",
         body: `${payload.currency} ${fromCents(commissionCents)} commission from ${group.name}'s payment (${payload.receiptNumber}).`,

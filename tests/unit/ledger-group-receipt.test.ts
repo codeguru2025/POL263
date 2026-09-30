@@ -85,3 +85,26 @@ describe("runLedgerGroupReceiptFollowup", () => {
     expect(mockStorage.createCommissionLedgerEntry).not.toHaveBeenCalled();
   });
 });
+
+describe("commission goes to the agent recorded on the receipt", () => {
+  const base = { receiptId: "r1", receiptNumber: "LGR-20260930-200", groupId: "g1", amount: "50.00", currency: "USD" };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStorage.getGroup.mockResolvedValue({ id: "g1", name: "VUSANANI B/S", agentId: "a-new" });
+    mockStorage.getPoliciesByGroupId.mockResolvedValue([]);
+    mockStorage.hasCommissionWithDescriptionMarker.mockResolvedValue(false);
+    mockStorage.createCommissionLedgerEntry.mockResolvedValue({});
+  });
+  it("agent changed after the receipt → the receipt-time agent still earns", async () => {
+    await runLedgerGroupReceiptFollowup("org1", { ...base, agentId: "a-old" });
+    expect(mockStorage.createCommissionLedgerEntry.mock.calls[0][0]).toMatchObject({ agentId: "a-old", amount: "5.00" });
+  });
+  it("no agent at receipt time → nobody earns, even if one is set later", async () => {
+    await runLedgerGroupReceiptFollowup("org1", { ...base, agentId: null });
+    expect(mockStorage.createCommissionLedgerEntry).not.toHaveBeenCalled();
+  });
+  it("older jobs without the field fall back to the group's agent", async () => {
+    await runLedgerGroupReceiptFollowup("org1", base);
+    expect(mockStorage.createCommissionLedgerEntry.mock.calls[0][0].agentId).toBe("a-new");
+  });
+});

@@ -10,6 +10,41 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Society receipts and user-role edits weren't atomic; receipt numbers could collide
+
+**Symptoms (found in review, not yet seen in the data):**
+1. `POST /api/groups/legacy-receipts` (society / legacy lump sums) saved the receipt, the platform
+   fee, the group-ledger credit and the follow-up outbox job as four separate commits. The ledger
+   credit's failure was only logged, which leaves a receipt the society's balance never sees (the
+   "income recorded in one place but not the other" class). A crash between commits lost member
+   texts and commission.
+2. Its receipt number is `MAX(seq)+1` read with no lock, so two receipts at the same moment could
+   share a number.
+3. `PATCH /api/users/:id` replaced roles as `clearUserRoles` followed by one `addUserRole` per
+   role, each its own write. A failure in between left the person with no roles (locked out). It
+   also re-added roles without their branch scope on every save, even when nothing changed.
+4. `PATCH /api/groups/:id` saved the group's details and the agent change (which moves every
+   policy) in separate transactions, with the audit entry after both.
+
+**Fix:**
+1. Society receipt: one `withOrgTransaction` covering the receipt, `createPlatformReceivableInTx`,
+   `createGroupLedgerEntryInTx`, `insertOutboxMessageInTx` and the audit entry, with
+   `pg_advisory_xact_lock` taken before numbering. The outbox payload now records the group's
+   agent at receipt time, so a later agent change doesn't move commission already earned.
+2. `storage.replaceUserRoles`: one transaction, keeps each kept role's branch scope, and only
+   runs when the roles actually change.
+3. `storage.setGroupAgent(..., { patch, inTx })`: group details, the policy moves and the audit
+   entry commit together.
+
+**Verified:** type check; full suite 890/890.
+
+**Lesson for next time:** "try { secondary write } catch { log }" after a primary INSERT is a
+partial-commit bug. If the secondary write is part of what the record means (ledger credit,
+fee, follow-up job), it belongs in the same transaction; use the `...InTx` storage variants.
+Sequence numbers derived from MAX()+1 need an advisory or row lock inside that transaction.
+
+---
+
 ## 2026-09-30 — RBAC review: four access holes (agents, policy PDFs, role escalation)
 
 **Symptoms (found in a full RBAC review, none reported by users):**

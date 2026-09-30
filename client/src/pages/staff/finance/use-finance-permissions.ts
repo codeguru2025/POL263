@@ -61,7 +61,10 @@ export function useFinancePermissions() {
   const canEditPayment = permissions.includes("edit:payment") || (authUser as any)?.isPlatformOwner;
   const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
   const canReadCommission = permissions.includes("read:commission");
-  const commissionOnly = canReadCommission && !canReadFinance;
+  // Receipting roles (agents, cashiers, admins) take payments without seeing the company books.
+  const canReceipt = ["receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"].some((p) => permissions.includes(p)) || canWriteFinance;
+  const canGroupReceipt = permissions.includes("receipt:group") || canWriteFinance || !!(authUser as any)?.isPlatformOwner;
+  const commissionOnly = canReadCommission && !canReadFinance && !canReceipt;
   const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
 
   // Shares its cache entry with PendingApprovalsPanel's identical query (same
@@ -84,18 +87,18 @@ export function useFinancePermissions() {
   // tab this user can't see would set activeTab to a value with no visible group
   // pill, rendering a mismatched highlight (wrong pill lit, orphaned content below).
   const tabVisibility: Record<string, boolean> = {
-    payments: !commissionOnly,
-    "receipting-by-staff": !commissionOnly && !isAgent,
-    paynow: !commissionOnly,
-    cashups: !commissionOnly,
-    "group-receipt": canWriteFinance && !isAgent,
-    banking: !commissionOnly && !isAgent,
-    requisitions: !commissionOnly && !isAgent,
-    expenditures: !commissionOnly && !isAgent,
+    payments: canReadFinance || canReceipt,
+    "receipting-by-staff": canReadFinance && !isAgent,
+    paynow: canReadFinance || canReceipt,
+    cashups: canReadFinance || canReceipt,
+    "group-receipt": canGroupReceipt && !isAgent,
+    banking: canReadFinance && !isAgent,
+    requisitions: canReadFinance && !isAgent,
+    expenditures: canReadFinance && !isAgent,
     commissions: canReadCommission,
     "my-pnl": commissionOnly,
     "fx-rates": canManageSettings && !isAgent,
-    platform: !commissionOnly && !isAgent,
+    platform: canReadFinance && !isAgent,
     "month-end": canWriteFinance && !isAgent,
     approvals: canApproveFinance && !isAgent,
   };

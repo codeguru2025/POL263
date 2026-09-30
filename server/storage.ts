@@ -381,6 +381,7 @@ export interface IStorage {
   getUserRolesBatch(userIds: string[], organizationId: string): Promise<Record<string, (Role & { branchId: string | null })[]>>;
   addUserRole(userId: string, roleId: string, orgId: string, branchId?: string): Promise<void>;
   removeUserRole(userId: string, roleId: string): Promise<void>;
+  replaceUserRoles(userId: string, roleIds: string[], orgId: string): Promise<void>;
   clearUserRoles(userId: string, organizationId?: string): Promise<void>;
   getUserPermissionOverrides(userId: string, orgId: string | null): Promise<{ permissionName: string; isGranted: boolean }[]>;
   setUserPermissionOverride(userId: string, permissionName: string, isGranted: boolean, orgId: string | null): Promise<void>;
@@ -734,7 +735,7 @@ export interface IStorage {
   getGroup(id: string, orgId: string): Promise<Group | undefined>;
   createGroup(group: InsertGroup): Promise<Group>;
   updateGroup(id: string, data: Partial<InsertGroup>, orgId: string): Promise<Group | undefined>;
-  setGroupAgent(orgId: string, groupId: string, agentId: string | null): Promise<{ group: Group | undefined; policiesMoved: number }>;
+  setGroupAgent(orgId: string, groupId: string, agentId: string | null, opts?: { patch?: Partial<InsertGroup>; inTx?: (tx: OrgDataDb, group: Group, policiesMoved: number) => Promise<void> }): Promise<{ group: Group | undefined; policiesMoved: number }>;
   getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]>;
   getPoliciesByGroupId(orgId: string, groupId: string): Promise<Policy[]>;
   // Pool-society engine (Phase 3d) — server/pool-society.ts.
@@ -1259,6 +1260,22 @@ export class DatabaseStorage implements IStorage {
     }
     await db.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
   }
+  /** Replace a user's roles in one transaction. Roles they keep keep their branch scope. */
+  async replaceUserRoles(userId: string, roleIds: string[], orgId: string): Promise<void> {
+    await withOrgTransaction(orgId, async (tx) => {
+      const valid = roleIds.length
+        ? await tx.select({ id: roles.id }).from(roles).where(and(inArray(roles.id, roleIds), eq(roles.organizationId, orgId)))
+        : [];
+      if (valid.length !== new Set(roleIds).size) throw new Error("Role not found in organization");
+      const existing = await tx.select({ roleId: userRoles.roleId, branchId: userRoles.branchId }).from(userRoles).where(eq(userRoles.userId, userId));
+      const branchOf = new Map(existing.map((r) => [r.roleId, r.branchId]));
+      await tx.delete(userRoles).where(eq(userRoles.userId, userId));
+      for (const roleId of Array.from(new Set(roleIds))) {
+        await tx.insert(userRoles).values({ userId, roleId, branchId: branchOf.get(roleId) ?? null });
+      }
+    });
+  }
+
   async clearUserRoles(userId: string, organizationId?: string): Promise<void> {
     const orgId = organizationId ?? (await db.select({ organizationId: users.organizationId }).from(users).where(eq(users.id, userId)).limit(1))[0]?.organizationId ?? null;
     if (orgId) {
@@ -6142,17 +6159,24 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  /** Set a group's responsible agent and move every (non-deleted) policy in it to that agent, in
-   *  one transaction. Clearing the agent (null) leaves the policies' agents as they are. */
-  async setGroupAgent(orgId: string, groupId: string, agentId: string | null): Promise<{ group: Group | undefined; policiesMoved: number }> {
+  /** Set a group's responsible agent (plus any other group changes in `opts.patch`) and move
+   *  every non-deleted policy in it to that agent — one transaction; `opts.inTx` (e.g. the audit
+   *  entry) runs inside it. Clearing the agent (null) leaves the policies' agents as they are. */
+  async setGroupAgent(orgId: string, groupId: string, agentId: string | null, opts?: { patch?: Partial<InsertGroup>; inTx?: (tx: OrgDataDb, group: Group, policiesMoved: number) => Promise<void> }): Promise<{ group: Group | undefined; policiesMoved: number }> {
     return withOrgTransaction(orgId, async (tx) => {
-      const [group] = await tx.update(groups).set({ agentId }).where(and(eq(groups.id, groupId), eq(groups.organizationId, orgId))).returning();
-      if (!group || !agentId) return { group, policiesMoved: 0 };
-      const moved = await tx.update(policies).set({ agentId })
-        .where(and(eq(policies.organizationId, orgId), eq(policies.groupId, groupId), isNull(policies.deletedAt),
-          or(isNull(policies.agentId), sql`${policies.agentId} <> ${agentId}`)))
-        .returning({ id: policies.id });
-      return { group, policiesMoved: moved.length };
+      const [group] = await tx.update(groups).set({ ...stripImmutableKeys(opts?.patch ?? {}), agentId })
+        .where(and(eq(groups.id, groupId), eq(groups.organizationId, orgId))).returning();
+      if (!group) return { group, policiesMoved: 0 };
+      let policiesMoved = 0;
+      if (agentId) {
+        const moved = await tx.update(policies).set({ agentId })
+          .where(and(eq(policies.organizationId, orgId), eq(policies.groupId, groupId), isNull(policies.deletedAt),
+            or(isNull(policies.agentId), sql`${policies.agentId} <> ${agentId}`)))
+          .returning({ id: policies.id });
+        policiesMoved = moved.length;
+      }
+      if (opts?.inTx) await opts.inTx(tx, group, policiesMoved);
+      return { group, policiesMoved };
     });
   }
 

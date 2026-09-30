@@ -2610,22 +2610,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = { ...targetUser };
     const { displayName, isActive, branchId, roleIds, password, email, phone, address, nationalId, dateOfBirth, gender, maritalStatus, nextOfKinName, nextOfKinPhone } = req.body;
     // Escalation guard (server/role-assignment-guard.ts): sensitive account changes need at least
-    // the target's powers; role changes are checked role by role and never on yourself.
-    if (password !== undefined || email !== undefined || isActive !== undefined || roleIds !== undefined) {
-      const manageError = await manageUserError(currentUser, targetUser.id);
-      if (manageError) return res.status(403).json({ message: manageError });
-    }
+    // the target's powers; role changes are checked role by role and never on yourself. The edit
+    // form always sends email/status/roles, so only an actual change counts.
+    let rolesChanged = false;
+    let requestedRoles: Awaited<ReturnType<typeof storage.getRolesByIds>> = [];
     if (roleIds && Array.isArray(roleIds)) {
-      const requested = await storage.getRolesByIds(roleIds, currentUser.organizationId);
-      if (requested.length !== roleIds.length) {
+      requestedRoles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
+      if (requestedRoles.length !== roleIds.length) {
         return res.status(400).json({ message: "One or more roles are invalid for this organization" });
       }
       const current = await storage.getUserRoles(targetUser.id, currentUser.organizationId);
-      const unchanged = current.length === requested.length && requested.every((r) => current.some((c) => c.id === r.id));
-      if (!unchanged) {
-        const roleError = await roleAssignmentError(currentUser, requested, targetUser.id);
-        if (roleError) return res.status(403).json({ message: roleError });
-      }
+      rolesChanged = !(current.length === requestedRoles.length && requestedRoles.every((r) => current.some((c) => c.id === r.id)));
+    }
+    const sensitiveChange = !!password
+      || (email !== undefined && String(email).trim().toLowerCase() !== String(targetUser.email ?? "").toLowerCase())
+      || (isActive !== undefined && !!isActive !== !!targetUser.isActive)
+      || rolesChanged;
+    if (sensitiveChange) {
+      const manageError = await manageUserError(currentUser, targetUser.id);
+      if (manageError) return res.status(403).json({ message: manageError });
+    }
+    if (rolesChanged) {
+      const roleError = await roleAssignmentError(currentUser, requestedRoles, targetUser.id);
+      if (roleError) return res.status(403).json({ message: roleError });
     }
     const updates: any = {};
     if (email !== undefined) {
@@ -2658,15 +2665,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (bio !== undefined) updates.bio = bio || null;
     const updated = await storage.updateUser(req.params.id as string, updates);
 
-    if (roleIds && Array.isArray(roleIds)) {
-      const roles = await storage.getRolesByIds(roleIds, currentUser.organizationId);
-      if (roles.length !== roleIds.length) {
-        return res.status(400).json({ message: "One or more roles are invalid for this organization" });
-      }
-      await storage.clearUserRoles(req.params.id as string);
-      for (const roleId of roleIds) {
-        await storage.addUserRole(req.params.id as string, roleId, currentUser.organizationId);
-      }
+    // Only when the roles actually changed, and in one transaction — "remove all, then add each"
+    // as separate writes could leave the person with no roles (locked out) if one insert failed.
+    if (rolesChanged) {
+      await storage.replaceUserRoles(req.params.id as string, requestedRoles.map((r) => r.id), currentUser.organizationId);
     }
 
     const userRoles = await storage.getUserRoles(req.params.id as string, currentUser.organizationId);
@@ -3021,6 +3023,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorHasAgentRole = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
     const creatorIsAgentScoped = isAgentScoped(userRolesForCreate);
+    // Tenant-db user id (FK target), not the raw sign-in id — they can differ on a dedicated DB.
+    const creatorAgentId = creatorIsAgentScoped ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     if (creatorHasAgentRole) {
       await ensureRegistryUserMirroredToOrgDataDb(user.organizationId, user.id, user.branchId || undefined);
     }
@@ -3039,7 +3043,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       organizationId: user.organizationId,
       branchId: req.body.branchId || user.branchId,
       activationCode,
-      agentId: creatorIsAgentScoped ? user.id : undefined,
+      agentId: creatorAgentId,
     });
     let client: any;
     try {
@@ -3048,7 +3052,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const lead = await storage.createLead({
         organizationId: user.organizationId,
         branchId: user.branchId || undefined,
-        agentId: creatorIsAgentScoped ? user.id : undefined,
+        agentId: creatorAgentId,
         clientId: client.id,
         firstName: client.firstName,
         lastName: client.lastName,
@@ -13208,12 +13212,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getGroupsByOrg(user.organizationId));
   });
 
+  /** A group's responsible agent must be an active user of this organisation. */
+  async function groupAgentError(orgId: string, agentId: string | null): Promise<string | null> {
+    if (!agentId) return null;
+    const agent = await storage.getUser(agentId, orgId);
+    if (!agent || agent.organizationId !== orgId) return "That agent isn't a user in this organisation.";
+    if (!agent.isActive) return "That agent's account is deactivated — pick an active agent.";
+    return null;
+  }
+
   app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     try {
       // Legacy groups and burial societies always keep a ledger; any other group only if asked.
       const hasLedger = req.body.isLegacy === true || req.body.type === "burial_society" || req.body.hasLedger === true;
       const agentId: string | null = req.body.agentId || null; // route requires write:group
+      const agentError = await groupAgentError(user.organizationId, agentId);
+      if (agentError) return res.status(400).json({ message: agentError });
       const parsed = insertGroupSchema.parse({ ...req.body, agentId, hasLedger, organizationId: user.organizationId });
       const group = await storage.createGroup(parsed);
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
@@ -13237,6 +13252,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // route needs write:group, so an agent can't take over a whole society's policies.
       const agentChange = Object.prototype.hasOwnProperty.call(patch, "agentId") ? (patch.agentId || null) : undefined;
       delete patch.agentId;
+      if (agentChange) {
+        const agentError = await groupAgentError(user.organizationId, agentChange);
+        if (agentError) return res.status(400).json({ message: agentError });
+      }
       const nextIsLegacy = patch.isLegacy ?? existing.isLegacy;
       const nextType = patch.type ?? existing.type;
       if (nextIsLegacy === true || nextType === "burial_society") patch.hasLedger = true;
@@ -13245,15 +13264,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const entries = await storage.getGroupLedgerEntries(user.organizationId, id);
         if (entries.length > 0) return res.status(400).json({ message: "This group already has ledger entries, so it has to stay a ledger group." });
       }
-      let updated = Object.keys(patch).length > 0 ? await storage.updateGroup(id, patch, user.organizationId) : existing;
-      let policiesMoved = 0;
       if (agentChange !== undefined && agentChange !== (existing.agentId ?? null)) {
-        const r = await storage.setGroupAgent(user.organizationId, id, agentChange);
-        updated = r.group ?? updated;
-        policiesMoved = r.policiesMoved;
+        // Group details, the agent, every policy moved to them and the audit entry: one transaction.
+        const r = await storage.setGroupAgent(user.organizationId, id, agentChange, {
+          patch,
+          inTx: async (tx, group, moved) => { await auditLog(req, "UPDATE_GROUP", "Group", id, existing, { ...group, policiesMovedToAgent: moved }, undefined, tx); },
+        });
+        return res.json({ ...(r.group ?? existing), policiesMoved: r.policiesMoved });
       }
-      await auditLog(req, "UPDATE_GROUP", "Group", id, existing, { ...updated, policiesMovedToAgent: policiesMoved });
-      return res.json({ ...updated, policiesMoved });
+      const updated = Object.keys(patch).length > 0 ? await storage.updateGroup(id, patch, user.organizationId) : existing;
+      await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
+      return res.json({ ...updated, policiesMoved: 0 });
     } catch (err: any) {
       structuredLog("error", "PATCH /api/groups/:id failed", { error: err?.message, id });
       return res.status(500).json({ message: safeError(err) });
@@ -13828,84 +13849,84 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       memberBreakdownJson = JSON.stringify(rows);
     }
     try {
-      const tdb = await getDbForOrg(user.organizationId);
-      // Highest existing sequence + 1, not COUNT(*) + 1: with a count, deleting any receipt made the
-      // next one reuse the number of the newest existing receipt (LGR-…-250 twice).
-      const seqRow = await tdb.execute(
-        sql`SELECT COALESCE(MAX(CAST(substring(receipt_number from '([0-9]+)$') AS integer)), 0) AS seq
-            FROM legacy_group_receipts WHERE organization_id = ${user.organizationId}`
-      );
-      const cnt = parseInt(String((seqRow.rows ?? seqRow)[0].seq ?? 0), 10) + 1;
-      const datePart = paymentDate.replace(/-/g, "");
       const org = await storage.getOrganization(user.organizationId);
       const receiptPrefix = org?.legacyReceiptNumberPrefix || "LGR";
       const receiptPadding = Math.max(1, org?.legacyReceiptNumberPadding ?? 3);
-      const receiptNumber = `${receiptPrefix}-${datePart}-${String(cnt).padStart(receiptPadding, "0")}`;
-      const rows = await tdb.execute(sql`
-        INSERT INTO legacy_group_receipts
-          (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes, member_breakdown)
-        VALUES
-          (${user.organizationId}, ${groupId}::uuid, ${group.name}, ${receiptNumber},
-           ${String(amount)}::numeric, ${String(currency).toUpperCase()}, ${paymentDate}::date, ${notes ?? null},
-           ${memberBreakdownJson}::jsonb)
-        RETURNING *
-      `);
-      const created = (rows.rows ?? rows)[0];
-      await auditLog(req, "create", "legacy_group_receipt", created.id as string, null, created);
+      const cur = String(currency).toUpperCase();
+      const feeAmount = await computePlatformFee(user.organizationId, String(amount));
+      const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+      const isLedgerGroup = group.hasLedger || group.isLegacy;
 
-      // Platform fee on each legacy group receipt, same as regular group receipts.
-      // Stamped with the receipt's own payment date (not "now") so backdated legacy
-      // entries land in the correct month on date-filtered platform-fee reports. Awaited (not a
-      // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
-      // before the response returns, not a lost promise nobody was ever watching.
-      try {
-        const feeAmount = await computePlatformFee(user.organizationId, String(amount));
-        await storage.createPlatformReceivable({
+      // One transaction: the receipt, its platform fee, the society's balance credit and the
+      // follow-up job (member texts + agent commission) all save together or not at all. They
+      // used to be four separate commits — a failed ledger credit was only logged, leaving a
+      // receipt the society's balance never saw.
+      const created = await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Serialise numbering per org: "highest + 1" read without a lock let two receipts saved
+        // at the same moment get the same number.
+        await txDb.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${"legacy_group_receipt_no:" + user.organizationId}))`);
+        // Highest existing sequence + 1, not COUNT(*) + 1: with a count, deleting any receipt made the
+        // next one reuse the number of the newest existing receipt (LGR-…-250 twice).
+        const seqRow = await txDb.execute(
+          sql`SELECT COALESCE(MAX(CAST(substring(receipt_number from '([0-9]+)$') AS integer)), 0) AS seq
+              FROM legacy_group_receipts WHERE organization_id = ${user.organizationId}`
+        );
+        const cnt = parseInt(String(((seqRow as any).rows ?? seqRow)[0].seq ?? 0), 10) + 1;
+        const receiptNumber = `${receiptPrefix}-${paymentDate.replace(/-/g, "")}-${String(cnt).padStart(receiptPadding, "0")}`;
+        const rows = await txDb.execute(sql`
+          INSERT INTO legacy_group_receipts
+            (organization_id, group_id, group_name, receipt_number, amount, currency, payment_date, notes, member_breakdown)
+          VALUES
+            (${user.organizationId}, ${groupId}::uuid, ${group.name}, ${receiptNumber},
+             ${String(amount)}::numeric, ${cur}, ${paymentDate}::date, ${notes ?? null},
+             ${memberBreakdownJson}::jsonb)
+          RETURNING *
+        `);
+        const row = ((rows as any).rows ?? rows)[0];
+
+        // Platform fee, stamped with the receipt's own payment date so backdated entries land in
+        // the right month on platform-fee reports.
+        await storage.createPlatformReceivableInTx(txDb, {
           organizationId: user.organizationId,
           amount: feeAmount,
-          currency: String(currency).toUpperCase(),
+          currency: cur,
           description: `Platform fee on legacy group receipt ${receiptNumber} (group ${group.name})`,
           isSettled: false,
           createdAt: new Date(`${paymentDate}T12:00:00.000Z`),
         });
-      } catch (err: any) {
-        structuredLog("error", "Platform fee failed (legacy group receipt)", { groupId, error: err?.message });
-      }
 
-      try {
-        const ledgerCreatedBy = await resolveOrSyncTenantUserId(user.organizationId, user.id);
-        await storage.createGroupLedgerEntry({
+        await storage.createGroupLedgerEntryInTx(txDb, {
           organizationId: user.organizationId,
           groupId,
           entryType: "premium_credit",
           amount: String(amount),
-          currency: String(currency).toUpperCase(),
+          currency: cur,
           description: `Legacy group receipt ${receiptNumber}`,
           referenceType: "legacy_group_receipt",
-          referenceId: created.id as string,
+          referenceId: row.id as string,
           createdBy: ledgerCreatedBy,
         });
-      } catch (err: any) {
-        structuredLog("error", "Group ledger credit failed (legacy group receipt)", { groupId, error: err?.message });
-      }
 
-      // Ledger groups (legacy groups / burial societies) are receipted as a lump sum: text every
-      // ticked member and pay their agents 10% of the payment (server/ledger-group-receipt.ts).
-      // Queued on the outbox so it retries if it fails part-way.
-      if (group.hasLedger || group.isLegacy) {
-        await withOrgTransaction(user.organizationId, async (txDb) => {
+        // Ledger groups (legacy groups / burial societies): text every ticked member and pay the
+        // group's agent 10% (server/ledger-group-receipt.ts). The agent is fixed now, at receipt
+        // time, so changing the group's agent later doesn't move commission already earned.
+        if (isLedgerGroup) {
           await insertOutboxMessageInTx(txDb, {
             organizationId: user.organizationId,
             type: OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP,
-            dedupeKey: `ledger_group_receipt_followup:${created.id}`,
+            dedupeKey: `ledger_group_receipt_followup:${row.id}`,
             payload: {
-              receiptId: created.id, receiptNumber, groupId, amount: String(amount), currency: String(currency).toUpperCase(),
+              receiptId: row.id, receiptNumber, groupId, amount: String(amount), currency: cur,
               includedPolicyIds: included.map((p) => p.id),
+              agentId: group.agentId ?? null,
             },
           });
-        });
-        requestOutboxDrain(user.organizationId);
-      }
+        }
+
+        await auditLog(req, "create", "legacy_group_receipt", row.id as string, null, row, undefined, txDb);
+        return row;
+      });
+      if (isLedgerGroup) requestOutboxDrain(user.organizationId);
 
       return res.status(201).json(created);
     } catch (err: any) {

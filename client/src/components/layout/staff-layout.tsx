@@ -356,11 +356,11 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           // from insurance vocabulary. This is money coming in: receipting, cash-up, banking it.
           title: "Payments",
           items: filterNav([
-            { href: "/staff/finance?tab=payments", label: "Receipt a Payment", icon: Receipt, permissions: ["read:finance", "read:commission"] },
+            { href: "/staff/finance?tab=payments", label: "Receipt a Payment", icon: Receipt, permissions: ["read:finance", "read:commission", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"] },
             { href: "/staff/finance?tab=receipting-by-staff", label: "Receipting by Staff", icon: Users, permission: "read:finance", agentHidden: true },
-            { href: "/staff/finance?tab=paynow", label: isAgent ? "Mobile Payments" : "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
-            { href: "/staff/finance?tab=cashups", label: "Cash-up", icon: Wallet2, permissions: ["read:finance", "read:commission"] },
-            { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permission: "write:finance", agentHidden: true },
+            { href: "/staff/finance?tab=paynow", label: isAgent ? "Mobile Payments" : "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"] },
+            { href: "/staff/finance?tab=cashups", label: "Cash-up", icon: Wallet2, permissions: ["read:finance", "read:commission", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"] },
+            { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permissions: ["write:finance", "receipt:group"], agentHidden: true },
             { href: "/staff/finance?tab=banking", label: "Banking & Cash", icon: Landmark, permission: "read:finance", agentHidden: true },
             { href: "/staff/finance?tab=month-end", label: "Month-End Close", icon: CalendarDays, permission: "write:finance", agentHidden: true },
             { href: "/staff/transactions/debit-orders", label: "Debit Orders", icon: CreditCard, agentHidden: true },
