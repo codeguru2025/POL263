@@ -10,6 +10,32 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Administrators (and cashiers, clerks, managers) had no "Receipt payment" button
+
+**Symptom:** after the admin/finance_manager split (d21b9c4), administrators could no longer
+receipt policies. The "Receipt payment" button on the policy page and the "Receipt a Policy"
+button on Finance → Payments were gone. Cashiers, finance clerks and branch managers lost them too.
+
+**Root cause:** both buttons were gated in the UI on `write:finance` (`canWriteFinance || isAgent`),
+not on the `receipt:*` permissions. Before the split every administrator had `write:finance`, so
+the wrong gate never showed. The split moved `write:finance` to finance_manager. Admins kept
+`receipt:cash/mobile/transfer/group`, and `POST /api/payments` accepts those; only the UI hid it.
+
+**Fix:** `client/src/pages/staff/policies/index.tsx` computes `canReceipt` (write:finance or any
+receipt:cash/mobile/transfer, or platform owner) and passes it to `policy-detail-view.tsx` in place
+of `canWriteFinance`. `finance/use-finance-permissions.ts` now returns its existing `canReceipt`,
+and `finance/index.tsx` gates "Receipt a Policy" on it. Commit a22c6a5.
+
+**Verified:** `npm run check` clean, build + 890/890 tests pass. The administrator role in
+`server/constants.ts` holds receipt:*, and the server route accepts them.
+
+**Lesson for next time:** when permissions move between roles, grep the client for the moved
+permission (`"write:finance"`). UI gates often use a broad permission as a proxy for a narrow
+one, and the proxy only breaks once the two stop travelling together. Gate action buttons on the
+same permissions the server route checks.
+
+---
+
 ## 2026-09-30 — Society receipts and user-role edits weren't atomic; receipt numbers could collide
 
 **Symptoms (found in review, not yet seen in the data):**
