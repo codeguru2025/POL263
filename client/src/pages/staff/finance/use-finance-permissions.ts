@@ -63,6 +63,8 @@ export function useFinancePermissions() {
   const canReadCommission = permissions.includes("read:commission");
   // Receipting roles (agents, cashiers, admins) take payments without seeing the company books.
   const canReceipt = ["receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"].some((p) => permissions.includes(p)) || canWriteFinance;
+  // Cash needs receipt:cash (agents never hold it); mobile/transfer-only roles get Paynow methods only.
+  const canReceiptCash = !isAgent && (permissions.includes("receipt:cash") || canWriteFinance || !!(authUser as any)?.isPlatformOwner);
   const canGroupReceipt = permissions.includes("receipt:group") || canWriteFinance || !!(authUser as any)?.isPlatformOwner;
   const commissionOnly = canReadCommission && !canReadFinance && !canReceipt;
   const canManageSettings = permissions.includes("manage:settings") || (authUser as any)?.isPlatformOwner;
@@ -131,7 +133,7 @@ export function useFinancePermissions() {
     roles, permissions, authUser, isAgent,
     canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
-    canReceipt, commissionOnly, canManageSettings,
+    canReceipt, canReceiptCash, commissionOnly, canManageSettings,
     pendingApprovalsCount,
     tabVisibility, visibleTabDefs, visibleTabValues,
     activeTab, setActiveTab, handleTabChange,

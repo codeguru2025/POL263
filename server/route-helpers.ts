@@ -878,7 +878,8 @@ export async function enforceAgentPolicyAccess<T extends { organizationId?: stri
   // check denied admins who also carried an agent role (e.g. for a referral code).
   const isAgent = isAgentScoped(userRoles as { name: string }[]);
 
-  if (isAgent && policy.agentId !== user.id) {
+  // Policies store the agent's tenant-DB id, which differs from the registry id on a dedicated DB.
+  if (isAgent && policy.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
     return { hasAccess: false, errorResponse: { status: 403, json: { message: "Access denied" } } };
   }
 

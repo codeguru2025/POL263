@@ -43,7 +43,7 @@ export default function StaffFinance() {
     authUser, isAgent,
     canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
-    canReceipt, commissionOnly, canManageSettings,
+    canReceipt, canReceiptCash, commissionOnly, canManageSettings,
     pendingApprovalsCount,
     visibleTabDefs,
     activeTab, handleTabChange,
@@ -151,7 +151,7 @@ export default function StaffFinance() {
   const resetPaymentForm = () => {
     setPaymentDialogPolicyNumber("");
     setPaymentCurrency("USD");
-    setPaymentMethod(isAgent ? "ecocash" : "cash");
+    setPaymentMethod(canReceiptCash ? "cash" : "ecocash");
     setPaymentReference("");
     setPaymentNotes("");
     setPaynowIntentId(null);
@@ -384,7 +384,7 @@ export default function StaffFinance() {
                   <ReceiptingByStaffPanel />
                 </TabsContent>
 
-                <PaynowTab policies={policies} clientMap={clientMap} getClient={getClient} getPolicyNumber={getPolicyNumber} isAgent={isAgent} />
+                <PaynowTab policies={policies} clientMap={clientMap} getClient={getClient} getPolicyNumber={getPolicyNumber} isAgent={isAgent} canReceiptCash={canReceiptCash} />
 
                 <CashupsTab authUser={authUser} canWriteFinance={canWriteFinance} />
 
@@ -430,7 +430,7 @@ export default function StaffFinance() {
         onPolicyResolved={(p) => setPaymentDialogPolicyNumber(p?.policyNumber || "")}
         getClientLabel={(clientId) => { const c = getClient(clientId); return c ? `${c.firstName} ${c.lastName}` : null; }}
         currency={paymentCurrency} onCurrencyChange={setPaymentCurrency}
-        enablePaynow isAgent={isAgent}
+        enablePaynow isAgent={!canReceiptCash}
         paymentMethod={paymentMethod} onPaymentMethodChange={setPaymentMethod}
         reference={paymentReference} onReferenceChange={setPaymentReference}
         notes={paymentNotes} onNotesChange={setPaymentNotes}

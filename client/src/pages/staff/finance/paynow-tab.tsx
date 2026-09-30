@@ -19,6 +19,7 @@ interface PaynowTabProps {
   getClient: (clientId: string) => any;
   getPolicyNumber: (policyId: string) => string;
   isAgent: boolean;
+  canReceiptCash: boolean;
 }
 
 function paymentIntentsColumns(opts: {
@@ -53,7 +54,7 @@ function paymentIntentsColumns(opts: {
   ];
 }
 
-export function PaynowTab({ getPolicyNumber, isAgent }: PaynowTabProps) {
+export function PaynowTab({ getPolicyNumber, isAgent, canReceiptCash }: PaynowTabProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -118,7 +119,7 @@ export function PaynowTab({ getPolicyNumber, isAgent }: PaynowTabProps) {
           title="Payment intents (Paynow)"
           description="Online collection attempts and manual cash receipt logging."
           icon={Landmark}
-          headerRight={!isAgent ? (
+          headerRight={canReceiptCash ? (
               <Button variant="outline" size="sm" onClick={() => { setShowCashReceiptDialog(true); setCashReceiptCurrency("USD"); setCashReceiptNotes(""); }}>
                 Record cash receipt
               </Button>

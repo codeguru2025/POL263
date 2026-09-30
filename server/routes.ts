@@ -5748,6 +5748,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(403).json({ message: `Missing permission: ${requiredPerm}` });
       }
     }
+    if (isAgentPayment && req.body.policyId) {
+      const access = await enforceAgentPolicyAccess(req, await storage.getPolicy(String(req.body.policyId), user.organizationId));
+      if (!access.hasAccess) return res.status(access.errorResponse.status).json(access.errorResponse.json);
+    }
     const statusPreview = (req.body.status ?? "pending") as string;
     const policyIdPreview = req.body.policyId as string | undefined;
     const isClearedWithPolicy = statusPreview === "cleared" && !!policyIdPreview;
@@ -5999,17 +6003,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ...intent, events });
   });
 
-  app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash"), async (req, res) => {
+  app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (intent.policyId) {
+      const access = await enforceAgentPolicyAccess(req, await storage.getPolicy(intent.policyId, user.organizationId));
+      if (!access.hasAccess) return res.status(access.errorResponse.status).json(access.errorResponse.json);
+    }
     const result = await pollPaynowStatus(intent.id, intent.organizationId);
     return res.json(result);
   });
 
   // Staff-side Paynow: create intent, initiate, submit OTP
-  app.post("/api/payment-intents", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
+  app.post("/api/payment-intents", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile"), async (req, res) => {
     const user = req.user as any;
     const { policyId, clientId, amount, currency, purpose, idempotencyKey: clientKey } = req.body;
     if (!policyId || !clientId || amount == null) return res.status(400).json({ message: "policyId, clientId, and amount are required" });
@@ -6020,6 +6028,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!policy || policy.clientId !== clientId) {
         return res.status(400).json({ message: "clientId does not match policy owner" });
       }
+      const access = await enforceAgentPolicyAccess(req, policy);
+      if (!access.hasAccess) return res.status(access.errorResponse.status).json(access.errorResponse.json);
       const idempotencyKey = clientKey || `staff-${user.id}-${policyId}-${String(parsedAmount)}-${purpose || "premium"}`;
       const result = await createPaymentIntent({
         organizationId: user.organizationId,
@@ -6039,11 +6049,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/payment-intents/:id/initiate", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
+  app.post("/api/payment-intents/:id/initiate", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (intent.policyId) {
+      const access = await enforceAgentPolicyAccess(req, await storage.getPolicy(intent.policyId, user.organizationId));
+      if (!access.hasAccess) return res.status(access.errorResponse.status).json(access.errorResponse.json);
+    }
     const { method, payerPhone, payerEmail } = req.body;
     try {
       const result = await initiatePaynowPayment({
@@ -6071,11 +6085,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/payment-intents/:id/otp", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
+  app.post("/api/payment-intents/:id/otp", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash", "receipt:mobile"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
     if (!intent || intent.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
+    if (intent.policyId) {
+      const access = await enforceAgentPolicyAccess(req, await storage.getPolicy(intent.policyId, user.organizationId));
+      if (!access.hasAccess) return res.status(access.errorResponse.status).json(access.errorResponse.json);
+    }
     const { otp } = req.body;
     if (!otp || typeof otp !== "string" || otp.trim().length < 4) return res.status(400).json({ message: "Enter a valid OTP" });
     try {

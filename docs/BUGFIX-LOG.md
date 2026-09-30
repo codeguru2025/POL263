@@ -10,6 +10,40 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Agents couldn't take Paynow payments; agents could pay into other agents' policies
+
+**Symptoms:**
+1. Since d868cf2 ("agents never handle cash"), agents couldn't start EcoCash/OneMoney/InnBucks/O'Mari/card
+   payments. `POST /api/payment-intents`, `/:id/initiate`, `/:id/otp` and `/:id/poll` accepted only
+   `write:finance` or `receipt:cash`. Agents had been getting through on `receipt:cash`, which is now
+   stripped from them.
+2. Neither those routes nor `POST /api/payments` checked that the policy belongs to the agent. The
+   central agent-scope guard only covers `/:id` URL paths, and these take the policy in the body
+   (or via the intent).
+3. `enforceAgentPolicyAccess` compared `policy.agentId` to the registry `user.id`. On a dedicated
+   tenant DB (Falakhe) the tenant id can differ, so agents could be refused their own policies.
+4. Sales Team Leader and Customer Service (receipt:mobile/transfer, no cash) now see the receipt
+   buttons (a22c6a5). The dialog offered and pre-selected **Cash**, which the server refuses.
+
+**Root cause:** Paynow (mobile) was gated on the *cash* permission, a proxy that only broke once
+agents lost cash. Ownership was left to each route, and these routes never had it.
+
+**Fix:** `server/routes.ts` — the Paynow intent routes accept `receipt:mobile`. Creating an intent,
+the intent `:id` routes, and `POST /api/payments` (for agent-scoped users) run
+`enforceAgentPolicyAccess`. `server/route-helpers.ts` — the helper compares against
+`resolveOrSyncTenantUserId`. Client: `canReceiptCash` in `finance/use-finance-permissions.ts` and
+`policies/detail/receipt-dialogs.tsx` hides Cash and defaults to EcoCash for anyone without
+receipt:cash. `finance/paynow-tab.tsx` shows its cash-receipt button only to cash holders.
+
+**Verified:** `npm run check` clean, build + full test suite pass.
+
+**Lesson for next time:** when a permission is removed from a role, grep every route that accepts
+it (`"receipt:cash"`). Some will be using it as a stand-in for a different power. Any route that
+takes a policy id in the *body* is outside `agent-scope-guard.ts` and needs its own
+`enforceAgentPolicyAccess`.
+
+---
+
 ## 2026-09-30 — Administrators (and cashiers, clerks, managers) had no "Receipt payment" button
 
 **Symptom:** after the admin/finance_manager split (d21b9c4), administrators could no longer

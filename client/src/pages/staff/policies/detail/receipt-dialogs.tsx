@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
@@ -29,6 +30,9 @@ interface UseReceiptDialogsArgs {
  * receipt table's View/Thermal buttons can open the same viewer.
  */
 export function useReceiptDialogs({ selectedPolicy, displayPolicy, isAgent, canEditPremium, principalPhone }: UseReceiptDialogsArgs) {
+  const { permissions, isPlatformOwner } = useAuth();
+  // Cash needs receipt:cash (agents never hold it); mobile/transfer-only roles get Paynow methods only.
+  const canReceiptCash = !isAgent && (!!isPlatformOwner || ["receipt:cash", "write:finance"].some((p) => (permissions ?? []).includes(p)));
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -57,7 +61,7 @@ export function useReceiptDialogs({ selectedPolicy, displayPolicy, isAgent, canE
   const [receiptViewFormat, setReceiptViewFormat] = useState<"a4" | "thermal48" | "thermal58" | "thermal80">("a4");
 
   const openInPolicyReceipt = () => {
-    setInPolicyReceiptMethod(isAgent ? "ecocash" : "cash");
+    setInPolicyReceiptMethod(canReceiptCash ? "cash" : "ecocash");
     setInPolicyReceiptCurrency(displayPolicy.currency || "USD");
     setInPolicyReceiptRef(principalPhone);
     setInPolicyReceiptNotes("");
@@ -245,7 +249,7 @@ export function useReceiptDialogs({ selectedPolicy, displayPolicy, isAgent, canE
         allowAmountOverride={canEditPremium}
         amountOverride={inPolicyReceiptAmountOverride} onAmountOverrideChange={setInPolicyReceiptAmountOverride}
         submitterNote={inPolicyReceiptSubmitterNote} onSubmitterNoteChange={setInPolicyReceiptSubmitterNote}
-        enablePaynow isAgent={isAgent}
+        enablePaynow isAgent={!canReceiptCash}
         paymentMethod={inPolicyReceiptMethod} onPaymentMethodChange={setInPolicyReceiptMethod}
         reference={inPolicyReceiptRef} onReferenceChange={setInPolicyReceiptRef}
         notes={inPolicyReceiptNotes} onNotesChange={setInPolicyReceiptNotes}
