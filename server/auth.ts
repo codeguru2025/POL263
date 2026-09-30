@@ -1467,6 +1467,10 @@ export function setupAuth(app: Express) {
     if (!perms.includes("write:user") && !admin.isPlatformOwner) {
       return res.status(403).json({ message: "Insufficient permissions" });
     }
+    // Setting someone's password is taking over their account: not for accounts with more power.
+    const { manageUserError } = await import("./role-assignment-guard");
+    const manageError = await manageUserError(admin, target.id);
+    if (manageError) return res.status(403).json({ message: manageError });
     const passwordHash = await argon2.hash(String(newPassword), { type: argon2.argon2id });
     await storage.updateUser(target.id, { passwordHash });
     return res.json({ message: "Password reset successfully" });

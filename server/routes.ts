@@ -121,6 +121,8 @@ import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLi
 import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, receiptEventFor, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
 import { receiptablePolicies } from "./ledger-group-receipt";
+import { registerAgentScopeGuard } from "./agent-scope-guard";
+import { roleAssignmentError, manageUserError } from "./role-assignment-guard";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -170,6 +172,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api/fleet", requireModule("fleet"));
   app.use("/api/payroll", requireModule("payroll"));
   app.use("/api/attendance", requireModule("payroll"));
+
+  // Agents only reach their own policies/clients/claims/leads/receipts/groups — one check for
+  // every route that takes one of those ids (server/agent-scope-guard.ts).
+  registerAgentScopeGuard(app);
 
   const DASHBOARD_MAX_ROWS =
     (process.env.DASHBOARD_MAX_ROWS && parseInt(process.env.DASHBOARD_MAX_ROWS, 10)) || 5000;
@@ -2537,6 +2543,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (existing) return res.status(409).json({ message: "A user with this email already exists" });
 
     const roles = roleIds && Array.isArray(roleIds) ? await storage.getRolesByIds(roleIds, currentUser.organizationId) : [];
+    if (roleIds && Array.isArray(roleIds) && roles.length !== roleIds.length) {
+      return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+    }
+    const roleError = await roleAssignmentError(currentUser, roles);
+    if (roleError) return res.status(403).json({ message: roleError });
     const hasAgentRole = roles.some((r) => r?.name === "agent");
     const passwordPolicyError = password ? validatePasswordPolicy(String(password)) : null;
     if (hasAgentRole && (!password || passwordPolicyError)) {
@@ -2598,6 +2609,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const before = { ...targetUser };
     const { displayName, isActive, branchId, roleIds, password, email, phone, address, nationalId, dateOfBirth, gender, maritalStatus, nextOfKinName, nextOfKinPhone } = req.body;
+    // Escalation guard (server/role-assignment-guard.ts): sensitive account changes need at least
+    // the target's powers; role changes are checked role by role and never on yourself.
+    if (password !== undefined || email !== undefined || isActive !== undefined || roleIds !== undefined) {
+      const manageError = await manageUserError(currentUser, targetUser.id);
+      if (manageError) return res.status(403).json({ message: manageError });
+    }
+    if (roleIds && Array.isArray(roleIds)) {
+      const requested = await storage.getRolesByIds(roleIds, currentUser.organizationId);
+      if (requested.length !== roleIds.length) {
+        return res.status(400).json({ message: "One or more roles are invalid for this organization" });
+      }
+      const current = await storage.getUserRoles(targetUser.id, currentUser.organizationId);
+      const unchanged = current.length === requested.length && requested.every((r) => current.some((c) => c.id === r.id));
+      if (!unchanged) {
+        const roleError = await roleAssignmentError(currentUser, requested, targetUser.id);
+        if (roleError) return res.status(403).json({ message: roleError });
+      }
+    }
     const updates: any = {};
     if (email !== undefined) {
       const trimmed = String(email).trim().toLowerCase();
@@ -2655,6 +2684,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (targetUser.id === currentUser.id) {
       return res.status(400).json({ message: "Cannot deactivate yourself" });
     }
+    const manageError = await manageUserError(currentUser, targetUser.id);
+    if (manageError) return res.status(403).json({ message: manageError });
     const updated = await storage.updateUser(req.params.id as string, { isActive: false });
     // Immediately revoke all active sessions for the deactivated user
     await pool.query(`DELETE FROM session WHERE sess->>'passport' IS NOT NULL AND (sess->'passport'->>'user')::text = $1`, [req.params.id]);
@@ -4576,9 +4607,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Manual premium override is gated by the dedicated edit:premium permission.
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
-    // Agent and group are admin decisions: moving a policy into a group now also moves it to the
-    // group's agent, so an agent (who has write:policy) must not be able to reassign either.
-    const canAssignAgentOrGroup = canEditPremium || effPerms.includes("manage:settings");
+    // Agent and group are a write:group decision: moving a policy into a group also moves it to
+    // the group's agent, so an agent (who has write:policy) must not be able to reassign either.
+    const canAssignAgentOrGroup = !!user.isPlatformOwner || effPerms.includes("write:group");
 
     const body = { ...req.body };
     const rawPremium = body.premiumAmount;
@@ -4600,7 +4631,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!canAssignAgentOrGroup) {
       const changes = (k: "agentId" | "groupId") => k in body && (body[k] || null) !== ((before as any)[k] ?? null);
       if (changes("agentId") || changes("groupId")) {
-        return res.status(403).json({ message: "Only an administrator can change a policy's agent or group." });
+        return res.status(403).json({ message: "Only someone who manages groups (an administrator or manager) can change a policy's agent or group." });
       }
       delete body.agentId;
       delete body.groupId;
@@ -5643,7 +5674,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Payments ───────────────────────────────────────────────
 
-  app.get("/api/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/payments", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -5658,7 +5689,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // True totals for the Finance page KPI tiles — GET /api/payments is paginated (default
   // limit 100), so `.length` on that response silently undercounts past the first page.
-  app.get("/api/payments/summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/payments/summary", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
@@ -5669,7 +5700,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getPaymentsSummary(user.organizationId, filters, agentId));
   });
 
-  app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/policies/:id/payments", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy"), async (req, res) => {
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
@@ -5927,7 +5958,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/policies/:id/receipts", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy"), async (req, res) => {
     const user = req.user as any;
     const policyId = req.params.id as string;
     const orgId = user.organizationId;
@@ -5941,7 +5972,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Payment intents (Paynow) & receipts ─────────────────────
-  app.get("/api/payment-intents", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/payment-intents", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
@@ -5959,7 +5990,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ...intent, events });
   });
 
-  app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.post("/api/payment-intents/:id/poll", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const intent = await storage.getPaymentIntentById(id, user.organizationId);
@@ -6260,7 +6291,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/receipts/:id/download", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!user.organizationId) return res.status(400).json({ message: "Select a tenant before downloading receipts" });
@@ -6277,7 +6308,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // View endpoint — inline by default; ?format=thermal&size=48|58|80 for thermal roll preview
-  app.get("/api/receipts/:id/view", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/receipts/:id/view", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy"), async (req, res) => {
     const user = req.user as any;
     const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     if (!user.organizationId) return res.status(400).json({ message: "Select a tenant" });
@@ -6422,7 +6453,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/admin/receipts/reprint", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.post("/api/admin/receipts/reprint", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const { receiptId } = req.body;
     if (!receiptId) return res.status(400).json({ message: "receiptId required" });
@@ -9524,7 +9555,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Staff/agent-triggered send — mirrors the existing "text/WhatsApp it to the client" framing
   // in POST /api/quote (line ~1179): explicit action, not an automatic send on every quote.
-  app.post("/api/quotes/:id/email", requireAuth, requireTenantScope, requirePermission("read:lead"), requireModule("email_notifications"), async (req, res) => {
+  app.post("/api/quotes/:id/email", requireAuth, requireTenantScope, requirePermission("write:lead"), requireModule("email_notifications"), async (req, res) => {
     const user = req.user as any;
     const quote = await storage.getQuote(req.params.id as string, user.organizationId);
     if (!quote || quote.organizationId !== user.organizationId) return res.status(404).json({ message: "Quote not found" });
@@ -9765,7 +9796,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── FX Rates (USD base for consolidated statements) ────────
 
-  app.get("/api/fx-rates", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.get("/api/fx-rates", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group"), async (req, res) => {
     const user = req.user as any;
     return res.json(await storage.getFxRates(user.organizationId));
   });
@@ -10538,7 +10569,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     })));
   });
 
-  app.post("/api/bank-deposits", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/bank-deposits", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "receipt:cash"), async (req, res) => {
     const user = req.user as any;
     const { bankAccountId, safeId, amount, currency, depositDate, reference, notes, depositedByUserId } = req.body;
     const amt = parsePositiveAmount(amount);
@@ -13167,16 +13198,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getGroupsByOrg(user.organizationId));
   });
 
-  app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+  app.post("/api/groups", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     try {
       // Legacy groups and burial societies always keep a ledger; any other group only if asked.
       const hasLedger = req.body.isLegacy === true || req.body.type === "burial_society" || req.body.hasLedger === true;
-      let agentId: string | null = req.body.agentId || null;
-      if (agentId) {
-        const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-        if (!user.isPlatformOwner && !effPerms.includes("edit:premium") && !effPerms.includes("manage:settings")) agentId = null;
-      }
+      const agentId: string | null = req.body.agentId || null; // route requires write:group
       const parsed = insertGroupSchema.parse({ ...req.body, agentId, hasLedger, organizationId: user.organizationId });
       const group = await storage.createGroup(parsed);
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
@@ -13188,7 +13215,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.patch("/api/groups/:id", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+  app.patch("/api/groups/:id", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const id = String(req.params.id);
     const user = req.user as any;
     try {
@@ -13196,16 +13223,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!existing) return res.status(404).json({ message: "Group not found" });
       if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
       const patch = { ...req.body };
-      // The responsible agent is set separately (it also moves every policy in the group) and
-      // only by admins — an agent could otherwise take over a whole society's policies.
+      // The responsible agent is set separately — it also moves every policy in the group. The
+      // route needs write:group, so an agent can't take over a whole society's policies.
       const agentChange = Object.prototype.hasOwnProperty.call(patch, "agentId") ? (patch.agentId || null) : undefined;
       delete patch.agentId;
-      if (agentChange !== undefined && agentChange !== (existing.agentId ?? null)) {
-        const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
-        if (!user.isPlatformOwner && !effPerms.includes("edit:premium") && !effPerms.includes("manage:settings")) {
-          return res.status(403).json({ message: "Only an administrator can change a group's agent." });
-        }
-      }
       const nextIsLegacy = patch.isLegacy ?? existing.isLegacy;
       const nextType = patch.type ?? existing.type;
       if (nextIsLegacy === true || nextType === "burial_society") patch.hasLedger = true;
@@ -13266,7 +13287,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // opening each policy individually. Additive and idempotent — policies that already have this
   // add-on are silently skipped (policy-level add-ons are unique per (policyId, addOnId), see
   // the pao_policy_level_uniq partial index), never duplicated or replaced.
-  app.post("/api/groups/:id/add-ons/bulk-apply", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+  app.post("/api/groups/:id/add-ons/bulk-apply", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     const addOnId = String(req.body.addOnId || "");
@@ -13307,7 +13328,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getGroupMembers(user.organizationId, groupId));
   });
 
-  app.post("/api/groups/:id/members", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+  app.post("/api/groups/:id/members", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     try {
@@ -13328,7 +13349,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // historical contribution record in one atomic operation, rather than one member/contribution
   // at a time. See server/storage.ts's bulkImportGroupMembers and docs/POL263-STRATEGY (burial-
   // society formalization).
-  app.post("/api/groups/:id/members/bulk-import", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/groups/:id/members/bulk-import", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     try {
@@ -13602,7 +13623,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.patch("/api/groups/:id/payout-rules", requireAuth, requireTenantScope, requirePermission("write:policy"), async (req, res) => {
+  app.patch("/api/groups/:id/payout-rules", requireAuth, requireTenantScope, requirePermission("write:group"), async (req, res) => {
     const user = req.user as any;
     const groupId = String(req.params.id);
     const existing = await storage.getGroup(groupId, user.organizationId);
@@ -15024,7 +15045,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     await streamExecutiveReportPdf(user.organizationId, { from, to, branchId }, res, { attachment: req.query.download === "1" });
   });
 
-  app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+  app.post("/api/reports/daily/notes", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "write:report"), async (req, res) => {
     const user = req.user as any;
     const date = typeof req.body.date === "string" && req.body.date ? req.body.date : await todayForOrg(user.organizationId);
     const note = typeof req.body.note === "string" ? req.body.note.trim() : "";

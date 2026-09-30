@@ -58,10 +58,9 @@ export function EditPolicyDialog({
   selectedPolicy, displayPolicy, showEditDialog, setShowEditDialog, editForm, setEditForm,
   canEditPremium, countryFlagSettings, branches, agents, groups, todayISO, onUpdated,
 }: EditPolicyDialogProps) {
-  // Agent and group are admin decisions (the server enforces the same rule).
+  // Agent and group need write:group (the server enforces the same rule).
   const { permissions, isPlatformOwner } = useAuth();
-  const canAssignAgentOrGroup = canEditPremium || !!isPlatformOwner
-    || (Array.isArray(permissions) && permissions.includes("manage:settings"));
+  const canAssignAgentOrGroup = !!isPlatformOwner || (Array.isArray(permissions) && permissions.includes("write:group"));
   const { toast } = useToast();
   const queryClient = useQueryClient();
 

@@ -38,3 +38,34 @@ describe("role templates", () => {
     }
   });
 });
+
+describe("role catalogue — least privilege (2026-09-30 review)", () => {
+  const R = ROLE_PERMISSION_MAP;
+  it("front-line roles don't see company finance", () => {
+    for (const role of ["agent", "cashier", "customer_service", "sales_team_leader", "claims_officer", "funeral_manager", "hr_officer"]) {
+      expect(R[role], role).not.toContain("read:finance");
+    }
+  });
+  it("capturing a claim and approving it are different roles", () => {
+    expect(R.claims_officer).toContain("write:claim");
+    expect(R.claims_officer).not.toContain("approve:claim");
+    expect(R.customer_service).not.toContain("approve:claim");
+  });
+  it("only group managers can move policies between groups / agents", () => {
+    const holders = Object.entries(R).filter(([, p]) => p.includes("write:group")).map(([r]) => r).sort();
+    expect(holders).toEqual(["administrator", "manager"]);
+  });
+  it("payroll stays with HR, finance manager and read-only executives", () => {
+    const readers = Object.entries(R).filter(([, p]) => p.includes("read:payroll")).map(([r]) => r).sort();
+    expect(readers).toEqual(["executive", "finance_manager", "hr_officer"]);
+  });
+  it("finance clerk captures but can't approve, correct or delete money", () => {
+    for (const p of ["approve:finance", "edit:payment", "delete:payment", "edit:receipt", "delete:receipt", "backdate:payment", "read:payroll"]) {
+      expect(R.finance_clerk, p).not.toContain(p);
+    }
+  });
+  it("roles that can create users are the ones that run the office", () => {
+    const holders = Object.entries(R).filter(([, p]) => p.includes("write:user")).map(([r]) => r).sort();
+    expect(holders).toEqual(["administrator", "manager"]);
+  });
+});

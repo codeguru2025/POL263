@@ -10,6 +10,46 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — RBAC review: four access holes (agents, policy PDFs, role escalation)
+
+**Symptoms (found in a full RBAC review, none reported by users):**
+1. **Agents** (26 at Falakhe) could open company-wide financials: Executive Report, income
+   statement, trial balance, daily report, bank balances.
+2. On **60 of 73** routes that take a policy/client/claim/lead id, an agent could reach another
+   agent's record (view/edit members, documents, dependants, change policyholder, transition).
+3. `GET /api/policies/:id/document` and `/estatement` needed only a login: drivers and mortuary
+   attendants could download any policy certificate/statement, and `/document` took the org from
+   `?orgId=` when the session had none.
+4. **`write:user` was a path to superuser:** its holders could give any role (superuser,
+   finance_manager) to anyone, themselves included, and set the password of a more powerful account.
+
+**Root causes:**
+1. The agent template had `read:finance` (added for its receipting screens), and 82 finance
+   routes accept it.
+2. Agent ownership was checked per route, and most routes never got the check.
+3. Those two routes were written with `requireAuth` only.
+4. User create/update validated only that the role ids belong to the org.
+
+**Fix:**
+1. The agent (and cashier) templates lose `read:finance`. The receipting endpoints they use
+   (`/api/payments`, `/summary`, `/payment-intents`, `/fx-rates`) accept `receipt:*`, and per-policy
+   payment history and receipt views accept `read:policy`.
+2. A central `server/agent-scope-guard.ts` runs before every route under `/api/{policies,clients,
+   claims,leads,receipts,payment-receipts,groups}/:id`.
+3. Those routes now need `requireTenantScope` + `read:policy` + the agent check.
+4. `server/role-assignment-guard.ts`: no changing your own roles, only granting roles within your
+   own permissions, and no managing (password/email/status/roles/deactivate) a user with powers
+   you lack. Applied to POST/PATCH/DELETE `/api/users` and `/api/users/:id/reset-password`.
+
+**Verified:** `tests/unit/rbac-guards.test.ts` and `tests/unit/role-templates.test.ts`; full suite 883/883.
+
+**Lesson for next time:** permission checks that live in each handler get forgotten. Put
+ownership and scoping in one middleware by URL shape. Any permission that lets you assign roles
+or reset passwords is only as strong as its "can't grant more than you have" rule. Audit with a
+route→permission dump (`script/.tmp/route-perms.mjs`) rather than reading handlers.
+
+---
+
 ## 2026-09-30 — Approving a receipt-deletion request didn't need permission to delete receipts
 
 **Symptom:** found while splitting the administrator role. Anyone with `approve:requests` could

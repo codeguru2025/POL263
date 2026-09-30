@@ -88,41 +88,41 @@ export const SYSTEM_PERMISSIONS = [
   { name: "approve:requests", description: "Resolve generic maker-checker requests — policy/receipt/quote deletion, claim review, quotation authorization", category: "approvals" },
   { name: "create:tenant", description: "Add new tenants (organizations)", category: "platform" },
   { name: "delete:tenant", description: "Remove tenants (organizations)", category: "platform" },
+  { name: "write:group", description: "Set up and manage groups / burial societies (members, agent, payout rules, add-ons)", category: "policy" },
   { name: "use:ai", description: "Use AI-powered insights and note assistance", category: "ai" },
   { name: "manage:attendance", description: "Create/manage QR attendance kiosks", category: "attendance" },
 ];
 
+/**
+ * Built-in role templates. The startup role sync (server/index.ts → seedOrgRoles) resets every
+ * system role in every tenant to this map on each boot, so a change here is applied everywhere
+ * on the next deploy (hand edits to system roles are overwritten).
+ *
+ * Principles (reviewed with Augustus, 2026-09-30):
+ *  - Least privilege: each role gets what its job needs and nothing else.
+ *  - Segregation of duties: whoever takes money in can't change it afterwards (finance_manager);
+ *    whoever captures a claim can't approve it (claims_officer vs approve:claim holders).
+ *  - Company-wide finance (reports, statements, bank, budgets) is read:finance; front-line roles
+ *    that only receipt use receipt:* and see their own receipts, not the company's books.
+ *  - Agents only reach their own clients/policies/claims/leads (server/agent-scope-guard.ts).
+ *  - No tenant role can edit role definitions or permissions (write:role, manage:permissions) —
+ *    only the platform owner — so nobody can promote themselves.
+ */
 export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
+  // Owner account: bypasses permission checks entirely.
   superuser: [],
+
+  // Board / directors: see everything, change nothing.
   executive: [
     "read:organization", "read:branch", "read:user", "read:role", "read:audit_log",
     "read:policy", "read:claim", "read:client", "read:product", "read:funeral_ops",
     "read:finance", "read:fleet", "read:commission", "read:payroll", "read:report",
     "read:lead", "read:notification", "use:ai",
   ],
-  manager: [
-    "read:organization", "read:branch", "write:branch", "read:user", "write:user",
-    "read:role", "read:audit_log", "read:policy", "write:policy", "edit:premium", "read:claim",
-    "write:claim", "approve:claim", "read:client", "write:client", "read:product",
-    "write:product", "manage:settings",
-    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:fleet", "write:fleet", "use:fleet",
-    "read:commission", "read:report", "write:report", "read:lead", "write:lead",
-    "read:notification", "approve:waivers", "approve:settlements", "approve:requests",
-    "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
-    "view:all_clients", "use:ai", "manage:attendance",
-  ],
+
+  // Runs the office day to day. No changing money after the fact, no finance posting or
+  // approvals, no payroll, no commission edits — those are finance_manager's.
   administrator: [
-    // write:role and manage:permissions are deliberately excluded: administrator is a
-    // tenant-scoped operational role, not the platform owner. Letting admins edit role/
-    // permission definitions would let them self-escalate past any restriction placed on
-    // them here. Only the platform owner (isPlatformOwner bypass) manages RBAC definitions;
-    // admins can still assign existing roles to users via write:user.
-    //
-    // Day-to-day administrator (Augustus, 2026-09-30): runs the office but can't change money
-    // after the fact. No editing/deleting/backdating payments or receipts, no premium overrides,
-    // no finance posting or finance/settlement/waiver approvals, no payroll, no commission edits
-    // — those belong to finance_manager, so the person who takes money in isn't the one who can
-    // quietly change it. Finance and commissions stay visible read-only.
     "read:organization", "write:organization", "read:branch", "write:branch",
     "read:user", "write:user", "delete:user", "read:role",
     "read:audit_log", "read:policy", "write:policy",
@@ -132,14 +132,15 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:fleet", "write:fleet", "use:fleet", "read:commission",
     "read:report", "write:report",
     "read:lead", "write:lead", "read:notification", "write:notification",
-    "approve:requests",
+    "approve:requests", "write:group",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "use:ai", "manage:attendance",
   ],
+
+  // The money powers: corrections, backdating, premium overrides, posting, approvals, payroll,
+  // commissions. Usually held alongside administrator by the owner or accountant.
   finance_manager: [
-    // The money powers taken out of administrator. Usually held alongside administrator by
-    // the business owner / accountant.
     "read:organization", "read:branch", "read:user", "read:audit_log",
     "read:policy", "read:client", "read:claim", "read:product", "read:report", "write:report",
     "read:finance", "write:finance", "approve:finance", "approve:settlements", "approve:waivers",
@@ -150,10 +151,51 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:commission", "write:commission", "read:payroll", "write:payroll",
     "read:notification", "view:all_clients", "use:ai",
   ],
-  cashier: [
-    "read:policy", "read:client", "read:finance", "write:finance", "read:report",
+
+  // Branch manager: supervises a branch's sales, claims and funerals. No org settings, pricing,
+  // money corrections, finance approvals or payroll.
+  manager: [
+    "read:organization", "read:branch", "read:user", "write:user", "read:role", "read:audit_log",
+    "read:policy", "write:policy", "read:claim", "write:claim", "approve:claim",
+    "read:client", "write:client", "view:all_clients", "read:product",
+    "read:funeral_ops", "write:funeral_ops", "read:fleet", "write:fleet", "use:fleet",
+    "read:finance", "read:commission", "read:report", "write:report",
+    "read:lead", "write:lead", "read:notification", "approve:requests", "write:group",
+    "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
+    "use:ai", "manage:attendance",
+  ],
+
+  // Accounts clerk: captures expenses, requisitions, bank deposits, petty cash. Can't approve,
+  // correct or delete money records, and can't see payroll — finance_manager checks their work.
+  finance_clerk: [
+    "read:organization", "read:branch", "read:policy", "read:client", "read:report",
+    "read:finance", "write:finance", "read:commission", "read:notification",
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
   ],
+
+  // Takes payments at the counter and cashes up. Sees their own receipts, not the company books.
+  cashier: [
+    "read:policy", "read:client", "read:report",
+    "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
+  ],
+
+  // Staff records, attendance and payroll preparation. No policies, clients or other finance.
+  // No write:user: creating users means choosing roles, which is an administrator decision.
+  hr_officer: [
+    "read:organization", "read:branch", "read:user", "read:report",
+    "read:payroll", "write:payroll", "manage:attendance",
+  ],
+
+  // Front desk / call centre: looks things up, updates contact details, logs complaints and
+  // leads, captures claims. No money, no approvals.
+  customer_service: [
+    "read:organization", "read:branch", "read:policy", "read:client", "write:client",
+    "view:all_clients", "read:claim", "write:claim", "read:product",
+    "read:lead", "write:lead", "read:funeral_ops", "read:notification",
+  ],
+
+  // Sells and services their own book only (agent-scope-guard). Receipts mobile/transfer
+  // payments; sees their own commissions. No company finance.
   agent: [
     "read:policy", "write:policy",
     "read:client", "write:client", "view:own_clients",
@@ -161,17 +203,30 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:lead", "write:lead",
     "read:commission",
     "read:report",
-    "read:finance",
     "receipt:mobile", "receipt:transfer",
-    // use:fleet was never intentional here — it's for self-service vehicle checkout/GPS-ping
-    // (drivers, fleet_ops, mortuary_attendant), and its narrow original purpose is also
-    // overloaded to gate the full Fleet Tracking dashboard nav link/page. Sales agents have no
-    // reason to check out company vehicles or see fleet-wide tracking data.
   ],
+
+  // Leads a team of agents: sees every agent's leads, clients, policies and commissions.
+  // No finance beyond receipting.
+  sales_team_leader: [
+    "read:user", "read:policy", "write:policy", "read:client", "write:client", "view:all_clients",
+    "read:product", "read:lead", "write:lead", "read:commission", "read:report",
+    "read:notification", "receipt:mobile", "receipt:transfer", "use:ai",
+  ],
+
+  // Captures and assesses claims. Approval needs someone else with approve:claim.
   claims_officer: [
-    "read:policy", "read:claim", "write:claim", "approve:claim", "read:client",
-    "read:funeral_ops", "write:funeral_ops", "read:finance", "read:report", "use:ai",
+    "read:policy", "read:claim", "write:claim", "read:client",
+    "read:funeral_ops", "write:funeral_ops", "read:report", "use:ai",
   ],
+
+  // Runs funerals, mortuary, fleet and cash-service quotes, and takes service payments.
+  funeral_manager: [
+    "read:policy", "read:client", "read:claim", "read:product",
+    "read:funeral_ops", "write:funeral_ops", "read:fleet", "write:fleet", "use:fleet",
+    "receipt:cash", "read:report",
+  ],
+
   fleet_ops: [
     "read:fleet", "write:fleet", "use:fleet", "read:funeral_ops", "write:funeral_ops", "read:report",
   ],

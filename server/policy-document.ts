@@ -1,7 +1,16 @@
 import type { Express, Request, Response } from "express";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
-import { requireAuth } from "./auth";
+import { requireAuth, requireTenantScope, requirePermission } from "./auth";
+import { isAgentScoped } from "@shared/roles";
+import { resolveOrSyncTenantUserId } from "./tenant-db";
+
+/** Agents only see their own policies — same rule as GET /api/policies/:id. */
+async function agentMayNotSee(user: any, policy: { agentId?: string | null }): Promise<boolean> {
+  const roles = await storage.getUserRoles(user.id, user.organizationId);
+  if (!isAgentScoped(roles)) return false;
+  return policy.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id);
+}
 import { todayForOrg } from "./date-utils";
 import { getDbForOrg } from "./tenant-db";
 import { logPolicyView } from "./policy-activity-log";
@@ -441,19 +450,18 @@ export function registerPolicyDocumentRoute(app: Express) {
     return res.json(Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => ({ code, name })));
   });
 
-  app.get("/api/policies/:id/document", requireAuth, async (req: Request, res: Response) => {
+  // Staff only (clients use /api/client-auth/policies/:id/document). Needs read:policy — this
+  // was open to any signed-in staff (drivers, mortuary attendants) and to agents for policies
+  // that aren't theirs, and took the org from ?orgId= when the session had none.
+  app.get("/api/policies/:id/document", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req: Request, res: Response) => {
     const user = req.user as any;
-    // Primary: org from session; fallback: orgId query param (mobile browser-opened URLs).
-    // The ownership check below (policy.organizationId === effectiveOrgId) enforces access.
-    const effectiveOrgId: string | undefined = user?.organizationId || (req.query.orgId as string | undefined);
-    if (!effectiveOrgId) {
-      return res.status(403).json({ message: "Tenant scope required" });
-    }
+    const effectiveOrgId: string = user.organizationId;
 
     const policy = await storage.getPolicy(req.params.id as string, effectiveOrgId);
     if (!policy || policy.organizationId !== effectiveOrgId) {
       return res.status(404).json({ message: "Policy not found" });
     }
+    if (await agentMayNotSee(user, policy)) return res.status(403).json({ message: "Access denied" });
 
     const lang = (req.query.lang as string || "en").toLowerCase();
     const attachment =
@@ -476,16 +484,15 @@ export function registerPolicyDocumentRoute(app: Express) {
   });
 
   // E-Statement PDF: premium summary + payment history (optionally date-filtered)
-  app.get("/api/policies/:id/estatement", requireAuth, async (req: Request, res: Response) => {
+  // Payment history is client data: read:policy, and agents only for their own policies.
+  app.get("/api/policies/:id/estatement", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req: Request, res: Response) => {
     const user = req.user as any;
-    if (!user?.organizationId) {
-      return res.status(403).json({ message: "Tenant scope required" });
-    }
 
     const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!policy || policy.organizationId !== user.organizationId) {
       return res.status(404).json({ message: "Policy not found" });
     }
+    if (await agentMayNotSee(user, policy)) return res.status(403).json({ message: "Access denied" });
 
     const org = await storage.getOrganization(policy.organizationId);
     const client = await storage.getClient(policy.clientId, policy.organizationId);

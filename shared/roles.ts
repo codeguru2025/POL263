@@ -10,6 +10,9 @@ export const AGENT_SCOPE_OVERRIDE_ROLES = new Set([
   "superuser",
   "administrator",
   "manager",
+  "finance_manager",
+  "sales_team_leader",
+  "customer_service",
 ]);
 
 /**

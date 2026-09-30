@@ -2196,10 +2196,10 @@ export default function StaffGroups() {
 
 function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFormData; setFormData: (d: GroupFormData) => void; prefix: string }) {
   const update = (field: keyof GroupFormData, value: string) => setFormData({ ...formData, [field]: value });
-  // Only admins pick the group's agent (the server enforces the same rule).
+  // Picking the group's agent needs write:group (the server enforces the same rule).
   const { permissions, isPlatformOwner } = useAuth();
   const perms = Array.isArray(permissions) ? permissions : [];
-  const canAssignAgent = !!isPlatformOwner || perms.includes("edit:premium") || perms.includes("manage:settings");
+  const canAssignAgent = !!isPlatformOwner || perms.includes("write:group");
   const { data: agents = [] } = useQuery<any[]>({ queryKey: ["/api/agents"], enabled: canAssignAgent });
 
   return (
