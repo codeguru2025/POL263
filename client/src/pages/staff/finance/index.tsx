@@ -43,7 +43,7 @@ export default function StaffFinance() {
     authUser, isAgent,
     canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
-    canReceipt, canReceiptCash, commissionOnly, canManageSettings,
+    canReceipt, canReceiptCash, canReceiptTransfer, commissionOnly, canManageSettings,
     pendingApprovalsCount,
     visibleTabDefs,
     activeTab, handleTabChange,
@@ -430,7 +430,7 @@ export default function StaffFinance() {
         onPolicyResolved={(p) => setPaymentDialogPolicyNumber(p?.policyNumber || "")}
         getClientLabel={(clientId) => { const c = getClient(clientId); return c ? `${c.firstName} ${c.lastName}` : null; }}
         currency={paymentCurrency} onCurrencyChange={setPaymentCurrency}
-        enablePaynow isAgent={!canReceiptCash}
+        enablePaynow isAgent={!canReceiptCash} allowBankTransfer={canReceiptTransfer}
         paymentMethod={paymentMethod} onPaymentMethodChange={setPaymentMethod}
         reference={paymentReference} onReferenceChange={setPaymentReference}
         notes={paymentNotes} onNotesChange={setPaymentNotes}
@@ -439,7 +439,7 @@ export default function StaffFinance() {
           clientId: payload.clientId,
           amount: payload.amount,
           currency: payload.currency,
-          paymentMethod: "cash",
+          paymentMethod: payload.paymentMethod || "cash",
           status: "cleared",
           reference: payload.reference,
           notes: payload.notes,

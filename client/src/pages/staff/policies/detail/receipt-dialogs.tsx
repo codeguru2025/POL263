@@ -33,6 +33,7 @@ export function useReceiptDialogs({ selectedPolicy, displayPolicy, isAgent, canE
   const { permissions, isPlatformOwner } = useAuth();
   // Cash needs receipt:cash (agents never hold it); mobile/transfer-only roles get Paynow methods only.
   const canReceiptCash = !isAgent && (!!isPlatformOwner || ["receipt:cash", "write:finance"].some((p) => (permissions ?? []).includes(p)));
+  const canReceiptTransfer = !!isPlatformOwner || ["receipt:transfer", "write:finance"].some((p) => (permissions ?? []).includes(p));
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -249,7 +250,7 @@ export function useReceiptDialogs({ selectedPolicy, displayPolicy, isAgent, canE
         allowAmountOverride={canEditPremium}
         amountOverride={inPolicyReceiptAmountOverride} onAmountOverrideChange={setInPolicyReceiptAmountOverride}
         submitterNote={inPolicyReceiptSubmitterNote} onSubmitterNoteChange={setInPolicyReceiptSubmitterNote}
-        enablePaynow isAgent={!canReceiptCash}
+        enablePaynow isAgent={!canReceiptCash} allowBankTransfer={canReceiptTransfer}
         paymentMethod={inPolicyReceiptMethod} onPaymentMethodChange={setInPolicyReceiptMethod}
         reference={inPolicyReceiptRef} onReferenceChange={setInPolicyReceiptRef}
         notes={inPolicyReceiptNotes} onNotesChange={setInPolicyReceiptNotes}

@@ -97,6 +97,8 @@ export interface PolicyPremiumReceiptDialogProps {
 
   enablePaynow: boolean;
   isAgent?: boolean;
+  /** Offer "Bank Transfer": recorded straight away with the bank reference (receipt:transfer). */
+  allowBankTransfer?: boolean;
   paymentMethod: string;
   onPaymentMethodChange: (v: string) => void;
   reference: string;
@@ -162,7 +164,7 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
     currency, onCurrencyChange, months = 1, onMonthsChange, showMonths = false,
     allowAmountOverride = false, amountOverride = null, onAmountOverrideChange,
     submitterNote = "", onSubmitterNoteChange,
-    enablePaynow, isAgent = false, paymentMethod, onPaymentMethodChange,
+    enablePaynow, isAgent = false, allowBankTransfer = false, paymentMethod, onPaymentMethodChange,
     reference, onReferenceChange, notes, onNotesChange,
     receivedAt, onReceivedAtChange,
     onSubmitCash, isSubmittingCash,
@@ -225,11 +227,14 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
     isSubmittingCash ||
     isInitiatingPaynow ||
     (enablePaynow && ["ecocash", "onemoney"].includes(paymentMethod) && (!reference || reference.trim().replace(/\D/g, "").length < 9)) ||
-    (isOverridden && !submitterNote.trim());
+    (isOverridden && !submitterNote.trim()) ||
+    (paymentMethod === "bank_transfer" && !reference.trim());
+  // Cash and bank transfer are recorded directly; the other methods go through Paynow.
+  const isRecordedMethod = !enablePaynow || paymentMethod === "cash" || paymentMethod === "bank_transfer";
 
   const handleSubmit = () => {
     if (!resolvedPolicy) return;
-    if (!enablePaynow || paymentMethod === "cash") {
+    if (isRecordedMethod) {
       onSubmitCash({
         policyId: resolvedPolicy.id,
         clientId: resolvedPolicy.clientId,
@@ -402,6 +407,7 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
                 <SelectTrigger id={`${uid}-method`} data-testid={testIds.paymentMethod || "select-payment-method"}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {!isAgent && <SelectItem value="cash">Cash</SelectItem>}
+                  {allowBankTransfer && <SelectItem value="bank_transfer">Bank Transfer</SelectItem>}
                   <SelectItem value="ecocash">EcoCash</SelectItem>
                   <SelectItem value="onemoney">OneMoney</SelectItem>
                   <SelectItem value="innbucks">InnBucks</SelectItem>
@@ -440,6 +446,13 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
                   <Label htmlFor={`${uid}-reference`}>Client's Email Address</Label>
                   <Input id={`${uid}-reference`} type="email" placeholder="client@example.com" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
                   <p className="text-xs text-muted-foreground mt-1">A secure payment page will open where the client enters card details.</p>
+                </div>
+              )}
+              {enablePaynow && paymentMethod === "bank_transfer" && (
+                <div>
+                  <Label htmlFor={`${uid}-reference`}>Bank Reference</Label>
+                  <Input id={`${uid}-reference`} placeholder="e.g. FT26273XXXXX" value={reference} onChange={(e) => onReferenceChange(e.target.value)} data-testid={testIds.reference || "input-payment-reference"} />
+                  <p className="text-xs text-muted-foreground mt-1">The reference on the bank transfer, so finance can match it to the statement.</p>
                 </div>
               )}
               {enablePaynow && paymentMethod === "cash" && (
@@ -543,7 +556,7 @@ export function PolicyPremiumReceiptDialog(props: PolicyPremiumReceiptDialogProp
             >
               {(isSubmittingCash || isInitiatingPaynow) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {submitIcon}
-              {(!enablePaynow || paymentMethod === "cash")
+              {isRecordedMethod
                 ? (submitLabel?.cash ?? "Record Payment & Generate Receipt")
                 : (submitLabel?.paynow ?? "Send Payment Request")}
             </Button>
