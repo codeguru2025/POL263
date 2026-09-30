@@ -148,6 +148,30 @@ const platformColumns: EdtColumn<any>[] = [
   { id: "created", header: "Created", accessor: (cr) => new Date(cr.createdAt), cell: (cr) => <span className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</span> },
 ];
 
+/** Raised-but-unpaid requisitions are spending that has probably happened but isn't in the
+ *  statement yet — say so, with a way to clear them. */
+function UnpaidRequisitionsWarning({ info }: { info?: { count: number; amounts: Record<string, number> } }) {
+  if (!info || info.count === 0) return null;
+  const owing = Object.entries(info.amounts ?? {})
+    .map(([c, v]) => `${c} ${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+    .join(" + ");
+  return (
+    <p className="text-[11px] text-amber-700 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">
+      {info.count} requisition{info.count === 1 ? " is" : "s are"} still waiting for approval or payment ({owing}) — spending may be understated until {info.count === 1 ? "it's" : "they're"} paid.{" "}
+      <a href="/staff/finance?tab=requisitions" className="underline font-medium">Open requisitions</a>
+    </p>
+  );
+}
+
+function BranchExclusionNote({ items }: { items?: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">
+      One branch selected: {items.join(", ").replace(/, ([^,]*)$/, " and $1")} aren't recorded by branch, so they're not in this statement. Clear the branch filter to include them.
+    </p>
+  );
+}
+
 export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, users }: FinanceSectionProps) {
   const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({
     queryKey: ["reports", "payments", runKey, ...fk],
@@ -392,9 +416,8 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                       `${c} ${Number(r) > 0 ? `${(1 / Number(r)).toLocaleString(undefined, { maximumFractionDigits: 2 })} = USD 1` : r}${is.fxRatesSetOn?.[c] ? ` (set ${new Date(is.fxRatesSetOn[c] + "T00:00:00").toLocaleDateString()})` : ""}`).join(" · ")}. Update it in Settings → FX Rates.
                   </p>
                 )}
-                {is.excludedForBranch?.length > 0 && (
-                  <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">One branch selected: {is.excludedForBranch.join(" and ")} aren't recorded by branch, so they're not in this statement. Clear the branch filter to include them.</p>
-                )}
+                <BranchExclusionNote items={is.excludedForBranch} />
+                <UnpaidRequisitionsWarning info={is.unpaidRequisitions} />
                 <div className="overflow-x-auto">
                   <DataTable containerClassName="border rounded-md min-w-[520px]">
                     <TableHeader className={dataTableStickyHeaderClass}>
@@ -428,7 +451,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="cash-flow">
         <CardSection
           title="Cash Flow Statement"
-          description="Cash basis — cash received (by method) less cash paid out, for the selected period, reconciled against confirmed daily cash-ups."
+          description="Money actually received (by payment method) less money actually paid out in the period, checked against the daily cash-ups."
           icon={DollarSign}
           flush
           headerRight={
@@ -457,6 +480,8 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                 {cu.unconvertible?.length > 0 && (
                   <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">No FX rate set for {cu.unconvertible.join(", ")} — excluded from the consolidated USD total.</p>
                 )}
+                <BranchExclusionNote items={cf.excludedForBranch} />
+                <UnpaidRequisitionsWarning info={cf.unpaidRequisitions} />
                 <div className="overflow-x-auto">
                   <DataTable containerClassName="border rounded-md min-w-[520px]">
                     <TableHeader className={dataTableStickyHeaderClass}>
@@ -465,13 +490,21 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                     <TableBody>
                       <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Cash in (by method)</TableCell></TableRow>
                       {channels.map((ch) => (
-                        <TableRow key={ch}><TableCell className="capitalize">{ch.replace(/_/g, " ")}</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.inflowsByChannel[ch], c)}</TableCell>)}</TableRow>
+                        <TableRow key={ch}><TableCell className="capitalize">{ch === "society_lump_sums" ? "Society lump sums (method not recorded)" : ch.replace(/_/g, " ")}</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.inflowsByChannel[ch], c)}</TableCell>)}</TableRow>
                       ))}
                       <TableRow className="font-semibold border-t"><TableCell>Total cash in</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.cashIn, c)}</TableCell>)}</TableRow>
                       <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Cash out</TableCell></TableRow>
-                      <TableRow><TableCell>Requisitions paid</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.requisitions, c)}</TableCell>)}</TableRow>
-                      <TableRow><TableCell>Expenditures paid</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.expenditures, c)}</TableCell>)}</TableRow>
-                      <TableRow><TableCell>Agent commissions paid</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.commissions, c)}</TableCell>)}</TableRow>
+                      {([
+                        ["Requisitions paid", cf.outflows.requisitions],
+                        ["Expenditures paid", cf.outflows.expenditures],
+                        ["Petty cash spent", cf.outflows.pettyCash],
+                        ["Commission paid to agents", cf.outflows.commissions],
+                        ["Salaries paid (payroll)", cf.outflows.payroll],
+                        ["Cash claims paid", cf.outflows.claims],
+                        ["POL263 bills paid", cf.outflows.pol263Bills],
+                      ] as [string, any][]).filter(([label, m]) => label === "Requisitions paid" || Object.values(m ?? {}).some((v: any) => Number(v) !== 0)).map(([label, m]) => (
+                        <TableRow key={label}><TableCell>{label}</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(m, c)}</TableCell>)}</TableRow>
+                      ))}
                       <TableRow className="font-semibold border-t"><TableCell>Total cash out</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(cf.outflows.total, c)}</TableCell>)}</TableRow>
                       <TableRow className="font-bold border-t-2"><TableCell>Net cash movement</TableCell>{curs.map((c) => <TableCell key={c} className={`text-right tabular-nums ${Number(cf.netCash?.[c] || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{money(cf.netCash, c)}</TableCell>)}</TableRow>
                     </TableBody>

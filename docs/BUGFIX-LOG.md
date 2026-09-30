@@ -10,6 +10,53 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Cash Flow: commission counted twice, lump sums called cash, payouts missing; USD 8.4k of requisitions stuck
+
+**Symptoms:**
+- Cash Flow for Sep 2026 showed only USD 264 paid out.
+- 148 requisitions (USD 8,404.50 + ZAR 2,520) raised since mid-August sat at submitted/approved,
+  never paid in the system, so neither statement showed that spending.
+- Falakhe pays agents through "COMMISSION" requisitions (there is no commission-payout screen).
+  With the Income Statement now counting commission as earned, those requisitions counted it a
+  second time.
+- Society lump sums were listed under "cash", though the method isn't recorded.
+- Petty cash spending, paid payroll, paid cash claims and POL263 bills paid were never counted as
+  money out.
+
+**Root cause:**
+- The statement read only `payment_disbursements` plus commission entries with status `paid`, a
+  status nothing sets.
+- The lump-sum query hard-coded channel "cash".
+- The requisition backlog was a workflow gap, not code: approvals stopped around 15 Aug.
+
+**Fix:**
+- `server/financial-statements.ts`:
+  - `isCommissionPayoutCategory`: commission requisitions are left off the Income Statement and
+    shown on Cash Flow as "Commission paid to agents".
+  - New outflow queries: petty cash (`queryPettyCashOut`), `queryPayrollPaid`,
+    `queryClaimsCashPaid`, and `queryPol263BillsPaid` (control plane, lazily imported).
+  - Lump sums get their own channel.
+  - `queryUnpaidRequisitions` puts a warning with a link on both statements.
+  - Payroll and POL263 bills are left out of a single-branch Cash Flow (`excludedForBranch`).
+- UI (`finance-section.tsx`) and PDF updated.
+- **Data (Augustus's instruction):** `script/.tmp/clear-requisitions.ts` approved 146 and paid all
+  148 pending requisitions.
+  - Each payment is dated the day the requisition was raised: vouchers PV-00798 to PV-00945, with
+    audit rows, in one transaction.
+  - The one part-paid requisition (USD 30 owing) was left alone.
+
+**Verified:** Falakhe Sep 2026.
+- Cash out USD 3,234.30: requisitions 3,078.30 + commission paid 156.00.
+- Income Statement expenses USD 3,598.94 + ZAR 565.38, net about USD 11,450.54 all together.
+- 148 unique vouchers.
+
+**Lesson for next time:** when a report looks thin, count the *workflow* backlog (statuses stuck
+before "paid") before blaming the query. And when a statement switches a cost to "as incurred",
+look for the other place that cost is already being paid out (here, requisitions) or it gets
+counted twice.
+
+---
+
 ## 2026-09-30 — Income Statement left out most costs; trend chart left out society income
 
 **Symptom:** Falakhe's Sep 2026 Income Statement showed about USD 14,814 surplus against only

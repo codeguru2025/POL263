@@ -9,7 +9,7 @@ vi.mock("../../server/date-utils", () => ({
   dayRangeForOrg: vi.fn(async (_o: string, from: string, to: string) => ({ start: new Date(from + "T00:00:00+02:00"), endExclusive: new Date(Date.parse(to + "T00:00:00+02:00") + 86_400_000) })),
 }));
 
-import { consolidateToUsd, buildIncomeTimeSeries } from "../../server/financial-statements";
+import { consolidateToUsd, buildIncomeTimeSeries, isCommissionPayoutCategory } from "../../server/financial-statements";
 import { getDbForOrg } from "../../server/tenant-db";
 
 describe("consolidateToUsd", () => {
@@ -95,5 +95,16 @@ describe("buildIncomeTimeSeries", () => {
     mockRows({ premium: [r("2026-07-03", "USD", "10.00"), r("2026-07-01", "USD", "20.00")] });
     const points = await buildIncomeTimeSeries("org1", { from: "2026-07-01", to: "2026-07-03" });
     expect(points.map((p) => p.periodStart)).toEqual(["2026-07-01", "2026-07-03"]);
+  });
+});
+
+describe("isCommissionPayoutCategory — agents paid through a requisition", () => {
+  it("recognises commission requisitions whatever the capitalisation", () => {
+    expect(isCommissionPayoutCategory("COMMISSION")).toBe(true);
+    expect(isCommissionPayoutCategory("Agent commission Sept")).toBe(true);
+  });
+  it("leaves every other spending category alone", () => {
+    expect(isCommissionPayoutCategory("FUEL")).toBe(false);
+    expect(isCommissionPayoutCategory(null)).toBe(false);
   });
 });

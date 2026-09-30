@@ -240,6 +240,93 @@ async function queryClaimsPaid(tdb: any, orgId: string, from: string, to: string
     GROUP BY c.currency`));
 }
 
+/** Falakhe (and anyone without a commission-payout screen) pays agents through a requisition
+ *  categorised "Commission". That is the commission being paid, not a new cost: the income
+ *  statement already counts commission as it is earned, and the cash-flow statement shows these
+ *  as commission paid out. */
+export function isCommissionPayoutCategory(category: string | null | undefined): boolean {
+  return /commission/i.test(category ?? "");
+}
+
+/** Category of each requisition / expenditure behind a set of disbursement rows. */
+async function disbursementCategories(tdb: any, disbRows: { entityType: string; entityId: string }[]) {
+  const reqIds = disbRows.filter((d) => d.entityType === "requisition").map((d) => d.entityId);
+  const expIds = disbRows.filter((d) => d.entityType === "expenditure").map((d) => d.entityId);
+  const out: Record<string, string> = {};
+  if (reqIds.length) {
+    for (const r of await tdb.select({ id: requisitions.id, category: requisitions.category }).from(requisitions).where(inArray(requisitions.id, reqIds))) {
+      out[r.id] = r.category || "Uncategorised";
+    }
+  }
+  if (expIds.length) {
+    for (const r of await tdb.select({ id: expenditures.id, category: expenditures.category }).from(expenditures).where(inArray(expenditures.id, expIds))) {
+      out[r.id] = r.category || "Uncategorised";
+    }
+  }
+  return out;
+}
+
+/** Requisitions raised but not yet paid in full — spending that has probably happened but isn't
+ *  in the books yet. Shown as a warning on both statements. */
+async function queryUnpaidRequisitions(tdb: any, orgId: string, branchId?: string) {
+  const rows = rowsOf<{ currency: string; n: string; owing: string }>(await tdb.execute(sql`
+    SELECT currency, COUNT(*)::text AS n, COALESCE(SUM(amount - COALESCE(amount_paid, 0)), 0)::text AS owing
+    FROM requisitions
+    WHERE organization_id = ${orgId} AND status IN ('submitted', 'approved', 'partial')
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY currency`));
+  const amounts: AmountMap = {};
+  let count = 0;
+  for (const r of rows) { count += Number(r.n); add(amounts, r.currency, parseFloat(r.owing)); }
+  return { count, amounts: round2(amounts) };
+}
+
+/** Petty cash actually spent, per currency (cash-flow view: no category split). */
+async function queryPettyCashOut(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const rows = await queryPettyCash(tdb, orgId, from, to, branchId);
+  const out: AmountMap = {};
+  for (const r of rows) add(out, r.currency, parseFloat(r.total));
+  return out;
+}
+
+/** Payroll marked paid, by pay-period end (payroll has no separate payment date). */
+async function queryPayrollPaid(tdb: any, orgId: string, from: string, to: string) {
+  return rowsOf<{ total: string }>(await tdb.execute(sql`
+    SELECT COALESCE(SUM(total_net), 0)::text AS total FROM payroll_runs
+    WHERE organization_id = ${orgId} AND status = 'paid'
+      AND period_end >= ${from}::date AND period_end <= ${to}::date`));
+}
+
+/** Cash-in-lieu claims marked paid, by decision date (claims have no separate payment date). */
+async function queryClaimsCashPaid(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
+  return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
+    SELECT c.currency, COALESCE(SUM(c.cash_in_lieu_amount), 0)::text AS total
+    FROM claims c LEFT JOIN policies p ON p.id = c.policy_id
+    WHERE c.organization_id = ${orgId} AND c.status IN ('paid', 'closed')
+      AND COALESCE(c.decided_at, c.created_at) >= ${start} AND COALESCE(c.decided_at, c.created_at) < ${end}
+      AND COALESCE(c.cash_in_lieu_amount, 0) <> 0
+      ${branchId ? sql`AND COALESCE(c.branch_id, p.branch_id) = ${branchId}` : sql``}
+    GROUP BY c.currency`));
+}
+
+/** POL263 bills the tenant paid in the period (control plane). Not kept per branch. */
+async function queryPol263BillsPaid(orgId: string, from: string, to: string): Promise<AmountMap> {
+  const { start, end } = await periodBounds(orgId, from, to);
+  const out: AmountMap = {};
+  try {
+    const [{ cpDb }, { tenantInvoices }] = await Promise.all([import("./control-plane-db"), import("@shared/control-plane-schema")]);
+    const rows = await cpDb.select({ currency: tenantInvoices.currency, total: sql<string>`COALESCE(SUM(${tenantInvoices.amount}), 0)::text` })
+      .from(tenantInvoices)
+      .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)))
+      .groupBy(tenantInvoices.currency);
+    for (const r of rows) add(out, r.currency || "USD", parseFloat(r.total));
+  } catch {
+    // Control plane unreachable: leave the line out rather than fail the whole statement.
+  }
+  return out;
+}
+
 // ─── Legacy group receipts (no policy — cash subscriptions) ───────────────
 
 /** Society lump sums. Groups aren't kept per branch, so a single-branch statement leaves them out
@@ -288,22 +375,8 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   const legacyGroupIncome: AmountMap = {};
   for (const r of legacyRows) add(legacyGroupIncome, r.currency, parseFloat(r.total));
 
-  // ── Expenses — look up entity categories in bulk ──
-  const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
-  const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
-  const reqCategoryMap: Record<string, string> = {};
-  if (reqIds.length) {
-    const rows = await tdb.select({ id: requisitions.id, category: requisitions.category })
-      .from(requisitions).where(inArray(requisitions.id, reqIds));
-    for (const r of rows) reqCategoryMap[r.id] = r.category || "Uncategorised";
-  }
-  const expCategoryMap: Record<string, string> = {};
-  if (expIds.length) {
-    const rows = await tdb.select({ id: expenditures.id, category: expenditures.category })
-      .from(expenditures).where(inArray(expenditures.id, expIds));
-    for (const r of rows) expCategoryMap[r.id] = r.category || "Uncategorised";
-  }
-
+  // ── Expenses ──
+  const categories = await disbursementCategories(tdb, disbRows);
   const expenseLines: { label: string; source: ExpenseSource; amounts: AmountMap }[] = [];
   const expenseByKey: Record<string, { label: string; source: ExpenseSource; amounts: AmountMap }> = {};
   const pushExpense = (label: string, source: ExpenseSource, currency: string, amount: number) => {
@@ -318,7 +391,9 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
 
   for (const d of disbRows) {
     const type = d.entityType as "requisition" | "expenditure";
-    const cat = type === "requisition" ? (reqCategoryMap[d.entityId] || "Uncategorised") : (expCategoryMap[d.entityId] || "Uncategorised");
+    const cat = categories[d.entityId] || "Uncategorised";
+    // Paying an agent through a requisition settles commission already counted as earned below.
+    if (isCommissionPayoutCategory(cat)) continue;
     pushExpense(cat, type, d.currency, parseFloat(d.total));
   }
   for (const r of pettyRows) pushExpense(`Petty cash — ${r.category || "Uncategorised"}`, "petty_cash", r.currency, parseFloat(r.total));
@@ -347,6 +422,8 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     fxRatesSetOn: Object.fromEntries(fxRates.map((r: any) => [String(r.currency).toUpperCase(), r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : null])),
     /** A single-branch statement can't include what isn't kept per branch. */
     excludedForBranch: branchId ? ["Society lump sums", "Payroll"] : [],
+    /** Raised but not yet paid — spending that is probably real but not in these figures yet. */
+    unpaidRequisitions: await queryUnpaidRequisitions(tdb, orgId, branchId),
     income: {
       premiumIndividual: round2(premiumIndividual),
       premiumGroup: round2(premiumGroup),
@@ -469,10 +546,17 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   const { from, to, branchId } = params;
   const fx = await fxMapFor(orgId);
 
-  const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
-  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to, branchId);
-  const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
-  const commRows = await queryCommissions(tdb, orgId, from, to);
+  const [{ premiumRows, serviceRows }, legacyRows, disbRows, commRows, pettyOut, payrollRows, claimRows, pol263Bills, unpaidRequisitions] = await Promise.all([
+    queryReceipts(tdb, orgId, from, to, branchId),
+    queryLegacyGroupReceipts(tdb, orgId, from, to, branchId),
+    queryDisbursements(tdb, orgId, from, to, branchId),
+    queryCommissions(tdb, orgId, from, to),
+    queryPettyCashOut(tdb, orgId, from, to, branchId),
+    branchId ? Promise.resolve([] as { total: string }[]) : queryPayrollPaid(tdb, orgId, from, to),
+    queryClaimsCashPaid(tdb, orgId, from, to, branchId),
+    branchId ? Promise.resolve({} as AmountMap) : queryPol263BillsPaid(orgId, from, to),
+    queryUnpaidRequisitions(tdb, orgId, branchId),
+  ]);
 
   // ── Cash IN by channel ──
   const inByChannel: Record<string, AmountMap> = {};
@@ -483,22 +567,31 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   };
   for (const r of premiumRows) addIn(r.channel, r.currency, parseFloat(r.total));
   for (const r of serviceRows) addIn(r.channel, r.currency, parseFloat(r.total));
-  for (const r of legacyRows) addIn("cash", r.currency, parseFloat(r.total));
+  // Society lump sums don't record how they were paid — never assume cash.
+  for (const r of legacyRows) addIn("society_lump_sums", r.currency, parseFloat(r.total));
 
-  // ── Cash OUT — from payment_disbursements ledger + commissions ──
+  // ── Cash OUT ──
+  const categories = await disbursementCategories(tdb, disbRows);
   const requisitionsOut: AmountMap = {};
   const expendituresOut: AmountMap = {};
   const commissionsOut: AmountMap = {};
   for (const d of disbRows) {
-    if (d.entityType === "requisition") add(requisitionsOut, d.currency, parseFloat(d.total));
-    else add(expendituresOut, d.currency, parseFloat(d.total));
+    const amt = parseFloat(d.total);
+    // A "Commission" requisition is agents being paid their commission.
+    if (isCommissionPayoutCategory(categories[d.entityId])) add(commissionsOut, d.currency, amt);
+    else if (d.entityType === "requisition") add(requisitionsOut, d.currency, amt);
+    else add(expendituresOut, d.currency, amt);
   }
   for (const r of commRows) add(commissionsOut, r.currency, parseFloat(r.total));
+  const payrollOut: AmountMap = {};
+  for (const r of payrollRows) if (parseFloat(r.total)) add(payrollOut, "USD", parseFloat(r.total));
+  const claimsOut: AmountMap = {};
+  for (const r of claimRows) add(claimsOut, r.currency, parseFloat(r.total));
 
   const cashIn: AmountMap = {};
   for (const ch of Object.values(inByChannel)) for (const [c, v] of Object.entries(ch)) add(cashIn, c, v);
   const cashOut: AmountMap = {};
-  for (const m of [requisitionsOut, expendituresOut, commissionsOut]) for (const [c, v] of Object.entries(m)) add(cashOut, c, v);
+  for (const m of [requisitionsOut, expendituresOut, pettyOut, commissionsOut, payrollOut, claimsOut, pol263Bills]) for (const [c, v] of Object.entries(m)) add(cashOut, c, v);
   const netCash: AmountMap = {};
   for (const [c, v] of Object.entries(cashIn)) add(netCash, c, v);
   for (const [c, v] of Object.entries(cashOut)) add(netCash, c, -v);
@@ -509,7 +602,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   const cOut = consolidate(cashOut, fx);
 
   // Cash-up reconciliation for the period.
-  const cashups = await storage.getCashups(orgId, 200, { fromDate: from, toDate: to });
+  const cashups = await storage.getCashups(orgId, 200, { fromDate: from, toDate: to, ...(branchId ? { branchId } : {}) } as any);
 
   // Bank deposits in the period (cash banked by admins).
   const deposits = await storage.getBankDeposits(orgId, { fromDate: from, toDate: to });
@@ -518,12 +611,18 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
 
   return {
     from, to, branchId: branchId ?? null, currencies, fxRates: fx,
+    excludedForBranch: branchId ? ["Society lump sums", "Payroll", "POL263 bills"] : [],
+    unpaidRequisitions,
     inflowsByChannel: Object.fromEntries(Object.entries(inByChannel).map(([k, v]) => [k, round2(v)])),
     cashIn: round2(cashIn),
     outflows: {
       requisitions: round2(requisitionsOut),
       expenditures: round2(expendituresOut),
+      pettyCash: round2(pettyOut),
       commissions: round2(commissionsOut),
+      payroll: round2(payrollOut),
+      claims: round2(claimsOut),
+      pol263Bills: round2(pol263Bills),
       total: round2(cashOut),
     },
     netCash: round2(netCash),

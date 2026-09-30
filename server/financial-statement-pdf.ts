@@ -215,14 +215,24 @@ export function renderIncomeStatementBody(ctx: DocContext, is: any) {
 function renderCashFlowBody(ctx: DocContext, cf: any) {
   sectionBand(ctx, "Cash In (by method)");
   for (const [channel, amounts] of Object.entries(cf.inflowsByChannel || {})) {
-    kv(ctx, channel.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), currencyLines(amounts as any));
+    const label = channel === "society_lump_sums" ? "Society lump sums (method not recorded)" : channel.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+    kv(ctx, label, currencyLines(amounts as any));
   }
   kv(ctx, "Total cash in", currencyLines(cf.cashIn), C_INCOME);
 
   sectionBand(ctx, "Cash Out");
-  kv(ctx, "Requisitions paid", currencyLines(cf.outflows.requisitions));
-  kv(ctx, "Expenditures paid", currencyLines(cf.outflows.expenditures));
-  kv(ctx, "Agent commissions paid", currencyLines(cf.outflows.commissions));
+  const outLines: [string, any][] = [
+    ["Requisitions paid", cf.outflows.requisitions],
+    ["Expenditures paid", cf.outflows.expenditures],
+    ["Petty cash spent", cf.outflows.pettyCash],
+    ["Commission paid to agents", cf.outflows.commissions],
+    ["Salaries paid (payroll)", cf.outflows.payroll],
+    ["Cash claims paid", cf.outflows.claims],
+    ["POL263 bills paid", cf.outflows.pol263Bills],
+  ];
+  for (const [label, m] of outLines) {
+    if (label === "Requisitions paid" || Object.values(m ?? {}).some((v: any) => Number(v) !== 0)) kv(ctx, label, currencyLines(m ?? {}));
+  }
   kv(ctx, "Total cash out", currencyLines(cf.outflows.total), C_EXPENSE);
 
   sectionBand(ctx, "Net Cash Movement");
