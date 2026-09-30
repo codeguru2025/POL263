@@ -470,6 +470,26 @@ export function CreatePolicyWizard({
     },
   });
 
+  // Why "Save policy" is greyed out, in plain words, shown under the button. null = can save.
+  // Legacy products take a typed premium, so they don't need a calculated one (they may have no
+  // price for the chosen currency/schedule at all).
+  const saveBlockedReason: string | null = (() => {
+    if (clientMode === "search" && !createForm.clientId) return "Choose the policy holder in step 1.";
+    if (clientMode === "new") {
+      if (!createForm.newClient.firstName?.trim() || !createForm.newClient.lastName?.trim()) return "Enter the policy holder's first and last name in step 1.";
+      if (!isLegacyIssuance && (!createForm.newClient.nationalId?.trim() || !createForm.newClient.phone?.trim() || !createForm.newClient.dateOfBirth || !createForm.newClient.gender)) {
+        return "Enter the policy holder's national ID, phone, date of birth and gender in step 1.";
+      }
+    }
+    if (!createForm.productVersionId) return "Choose a product in step 2.";
+    if (isLegacyProductIssuance) {
+      if (!(Number(createForm.premiumAmount) > 0)) return "Type the premium the client already pays.";
+    } else if (!calculatedPremium?.total) {
+      return `This product has no ${createForm.paymentSchedule} ${createForm.currency} price. Choose another currency or payment frequency.`;
+    }
+    return null;
+  })();
+
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) setCreateStep(1); }}>
       <DialogContent className={policyWizardFlag ? "sm:max-w-2xl max-h-[92vh] flex flex-col" : "sm:max-w-lg"}>
@@ -1166,7 +1186,8 @@ export function CreatePolicyWizard({
             <>
               <div className="rounded-md bg-muted/50 p-3 space-y-1">
                 <p className="text-sm font-medium">
-                  Premium: {createForm.currency} {calculatedPremium?.total ?? "—"}
+                  {/* Legacy products are saved at the typed premium, not the product's list price. */}
+                  Premium: {createForm.currency} {isLegacyProductIssuance ? (createForm.premiumAmount || "—") : (calculatedPremium?.total ?? "—")}
                 </p>
                 {calculatedPremium && calculatedPremium.additionalMemberCount > 0 && (
                   <p className="text-xs text-amber-700 font-medium">
@@ -1192,12 +1213,14 @@ export function CreatePolicyWizard({
                       type="number"
                       step="0.01"
                       min="0"
-                      placeholder={calculatedPremium?.total ?? "Leave blank to use calculated"}
+                      placeholder={isLegacyProductIssuance ? "Type the amount" : (calculatedPremium?.total ?? "Leave blank to use calculated")}
                       value={createForm.premiumAmount}
                       onChange={(e) => setCreateForm({ ...createForm, premiumAmount: e.target.value })}
                       data-testid="input-create-premium-override"
                     />
-                    <p className="text-xs text-muted-foreground mt-0.5">Leave blank to use the auto-calculated amount.</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {isLegacyProductIssuance ? "Required: the amount this client already pays each period." : "Leave blank to use the auto-calculated amount."}
+                    </p>
                   </div>
                 </div>
               )}
@@ -1356,33 +1379,20 @@ export function CreatePolicyWizard({
               Continue
             </Button>
           ) : (
-            <Button
-              onClick={() => createMutation.mutate({
-                ...createForm,
-                premiumAmount: (canEnterPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium?.total ?? ""),
-              })}
-              disabled={
-                createMutation.isPending ||
-                (clientMode === "search" && !createForm.clientId) ||
-                (clientMode === "new" && (
-                  !createForm.newClient.firstName?.trim() ||
-                  !createForm.newClient.lastName?.trim() ||
-                  (!isLegacyIssuance && (
-                    !createForm.newClient.nationalId?.trim() ||
-                    !createForm.newClient.phone?.trim() ||
-                    !createForm.newClient.dateOfBirth ||
-                    !createForm.newClient.gender
-                  ))
-                )) ||
-                !createForm.productVersionId ||
-                !calculatedPremium?.total ||
-                (isLegacyProductIssuance && !(Number(createForm.premiumAmount) > 0))
-              }
-              data-testid="btn-submit-policy"
-            >
-              {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save policy
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                onClick={() => createMutation.mutate({
+                  ...createForm,
+                  premiumAmount: (canEnterPremium && createForm.premiumAmount) ? createForm.premiumAmount : (calculatedPremium?.total ?? ""),
+                })}
+                disabled={createMutation.isPending || !!saveBlockedReason}
+                data-testid="btn-submit-policy"
+              >
+                {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save policy
+              </Button>
+              {saveBlockedReason && <p className="text-xs text-destructive" data-testid="text-save-blocked-reason">{saveBlockedReason}</p>}
+            </div>
           )}
         </DialogFooter>
       </DialogContent>

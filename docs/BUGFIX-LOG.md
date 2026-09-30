@@ -30,6 +30,19 @@ premiums.
 
 **Verified:** `tsc` clean.
 
+**Follow-up (same day): Save still greyed out for agents.** A simulation with Falakhe's real Legacy
+Group version (USD 15/month, no weekly or ZAR price) found two causes:
+- The new required premium box showed the list price "15" as a placeholder, so it looked filled
+  when it was empty.
+- Save still required a client-side calculated premium, which `calculatePremiumPreview` returns
+  as null when the product has no price for the chosen currency/schedule. A ZAR or weekly legacy
+  policy could therefore never be saved.
+
+Fix: a single `saveBlockedReason` drives the button and is shown under it in plain words. Legacy
+products need only the typed premium. The premium box no longer shows a price placeholder, and the
+step-4 summary shows the typed amount. Always show *why* a button is disabled: a silently greyed-out
+Save was the whole complaint.
+
 **Lesson for next time:** when a new rule depends on a UI control, check who can *see* that control.
 A control gated on a permission some roles lack turns the rule into a hard block for those roles.
 
