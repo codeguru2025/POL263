@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatAmountWithCode } from "@shared/validation";
 import {
   AlertTriangle, ArrowRightLeft, CheckCircle2, Clock, FileText, Landmark, Loader2, Pencil, Search,
-  ShieldQuestion, User, Users, XCircle, History, Link2,
+  ShieldQuestion, User, Users, XCircle, History, Link2, Undo2,
 } from "lucide-react";
 
 /** Everything GET /api/claims/:id/detail returns. */
@@ -132,7 +132,7 @@ function stepIndex(status: string) {
   return 4;
 }
 
-type ActionMode = "approve" | "decline" | "investigate" | "conclude" | "verify" | "status";
+type ActionMode = "approve" | "decline" | "investigate" | "conclude" | "verify" | "status" | "reverse";
 
 export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
   claimId: string;
@@ -221,6 +221,20 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
     },
   });
 
+  const reverse = useMutation({
+    mutationFn: async (body: { reason: string }) => (await apiRequest("POST", `/api/claims/${claimId}/reverse`, body)).json(),
+    onSuccess: (row: any) => {
+      invalidate();
+      setMode(null);
+      const parts: string[] = ["It is back in the approvals queue."];
+      if (row?.ledgerCredit) parts.push(`${formatAmountWithCode(row.ledgerCredit.amount, row.ledgerCredit.currency)} was returned to the group's ledger.`);
+      if (row?.coverRestored?.restored) parts.push(`The member is back on cover${row.coverRestored.oldPremium !== row.coverRestored.newPremium ? `; premium ${row.coverRestored.oldPremium} → ${row.coverRestored.newPremium}` : ""}.`);
+      if (row?.coverRestored?.premiumReviewNeeded) parts.push("This policy's premium was set by hand, so it was not changed — check whether it should go back up.");
+      toast({ title: "Approval reversed", description: parts.join(" ") });
+    },
+    onError: (err: Error) => toast({ title: "Couldn't reverse the approval", description: err.message, variant: "destructive" }),
+  });
+
   const edit = useMutation({
     mutationFn: async (body: Record<string, any>) => (await apiRequest("PATCH", `/api/claims/${claimId}`, body)).json(),
     onSuccess: () => {
@@ -295,6 +309,9 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
     } else if (mode === "status") {
       if (!targetStatus) return;
       transition.mutate({ toStatus: targetStatus, reason });
+    } else if (mode === "reverse") {
+      if (!reason.trim()) return toast({ title: "Give a reason for reversing the approval", variant: "destructive" });
+      reverse.mutate({ reason });
     }
   };
 
@@ -305,6 +322,7 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
     conclude: "Conclude investigation",
     verify: "Mark as verified",
     status: "Update claim status",
+    reverse: "Reverse approval",
   };
 
   return (
@@ -362,6 +380,11 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
           {canApprove && ["submitted", "verified"].includes(c.status) && (
             <Button size="sm" className="gap-1.5 bg-emerald-600 hover:bg-emerald-700" onClick={() => openAction("approve")} disabled={!!d.group?.debitBlocker} title={d.group?.debitBlocker ?? undefined} data-testid="button-approve-claim">
               <CheckCircle2 className="h-3.5 w-3.5" /> Approve
+            </Button>
+          )}
+          {canApprove && ["approved", "payable"].includes(c.status) && (
+            <Button size="sm" variant="outline" className="gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50" onClick={() => openAction("reverse")} data-testid="button-reverse-claim">
+              <Undo2 className="h-3.5 w-3.5" /> Reverse approval
             </Button>
           )}
           {canWrite && settlementTransitions.length > 0 && (
@@ -590,8 +613,15 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
                 </Select>
               </div>
             )}
+            {mode === "reverse" && (
+              <div className="rounded-md border border-rose-200 bg-rose-500/5 p-3 text-sm space-y-1">
+                <p>Use this only if the claim was approved by mistake. It goes back to the approvers for a new decision.</p>
+                {c.ledgerAmount && d.group && <p>The <strong>{money(c.ledgerAmount, ledgerCurrency)}</strong> taken from {d.group.name}'s ledger will be put back.</p>}
+                {d.member && <p>{d.member.memberName}'s claim verdict will be cleared{d.member.role === "dependent" && ["claimed"].includes(d.member.claimStatus) ? ", and their cover and premium restored" : ""}.</p>}
+              </div>
+            )}
             <div className="space-y-2">
-              <Label htmlFor="transition-reason">{mode === "decline" ? <>Reason for declining <span className="text-destructive">*</span></> : "Notes (optional)"}</Label>
+              <Label htmlFor="transition-reason">{mode === "decline" ? <>Reason for declining <span className="text-destructive">*</span></> : mode === "reverse" ? <>Why is the approval being reversed? <span className="text-destructive">*</span></> : "Notes (optional)"}</Label>
               <Textarea id="transition-reason" value={reason} onChange={(e) => setReason(e.target.value)} data-testid="input-transition-reason" />
             </div>
             {mode === "approve" && (needsWaitingOverride || c.fraudFlags?.waitingPeriod?.violated) && (
@@ -615,11 +645,11 @@ export function ClaimDetailView({ claimId, onBack, canApprove, canWrite }: {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setMode(null)} data-testid="button-cancel-transition">Cancel</Button>
-            <Button onClick={submitAction} disabled={transition.isPending || (mode === "status" && !targetStatus)}
-              className={mode === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : mode === "decline" ? "bg-rose-600 hover:bg-rose-700" : ""}
+            <Button onClick={submitAction} disabled={transition.isPending || reverse.isPending || (mode === "status" && !targetStatus)}
+              className={mode === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : mode === "decline" || mode === "reverse" ? "bg-rose-600 hover:bg-rose-700" : ""}
               data-testid="button-confirm-transition">
-              {transition.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {mode === "approve" ? "Approve" : mode === "decline" ? "Decline" : mode === "investigate" ? "Send for investigation" : mode === "conclude" ? "Send back for approval" : "Confirm"}
+              {(transition.isPending || reverse.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {mode === "approve" ? "Approve" : mode === "decline" ? "Decline" : mode === "reverse" ? "Reverse approval" : mode === "investigate" ? "Send for investigation" : mode === "conclude" ? "Send back for approval" : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>

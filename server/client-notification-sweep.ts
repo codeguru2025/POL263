@@ -13,6 +13,8 @@ import { withAdvisoryLock } from "./advisory-lock";
 import { claimSchedulerRun } from "./scheduler-claims";
 import { structuredLog } from "./logger";
 import { todayForOrg } from "./date-utils";
+import { getDbForOrg } from "./tenant-db";
+import { getPoliciesAwaitingNewHolder, getDeceasedClientIds } from "./holder-succession";
 
 let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -96,9 +98,17 @@ async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResu
   const todayYear = Number(todayStr.slice(0, 4));
   const org = await storage.getOrganization(orgId);
 
+  // Nobody to greet or bill: clients recorded as deceased, and policies whose holder died with no
+  // successor chosen yet (see holder-succession.ts).
+  const tdb = await getDbForOrg(orgId);
+  const [deceasedClients, awaitingNewHolder] = await Promise.all([
+    getDeceasedClientIds(tdb, orgId),
+    getPoliciesAwaitingNewHolder(tdb, orgId),
+  ]);
+
   const allClients = await storage.getClientsByOrg(orgId, 100000, 0);
   for (const c of allClients) {
-    if (!c.dateOfBirth) continue;
+    if (!c.dateOfBirth || deceasedClients.has(c.id)) continue;
     if (isSameMonthDay(c.dateOfBirth, todayStr)) {
       const [, mo, da] = String(c.dateOfBirth).slice(0, 10).split("-").map(Number);
       await dispatchNotification(orgId, "birthday", c.id, {
@@ -115,7 +125,7 @@ async function runSweepForOrg(orgId: string, result: ClientNotificationSweepResu
 
   const allPolicies = await storage.getPoliciesByOrg(orgId, 100000, 0);
   for (const p of allPolicies) {
-    if (!p.clientId) continue;
+    if (!p.clientId || awaitingNewHolder.has(p.id) || deceasedClients.has(p.clientId)) continue;
     const ctx = await buildPolicyContext(p, orgId);
 
     if (p.inceptionDate) {

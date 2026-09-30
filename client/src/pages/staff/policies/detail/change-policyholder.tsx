@@ -114,7 +114,7 @@ export function ChangePolicyholderDialog({ open, onOpenChange, policy, members, 
               <div className="space-y-1"><Label className="text-xs">Last name *</Label><Input value={person.lastName} onChange={(e) => set("lastName", e.target.value)} /></div>
               <div className="space-y-1"><Label className="text-xs">Phone * (gets the policy SMSes)</Label><Input value={person.phone} onChange={(e) => set("phone", e.target.value)} data-testid="input-new-holder-phone" /></div>
               <div className="space-y-1"><Label className="text-xs">National ID{policy.isLegacy ? "" : " *"}</Label><Input value={person.nationalId} onChange={(e) => set("nationalId", e.target.value)} /></div>
-              <div className="space-y-1"><Label className="text-xs">Date of birth{policy.isLegacy ? "" : " *"}</Label><Input type="date" value={person.dateOfBirth} onChange={(e) => set("dateOfBirth", e.target.value)} /></div>
+              <div className="space-y-1"><Label className="text-xs">Date of birth{policy.isLegacy && mode !== "dependent" ? "" : " *"}</Label><Input type="date" value={person.dateOfBirth} onChange={(e) => set("dateOfBirth", e.target.value)} /></div>
               <div className="space-y-1">
                 <Label className="text-xs">Gender{policy.isLegacy ? "" : " *"}</Label>
                 <Select value={person.gender || "__none__"} onValueChange={(v) => set("gender", v === "__none__" ? "" : v)}>

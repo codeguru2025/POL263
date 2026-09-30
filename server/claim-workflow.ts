@@ -528,3 +528,154 @@ export async function findPolicyMemberByName(tx: OrgDataDb, policyId: string, na
   const list = ((rows as any).rows ?? rows) as { id: string }[];
   return list.length === 1 ? list[0].id : null;
 }
+
+/** Claim statuses an approval can still be reversed from — nothing has been paid out or served yet. */
+export const REVERSIBLE_CLAIM_STATUSES = ["approved", "payable"];
+
+export interface ReverseClaimResult {
+  claim: Claim;
+  ledgerCredit: { groupId: string; currency: string; amount: number } | null;
+  /** The death claim had ended this dependant's cover; it has been put back on the policy and
+   *  the caller must recalculate the premium. */
+  reactivatedMember: any | null;
+  /** When the reversed approval was made — the date the member's cover had ended from. */
+  approvedAt: Date | null;
+}
+
+/**
+ * Undo an approval made in error. The claim goes back to "verified" (back in the Approvals queue
+ * for a fresh decision), the member's verdict is cleared, and a ledger-group deduction is credited
+ * back with a new, visible ledger entry — nothing is deleted, so the trail shows the approval and
+ * its reversal. Paid, scheduled or completed claims can't be reversed: money or a service has
+ * already gone out, which needs a recovery, not an undo.
+ */
+export async function reverseClaimApproval(input: { req: any; claimId: string; reason: string }): Promise<ReverseClaimResult> {
+  const { req, claimId } = input;
+  const user = req.user as any;
+  const orgId = user.organizationId;
+  const reason = (input.reason ?? "").trim();
+
+  const claim = await storage.getClaim(claimId, orgId);
+  if (!claim || claim.organizationId !== orgId) throw new ClaimWorkflowError(404, "Claim not found");
+  await ensureRegistryUserMirroredToOrgDataDb(orgId, user.id);
+
+  const perms = await storage.getUserEffectivePermissions(user.id, orgId);
+  if (!user.isPlatformOwner && !perms.includes("approve:claim")) {
+    throw new ClaimWorkflowError(403, "You need the claim approval permission to reverse a claim approval.");
+  }
+  if (!reason) throw new ClaimWorkflowError(400, "Give a reason for reversing the approval — it's kept on the claim's history.");
+  if (!REVERSIBLE_CLAIM_STATUSES.includes(claim.status)) {
+    const why = ["paid", "completed", "closed", "scheduled"].includes(claim.status)
+      ? `it is already ${claim.status} — money or a service has gone out, so it can't simply be undone.`
+      : "it hasn't been approved.";
+    throw new ClaimWorkflowError(400, `This claim can't be reversed: ${why}`);
+  }
+  const effectiveUserId = await resolveOrSyncTenantUserId(orgId, user.id);
+  const before = { ...claim };
+
+  const result = await withOrgTransaction(orgId, async (tx) => {
+    await tx.execute(sql`SELECT id FROM claims WHERE id = ${claim.id} FOR UPDATE`);
+    const [current] = await tx.select({ status: claims.status }).from(claims).where(eq(claims.id, claim.id)).limit(1);
+    if (current?.status !== claim.status) {
+      throw new ClaimWorkflowError(409, "This claim was just updated by someone else — refresh and try again.");
+    }
+
+    // Credit back exactly what the approval took out of the group ledger (same group, currency,
+    // amount). A claim can be approved, reversed and approved again, so only the debits not yet
+    // matched by a reversal credit are returned.
+    let ledgerCredit: ReverseClaimResult["ledgerCredit"] = null;
+    const debits = await tx.select().from(groupLedgerEntries).where(and(
+      eq(groupLedgerEntries.organizationId, orgId),
+      eq(groupLedgerEntries.referenceType, "claim"),
+      eq(groupLedgerEntries.referenceId, claim.id),
+      eq(groupLedgerEntries.entryType, "claim_debit"),
+    )).orderBy(groupLedgerEntries.createdAt);
+    const credits = await tx.select().from(groupLedgerEntries).where(and(
+      eq(groupLedgerEntries.organizationId, orgId),
+      eq(groupLedgerEntries.referenceType, "claim_reversal"),
+      eq(groupLedgerEntries.referenceId, claim.id),
+    ));
+    for (const d of debits.slice(credits.length)) {
+      await tx.execute(sql`SELECT id FROM groups WHERE id = ${d.groupId} FOR UPDATE`);
+      await storage.createGroupLedgerEntryInTx(tx, {
+        organizationId: orgId,
+        groupId: d.groupId,
+        entryType: "adjustment_credit",
+        amount: d.amount,
+        currency: d.currency,
+        description: `Claim ${claim.claimNumber} approval reversed — deduction returned: ${reason}`,
+        referenceType: "claim_reversal",
+        referenceId: claim.id,
+        createdBy: effectiveUserId,
+      });
+      ledgerCredit = { groupId: d.groupId, currency: d.currency, amount: roundMoney(d.amount) };
+    }
+
+    const [row] = await tx.update(claims).set({
+      status: "verified",
+      approvedBy: null,
+      decidedBy: null,
+      decidedAt: null,
+      decisionReason: null,
+      ledgerAmount: null,
+      isExGratia: false,
+      exGratiaReason: null,
+    } as any).where(and(eq(claims.id, claim.id), eq(claims.organizationId, orgId))).returning();
+
+    const historyParts = [`Approval reversed: ${reason}`];
+    if (ledgerCredit) historyParts.push(`${ledgerCredit.currency} ${ledgerCredit.amount.toFixed(2)} returned to the group's ledger`);
+    historyParts.push("Back for approval");
+    await tx.insert(claimStatusHistory).values({
+      claimId: claim.id, fromStatus: claim.status, toStatus: "verified", reason: historyParts.join(" — "), changedBy: effectiveUserId,
+    });
+
+    // Clear the member's verdict. An approved death claim also recorded their date of death and
+    // (for a dependant) ended their cover — both are undone.
+    let member: { before: any; after: any } | null = null;
+    let reactivatedMember: any = null;
+    if (claim.policyMemberId) {
+      const [m] = await tx.select().from(policyMembers).where(eq(policyMembers.id, claim.policyMemberId)).limit(1);
+      if (m) {
+        const patch: Record<string, unknown> = {
+          claimStatus: MEMBER_CLAIM_STATUS.pending,
+          claimVerdictNote: `Claim ${claim.claimNumber} approval reversed: ${reason}`,
+          claimVerdictAt: null,
+        };
+        if (isDeathClaimType(claim.claimType)) {
+          patch.dateOfDeath = null;
+          if (m.isActive === false && m.role === "dependent" && m.claimStatus === MEMBER_CLAIM_STATUS.approved) {
+            patch.isActive = true;
+          }
+        }
+        const [after] = await tx.update(policyMembers).set(patch as any).where(eq(policyMembers.id, m.id)).returning();
+        member = { before: m, after };
+        if (patch.isActive === true) reactivatedMember = after;
+      }
+    }
+
+    const approval = await requeueForApproval(tx, row as Claim, claim.submittedBy ?? effectiveUserId, { reversalReason: reason });
+
+    await auditLog(req, "REVERSE_CLAIM_APPROVAL", "Claim", claim.id, before, { ...row, reversalReason: reason, ledgerCredit }, undefined, tx);
+    if (member) await auditLog(req, "UPDATE_MEMBER_CLAIM_STATUS", "PolicyMember", member.after.id, member.before, member.after, undefined, tx);
+    if (approval) await auditLog(req, "SYNC_CLAIM_APPROVAL_REQUEST", "ApprovalRequest", approval.id, null, approval, undefined, tx);
+    return { claim: row as Claim, ledgerCredit, reactivatedMember, approvedAt: (claim.decidedAt as Date | null) ?? null };
+  });
+
+  if (claim.submittedBy && claim.submittedBy !== effectiveUserId) {
+    notifyUser(orgId, claim.submittedBy, {
+      type: "CLAIM_STATUS",
+      title: `Claim ${claim.claimNumber}: approval reversed`,
+      body: `The approval of claim ${claim.claimNumber} was reversed: ${reason}. It is back for approval.`,
+      metadata: { claimId: claim.id, claimNumber: claim.claimNumber, toStatus: "verified" },
+    }).catch(() => {});
+  }
+  notifyUsersWithPermission(orgId, "approve:requests", {
+    type: "APPROVAL_NEEDED",
+    title: "Claim back for approval",
+    body: `Claim ${claim.claimNumber}'s approval was reversed and it needs a new decision.`,
+    metadata: { claimId: claim.id, claimNumber: claim.claimNumber },
+  }).catch(() => {});
+  notifyClientOfClaim(orgId, claim, "back_for_review")
+    .catch((err) => structuredLog("warn", "Claim reversal client notification failed", { claimId: claim.id, error: err?.message }));
+  return result;
+}

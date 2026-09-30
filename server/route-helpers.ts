@@ -437,7 +437,8 @@ export async function computePolicyPremium(
       preloaded?.rateCards,
     );
     const loadedTotal = underwritingLoadingPercent ? result.total * (1 + underwritingLoadingPercent / 100) : result.total;
-    return Math.max(loadedTotal, 0).toFixed(2);
+    // Exact half-up cents (shared/money) — toFixed rounds binary floats, so 1.005 became "1.00".
+    return moneyString(Math.max(loadedTotal, 0));
   }
 
   let base = 0;
@@ -522,7 +523,7 @@ export async function computePolicyPremium(
   const totalRaw = base + clampedAddOnTotal + dependantSurcharge;
   const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : 0;
   const loaded = underwritingLoadingPercent ? total * (1 + underwritingLoadingPercent / 100) : total;
-  return loaded.toFixed(2);
+  return moneyString(loaded);
 }
 
 /**

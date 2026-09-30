@@ -117,7 +117,7 @@ import {
   policyMembers, funeralQuotations, funeralCases, approvalRequests, policyHolderChanges,
 } from "@shared/schema";
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
-import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES, findConflictingMemberClaim, isDeathClaimType } from "./claim-workflow";
+import { transitionClaim, reverseClaimApproval, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES, findConflictingMemberClaim, isDeathClaimType } from "./claim-workflow";
 import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, receiptEventFor, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
 import { receiptablePolicies } from "./ledger-group-receipt";
@@ -341,6 +341,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return { ended: true, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), premiumReviewNeeded };
     } catch (err: any) {
       structuredLog("error", "Ending deceased member's cover failed", { claimId: claim?.id, error: err?.message });
+      return null;
+    }
+  }
+
+  /**
+   * The reverse of endDeceasedMemberCover, for a death claim whose approval was reversed: the
+   * dependant (already put back on the policy inside reverseClaimApproval's transaction) is
+   * repriced back in, and the premium difference is reconciled from the day their cover had
+   * ended — so the gap is billed as if they'd never come off. A manually-set premium can't be
+   * recomputed and is flagged for staff instead. Best effort, like endDeceasedMemberCover.
+   */
+  async function restoreReinstatedMemberCover(req: any, claim: any, member: any, coverEndedAt: Date | null): Promise<{ restored: boolean; oldPremium?: string; newPremium?: string; premiumReviewNeeded?: boolean } | null> {
+    try {
+      const orgId = claim.organizationId;
+      const policy = await storage.getPolicy(claim.policyId, orgId);
+      if (!policy) return null;
+      const oldPremium = roundMoney(policy.premiumAmount);
+      let recalced: any = policy;
+      let premiumReviewNeeded = false;
+      if (policy.premiumOverride != null && String(policy.premiumOverride).trim() !== "") {
+        premiumReviewNeeded = true;
+      } else {
+        const pv = policy.productVersionId ? await storage.getProductVersion(policy.productVersionId, orgId) : undefined;
+        const product = pv ? await storage.getProduct(pv.productId, orgId) : undefined;
+        if (product?.pricingModel === "individual_age_rated") {
+          const contributionCents = tryToCents(member?.premiumContribution);
+          if (contributionCents == null || contributionCents <= 0) {
+            premiumReviewNeeded = true;
+          } else {
+            const next = fromCents(toCents(policy.premiumAmount) + contributionCents);
+            recalced = (await storage.updatePolicy(policy.id, { premiumAmount: next }, orgId)) || { ...policy, premiumAmount: next };
+          }
+        } else {
+          recalced = await recalculatePolicyPremiumIfNeeded(policy, orgId);
+        }
+      }
+      const newPremium = roundMoney(recalced?.premiumAmount ?? oldPremium);
+      let reconciliation: any = null;
+      if (!moneyEquals(newPremium, oldPremium)) {
+        const tz = await getOrgTimezone(orgId);
+        reconciliation = await reconcilePremiumChange({
+          orgId, policy: recalced, oldPremium, newPremium,
+          effectiveDate: coverEndedAt ? dateInTimezone(coverEndedAt, tz) : await todayForOrg(orgId),
+          changeType: "member_add",
+          reason: `Claim ${claim.claimNumber} approval reversed — member back on cover`,
+          actorId: req.user?.id,
+        });
+      }
+      await auditLog(req, "RESTORE_MEMBER_COVER", "PolicyMember", member.id, null,
+        { ...member, claimId: claim.id, claimNumber: claim.claimNumber, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), reconciliation, premiumReviewNeeded }, orgId);
+      return { restored: true, oldPremium: oldPremium.toFixed(2), newPremium: newPremium.toFixed(2), premiumReviewNeeded };
+    } catch (err: any) {
+      structuredLog("error", "Restoring member cover after claim reversal failed", { claimId: claim?.id, error: err?.message });
       return null;
     }
   }
@@ -5466,7 +5519,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         if (nationalId) {
           const existing = await storage.getClientByNationalId(orgId, nationalId);
-          if (existing) return { client: existing, created: false };
+          if (existing) {
+            // Never silently swap in a different person (and drop the phone number that was typed):
+            // an existing client is only reused when it's plainly the same person — the promoted
+            // dependant with the same name. Otherwise staff must pick them on purpose.
+            const sameName = existing.firstName?.trim().toUpperCase() === firstName && existing.lastName?.trim().toUpperCase() === lastName;
+            if (mode !== "dependent" || !sameName) {
+              throw Object.assign(new Error(
+                `National ID ${nationalId} already belongs to client ${existing.firstName} ${existing.lastName}. If they are the new policyholder, choose "Existing client" and pick them; otherwise check the ID.`,
+              ), { status: 400 });
+            }
+            // Same person: keep their record, but fill a missing phone from what was typed.
+            if (!existing.phone && phone) {
+              const updated = await storage.updateClient(existing.id, { phone }, orgId);
+              await auditLog(req, "UPDATE_CLIENT", "Client", existing.id, existing, updated, orgId);
+              return { client: updated ?? existing, created: false };
+            }
+            return { client: existing, created: false };
+          }
         }
         const parsed = insertClientSchema.parse({
           organizationId: orgId,
@@ -5499,14 +5569,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         promotedDependent = await storage.getDependent(promotedMember.dependentId, orgId);
         if (!promotedDependent) return res.status(400).json({ message: "That dependant's record could not be found." });
-        const dob = personInput.dateOfBirth ?? promotedDependent.dateOfBirth;
-        if (dob) {
-          const d = new Date(dob);
-          const now = new Date();
-          let age = now.getFullYear() - d.getFullYear();
-          if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) age--;
-          if (age < 18) return res.status(400).json({ message: "A policyholder must be at least 18. Pick an adult dependant or add a new person." });
+        // A policyholder must be an adult, so the age has to be known — a dependant with no date of
+        // birth on record must have it entered here rather than skipping the check.
+        const dob = personInput.dateOfBirth || promotedDependent.dateOfBirth;
+        const d = dob ? new Date(dob) : null;
+        if (!d || Number.isNaN(d.getTime())) {
+          return res.status(400).json({ message: "Enter this dependant's date of birth — a policyholder must be at least 18." });
         }
+        const today = new Date(await todayForOrg(orgId));
+        let age = today.getUTCFullYear() - d.getUTCFullYear();
+        if (today.getUTCMonth() < d.getUTCMonth() || (today.getUTCMonth() === d.getUTCMonth() && today.getUTCDate() < d.getUTCDate())) age--;
+        if (age < 18) return res.status(400).json({ message: "A policyholder must be at least 18. Pick an adult dependant or add a new person." });
         ({ client: newClient, created: newClientCreated } = await buildClientFrom(promotedDependent));
       } else if (mode === "existing_client") {
         newClient = await storage.getClient(String(req.body.clientId || ""), orgId);
@@ -8045,6 +8118,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
       }
       structuredLog("error", "POST /api/claims/:id/transition failed", { claimId: req.params.id, error: err?.message });
+      return res.status(500).json({ message: safeError(err) });
+    }
+  });
+
+  // Undo a claim approval made in error (approved/payable only — see reverseClaimApproval).
+  app.post("/api/claims/:id/reverse", requireAuth, requireTenantScope, requirePermission("approve:claim"), async (req, res) => {
+    try {
+      const result = await reverseClaimApproval({ req, claimId: req.params.id as string, reason: req.body?.reason });
+      const coverRestored = result.reactivatedMember
+        ? await restoreReinstatedMemberCover(req, result.claim, result.reactivatedMember, result.approvedAt)
+        : null;
+      return res.json({ ...result.claim, ledgerCredit: result.ledgerCredit, coverRestored });
+    } catch (err: any) {
+      if (err instanceof ClaimWorkflowError) {
+        return res.status(err.status).json({ message: err.message, code: err.code, ...(err.extra || {}) });
+      }
+      structuredLog("error", "POST /api/claims/:id/reverse failed", { claimId: req.params.id, error: err?.message });
       return res.status(500).json({ message: safeError(err) });
     }
   });
@@ -11814,11 +11904,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(403).json({ message: "You can't approve this deletion — it needs someone who is allowed to delete it (a finance manager or owner)." });
       }
     }
-    const updated = await storage.updateApprovalRequest(approval.id, {
+    // Compare-and-set on status='pending': a request already decided (or being decided by someone
+    // else right now) must never run its side-effect — a receipt/policy deletion — a second time.
+    const updated = await storage.resolvePendingApprovalRequest(approval.id, {
       status: action === "approve" ? "approved" : "rejected",
       approvedBy: effectiveUserId,
       rejectionReason: rejectionReason || null,
     }, user.organizationId);
+    if (!updated) {
+      return res.status(409).json({ message: "This request has already been dealt with. Refresh to see its current status." });
+    }
     await auditLog(req, `RESOLVE_APPROVAL_${action.toUpperCase()}`, "ApprovalRequest", approval.id, approval, updated);
 
     // Execute side-effects for approved requests
@@ -11989,7 +12084,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           status: "pending",
           approvedBy: null,
           rejectionReason: null,
-        }, user.organizationId);
+          resolvedAt: null,
+        } as any, user.organizationId);
         await auditLog(req, "APPROVAL_SIDE_EFFECT_FAILED", "ApprovalRequest", approval.id, updated, reverted);
         return res.status(500).json({
           message: `Approval could not be completed: ${sideEffectErr?.message || "the underlying change failed"}. The request has been reset to pending.`,

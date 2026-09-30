@@ -10,6 +10,57 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Approvals could be decided twice; change-of-policyholder gaps; float premium rounding
+
+**Symptoms (all found in the 2026-09-26 review and left open until now):**
+1. A non-claim approval (receipt/policy deletion, requisition corrections) could be resolved again
+   after it was decided. A second click, or a stale screen, re-ran its side effect.
+2. Change of policyholder, "new person": if the typed national ID matched an existing client, that
+   client was silently made the holder and the phone number typed in was thrown away.
+3. Promoting a dependant with no date of birth on record skipped the 18+ check entirely.
+4. A policy whose holder had died stayed on the normal billing path until a new holder was chosen.
+   The lapse sweep pushed it to grace and then lapsed, and premium-due, about-to-lapse and even
+   birthday texts went to the dead person's phone.
+5. `computePolicyPremium` rounded with `toFixed(2)`, which rounds the binary float, so 1.005
+   became "1.00".
+
+**Root causes:**
+1. `/api/approvals/:id/resolve` only checked `status === "pending"` on the CLAIM_REVIEW branch. The
+   generic branch did a plain UPDATE.
+2. `buildClientFrom` returned `getClientByNationalId`'s hit unconditionally.
+3. The age check was wrapped in `if (dob)`.
+4. Nothing modelled "holder deceased, no successor yet". The sweeps only looked at status and dates.
+5. The premium was `Number.toFixed`, not `shared/money`.
+
+**Fixes:**
+1. `storage.resolvePendingApprovalRequest` is a compare-and-set: `UPDATE … WHERE status='pending'`
+   `RETURNING`, which also stamps `resolved_at`. The route returns 409 when no row comes back, so
+   the side effect can never run twice, even with two concurrent clicks. The revert-on-failure
+   path clears `resolved_at` again.
+2. `server/routes.ts` change-policyholder: a matching ID is rejected with the existing client's
+   name. The one exception is a promoted dependant with the same name, where the record is reused
+   and a missing phone is filled from what was typed (audited).
+3. A date of birth is required for a promoted dependant (typed, or on record). The age is computed
+   against the org's local today. The UI marks the field required.
+4. New `server/holder-succession.ts` (`getPoliciesAwaitingNewHolder`, `getDeceasedClientIds`):
+   - `policy-lapse-sweep.ts` skips policies awaiting a new holder.
+   - `client-notification-sweep.ts` skips them, and sends no greetings to deceased clients.
+   - The pause ends by itself once a holder is chosen: `policies.client_id` moves to a member who
+     isn't "claimed".
+5. `route-helpers.ts` `computePolicyPremium` returns `moneyString(...)`, which is exact half-up.
+   Dry run on 2026-09-30: 0 policies affected. Falakhe's 815 policies are all monthly, with no
+   percentage add-ons, no underwriting loading, and whole-cent premiums. So nobody was re-billed.
+
+**Verified:** `tsc` clean, 900/900 tests, and new reverse-approval guard tests in
+`tests/unit/claim-workflow.test.ts`.
+
+**Lesson for next time:** a check-then-update on a status (`if (row.status !== "pending") …; UPDATE`)
+is not a guard. Put the condition in the UPDATE's WHERE and act only on the rows it returns. And
+when an "exists already, reuse it" shortcut can swap in a *different* entity, make the user choose
+it explicitly.
+
+---
+
 ## 2026-09-30 — Agents couldn't capture burial-society (Legacy Group) policies
 
 **Symptom:** Agents issuing policies for burial societies got "Legacy Group is a legacy product —

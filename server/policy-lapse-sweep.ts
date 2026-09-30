@@ -21,6 +21,7 @@ import { dispatchNotification, buildPolicyContext } from "./notifications";
 import { recordClawback } from "./route-helpers";
 import { withAdvisoryLock } from "./advisory-lock";
 import { structuredLog } from "./logger";
+import { getPoliciesAwaitingNewHolder } from "./holder-succession";
 
 let sweepTimer: NodeJS.Timeout | null = null;
 
@@ -82,6 +83,8 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
       // sweep run — since tenants can be configured in different timezones (organizations.timezone).
       const today = await todayForOrg(org.id);
       const tdb = await getDbForOrg(org.id);
+      // A deceased policyholder with no successor yet has nobody to bill — see holder-succession.ts.
+      const awaitingNewHolder = await getPoliciesAwaitingNewHolder(tdb, org.id);
 
       // ── Active policies whose due date has passed with no payment ──────────
       const overdueActive = await tdb.select().from(policies).where(and(
@@ -96,6 +99,7 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
       ));
 
       for (const policy of overdueActive) {
+        if (awaitingNewHolder.has(policy.id)) continue;
         try {
           const dueDate = addDays(String(policy.currentCycleEnd), 1);
           let gracePeriodDays = DEFAULT_GRACE_PERIOD_DAYS;
@@ -152,6 +156,7 @@ async function runSweepBody(trigger: "scheduler" | "manual", orgIdFilter?: strin
       ));
 
       for (const policy of overdueGrace) {
+        if (awaitingNewHolder.has(policy.id)) continue;
         try {
           const [lapsed] = await tdb.update(policies).set({ status: "lapsed" })
             .where(and(eq(policies.id, policy.id), eq(policies.status, "grace"))).returning({ id: policies.id });

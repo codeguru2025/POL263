@@ -677,6 +677,7 @@ export interface IStorage {
   updateTerms(id: string, data: Partial<InsertTerms>, orgId: string): Promise<TermsAndConditions | undefined>;
   deleteTerms(id: string, orgId: string): Promise<void>;
   updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined>;
+  resolvePendingApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined>;
   getAttendanceLogs(orgId: string, filters?: { date?: string; status?: string; employeeId?: string }): Promise<(AttendanceLog & { employee: PayrollEmployee })[]>;
   getAttendanceLogById(id: string, orgId: string): Promise<AttendanceLog | undefined>;
   getMyAttendanceLogs(employeeId: string, orgId: string): Promise<AttendanceLog[]>;
@@ -5454,6 +5455,15 @@ export class DatabaseStorage implements IStorage {
   async updateApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined> {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(approvalRequests).set(stripImmutableKeys(data)).where(and(eq(approvalRequests.id, id), eq(approvalRequests.organizationId, orgId))).returning();
+    return updated;
+  }
+  /** Decides a request only if it is still pending (compare-and-set), so two approvers clicking at
+   *  once — or a stale screen — can't decide it twice. Returns undefined when it was already decided. */
+  async resolvePendingApprovalRequest(id: string, data: Partial<InsertApprovalRequest>, orgId: string): Promise<ApprovalRequest | undefined> {
+    const tdb = await getDbForOrg(orgId);
+    const [updated] = await tdb.update(approvalRequests).set({ ...stripImmutableKeys(data), resolvedAt: new Date() } as any)
+      .where(and(eq(approvalRequests.id, id), eq(approvalRequests.organizationId, orgId), eq(approvalRequests.status, "pending")))
+      .returning();
     return updated;
   }
 

@@ -30,7 +30,7 @@ vi.mock("../../server/notifications", () => ({
   dispatchNotification: (...args: any[]) => dispatchNotification(...args),
 }));
 
-import { transitionClaim, ledgerDebitFor, notifyClientOfClaim, ClaimWorkflowError, isDeathClaimType, findConflictingMemberClaim } from "../../server/claim-workflow";
+import { transitionClaim, reverseClaimApproval, REVERSIBLE_CLAIM_STATUSES, ledgerDebitFor, notifyClientOfClaim, ClaimWorkflowError, isDeathClaimType, findConflictingMemberClaim } from "../../server/claim-workflow";
 import { VALID_CLAIM_TRANSITIONS } from "../../shared/schema";
 
 const baseClaim = {
@@ -117,6 +117,43 @@ describe("transitionClaim guard rails (checked before anything is written)", () 
     const result = await transitionClaim({ req: req(), claimId: "c1", toStatus: "rejected", reason: "Not covered", source: "approvals" });
     expect(withOrgTransaction).toHaveBeenCalledTimes(1);
     expect(result.claim.status).toBe("rejected");
+  });
+});
+
+describe("reverseClaimApproval guard rails", () => {
+  beforeEach(() => storageMock.getClaim.mockResolvedValue({ ...baseClaim, status: "approved" }));
+
+  it("needs the claim approval permission", async () => {
+    storageMock.getUserEffectivePermissions.mockResolvedValue(["write:claim"]);
+    await expectRejection(reverseClaimApproval({ req: req(), claimId: "c1", reason: "Approved in error" }), 403);
+    expect(withOrgTransaction).not.toHaveBeenCalled();
+  });
+
+  it("needs a reason", async () => {
+    await expectRejection(reverseClaimApproval({ req: req(), claimId: "c1", reason: "  " }), 400, /reason/i);
+  });
+
+  it("won't undo a claim that has already been paid, scheduled or completed", async () => {
+    for (const status of ["paid", "scheduled", "completed", "closed"]) {
+      storageMock.getClaim.mockResolvedValue({ ...baseClaim, status });
+      await expectRejection(reverseClaimApproval({ req: req(), claimId: "c1", reason: "Error" }), 400, /can't be reversed/i);
+    }
+    expect(withOrgTransaction).not.toHaveBeenCalled();
+  });
+
+  it("won't reverse a claim that was never approved", async () => {
+    storageMock.getClaim.mockResolvedValue({ ...baseClaim, status: "submitted" });
+    await expectRejection(reverseClaimApproval({ req: req(), claimId: "c1", reason: "Error" }), 400, /hasn't been approved/i);
+  });
+
+  it("reverses an approved or payable claim", async () => {
+    for (const status of REVERSIBLE_CLAIM_STATUSES) {
+      storageMock.getClaim.mockResolvedValue({ ...baseClaim, status });
+      withOrgTransaction.mockResolvedValue({ claim: { ...baseClaim, status: "verified" }, ledgerCredit: null, reactivatedMember: null, approvedAt: null });
+      const result = await reverseClaimApproval({ req: req(), claimId: "c1", reason: "Approved in error" });
+      expect(result.claim.status).toBe("verified");
+    }
+    expect(withOrgTransaction).toHaveBeenCalledTimes(REVERSIBLE_CLAIM_STATUSES.length);
   });
 });
 
