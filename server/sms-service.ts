@@ -153,7 +153,17 @@ export function normalizePhoneForSms(raw: string, defaultCountryCode?: string): 
 /** Sender IDs SMSala has routed OTP-only — every message must carry messageType=3. Extend via
  *  SMS_OTP_ONLY_SENDERS (comma-separated) when another tenant's sender is set up the same way. */
 export function isOtpOnlySender(senderId: string): boolean {
-  const list = ["FALAKHE", ...(process.env.SMS_OTP_ONLY_SENDERS || "").split(",")]
+  return senderInList(senderId, ["FALAKHE"], process.env.SMS_OTP_ONLY_SENDERS);
+}
+
+/** Sender IDs SMSala has routed transactional-only — every message (OTPs included) must carry
+ *  messageType=2 (SMSala, Sep 2026: POL263's "POLZW"). Extend via SMS_TRANSACTIONAL_ONLY_SENDERS. */
+export function isTransactionalOnlySender(senderId: string): boolean {
+  return senderInList(senderId, ["POLZW"], process.env.SMS_TRANSACTIONAL_ONLY_SENDERS);
+}
+
+function senderInList(senderId: string, builtIn: string[], extra: string | undefined): boolean {
+  const list = [...builtIn, ...(extra || "").split(",")]
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean);
   return list.includes(senderId.trim().toUpperCase());
@@ -174,12 +184,14 @@ class AfricalaProvider implements SmsProvider {
     }
 
     // messageType 1=Promotional, 2=Transactional, 3=OTP. Some Sender IDs are provisioned on an
-    // OTP-only route (SMSala: "FALAKHE" must always send messageType=3), so those override `kind`.
+    // OTP-only route (SMSala: "FALAKHE" must always send messageType=3) or a transactional-only
+    // route ("POLZW" must always send 2, even for login codes), so those override `kind`.
     // messageEncoding: SMSala's live panel dropdown maps 0=Default, 1=ASCII, 2=Octets, 3=Latin1,
     // 8=UCS2 (the numbering in their PDF's encoding table is off by one). "0" (Default) lets the
     // gateway auto-pick the on-wire encoding — this matches the sample Africala support sent.
     const messageType = isOtpOnlySender(sourceAddress)
       ? "3"
+      : isTransactionalOnlySender(sourceAddress) ? "2"
       : opts.kind === "promotional" ? "1" : opts.kind === "otp" ? "3" : "2";
     const messageEncoding = "0";
     const destinationAddress = normalizePhoneForSms(opts.to, opts.countryCode);

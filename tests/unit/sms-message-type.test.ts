@@ -11,7 +11,7 @@ vi.mock("../../server/sms-allocation", () => ({
 }));
 vi.mock("../../server/storage", () => ({ storage: { createSmsMessage: async () => undefined } }));
 
-import { isOtpOnlySender } from "../../server/sms-service";
+import { isOtpOnlySender, isTransactionalOnlySender } from "../../server/sms-service";
 
 describe("isOtpOnlySender", () => {
   afterEach(() => { delete process.env.SMS_OTP_ONLY_SENDERS; });
@@ -30,5 +30,20 @@ describe("isOtpOnlySender", () => {
     expect(isOtpOnlySender("ACME")).toBe(true);
     expect(isOtpOnlySender("other")).toBe(true);
     expect(isOtpOnlySender("POL263")).toBe(false);
+  });
+});
+
+describe("isTransactionalOnlySender", () => {
+  afterEach(() => { delete process.env.SMS_TRANSACTIONAL_ONLY_SENDERS; });
+
+  it("treats POLZW as transactional-only regardless of case/whitespace", () => {
+    expect(isTransactionalOnlySender("POLZW")).toBe(true);
+    expect(isTransactionalOnlySender(" polzw ")).toBe(true);
+    expect(isTransactionalOnlySender("FALAKHE")).toBe(false);
+  });
+
+  it("honours SMS_TRANSACTIONAL_ONLY_SENDERS for additional senders", () => {
+    process.env.SMS_TRANSACTIONAL_ONLY_SENDERS = "acme";
+    expect(isTransactionalOnlySender("ACME")).toBe(true);
   });
 });
