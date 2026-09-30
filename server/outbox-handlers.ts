@@ -17,7 +17,9 @@ import {
   OUTBOX_TYPE_CASH_RECEIPT_FOLLOWUP,
   OUTBOX_TYPE_PAYNOW_APPLY_FOLLOWUP,
   OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
+  OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP,
 } from "./outbox-constants";
+import { runLedgerGroupReceiptFollowup, type LedgerGroupReceiptPayload } from "./ledger-group-receipt";
 
 type StaffPayload = { transactionId: string; receiptId: string | null };
 type CashPayload = { transactionId: string; receiptId: string };
@@ -43,6 +45,9 @@ export async function handleOutboxMessage(orgId: string, row: OutboxMessage): Pr
       return;
     case OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP:
       await runServiceReceiptFollowup(orgId, row.payloadJson as ServiceReceiptPayload);
+      return;
+    case OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP:
+      await runLedgerGroupReceiptFollowup(orgId, row.payloadJson as LedgerGroupReceiptPayload);
       return;
     default:
       structuredLog("warn", "Unknown outbox message type", { orgId, type: row.type, id: row.id });
@@ -94,8 +99,12 @@ async function runPaymentStaffFollowup(orgId: string, payload: StaffPayload): Pr
         paymentAmount: amtLabel,
         paymentDate: new Date().toLocaleDateString("en-GB"),
         paymentMethod: txSnapshot.paymentMethod || "Cash",
+        receiptId: payload.receiptId ?? undefined,
       });
-      await dispatchNotification(orgId, "payment_received", txSnapshot.clientId, payCtx);
+      // A payment that was receipted is a "payment_receipt" event — the one tenants keep switched
+      // on for SMS. Sending "payment_received" here meant the main receipt screen never texted
+      // anyone once a tenant turned that one off to save credits (Falakhe: 0 receipt SMS).
+      await dispatchNotification(orgId, payload.receiptId ? "payment_receipt" : "payment_received", txSnapshot.clientId, payCtx);
       // Push to client device
       pushToClient(orgId, txSnapshot.clientId, {
         title: "Payment Received",

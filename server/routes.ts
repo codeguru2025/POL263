@@ -132,6 +132,7 @@ import {
   OUTBOX_TYPE_PAYMENT_STAFF_FOLLOWUP,
   OUTBOX_TYPE_CASH_RECEIPT_FOLLOWUP,
   OUTBOX_TYPE_SERVICE_RECEIPT_FOLLOWUP,
+  OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP,
 } from "./outbox";
 import { isAgentScoped } from "@shared/roles";
 import rateLimit from "express-rate-limit";
@@ -6789,6 +6790,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!isBackdated) {
       // Group receipts never recorded agent commission — every member payment went uncommissioned.
       await recordAgentCommissionForTransactions(user.organizationId, commissionItems);
+      // Text each ticked member their receipt (the same "payment_receipt" SMS as a single payment).
+      // Group receipts never texted anyone. dispatchNotification never throws.
+      for (const r of results) {
+        const pol = await storage.getPolicy(r.policyId, user.organizationId);
+        if (!pol?.clientId) continue;
+        const ctx = await buildPolicyContext(pol, user.organizationId, {
+          paymentAmount: `${r.currency} ${fromCents(toCents(r.amount))}`,
+          paymentDate: new Date().toLocaleDateString("en-GB"),
+          paymentMethod: "Cash",
+          receiptId: r.id,
+        });
+        await dispatchNotification(user.organizationId, "payment_receipt", pol.clientId, ctx);
+      }
       // Platform fee on each cleared group receipt (not on pending approvals). Awaited (not a
       // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
       // before the response returns, not a lost promise nobody was ever watching — see
@@ -13774,6 +13788,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       } catch (err: any) {
         structuredLog("error", "Group ledger credit failed (legacy group receipt)", { groupId, error: err?.message });
+      }
+
+      // Ledger groups (legacy groups / burial societies) are receipted as a lump sum: text every
+      // member and pay each member policy's agent 10% of its share (server/ledger-group-receipt.ts).
+      // Queued on the outbox so it retries if it fails part-way.
+      if (group.hasLedger || group.isLegacy) {
+        await withOrgTransaction(user.organizationId, async (txDb) => {
+          await insertOutboxMessageInTx(txDb, {
+            organizationId: user.organizationId,
+            type: OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP,
+            dedupeKey: `ledger_group_receipt_followup:${created.id}`,
+            payload: { receiptId: created.id, receiptNumber, groupId, amount: String(amount), currency: String(currency).toUpperCase() },
+          });
+        });
+        requestOutboxDrain(user.organizationId);
       }
 
       return res.status(201).json(created);

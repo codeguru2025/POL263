@@ -750,8 +750,12 @@ function GroupDetailPanel({ group }: { group: Group }) {
       {/* Receipt section */}
       {activeSection === "receipt" && (
         <div className="p-4">
-          {group.isLegacy && groupPolicies.length === 0 ? (
-            <LegacyGroupReceiptForm groupId={group.id} onSuccess={(r) => {
+          {/* Burial societies / legacy groups pay one lump sum — no member ticking (see
+              server/ledger-group-receipt.ts). Normal groups tick the members who paid. */}
+          {group.hasLedger || group.isLegacy ? (
+            <LegacyGroupReceiptForm groupId={group.id} intro={groupPolicies.length > 0
+              ? `Enter what the society paid in total — no need to tick members. All ${groupPolicies.length} member policies are covered by this payment: each member gets an SMS, and each member's agent earns 10% of that member's share.`
+              : undefined} onSuccess={(r) => {
               setLastSessionReceipts([r]);
               toast({ title: `Receipt ${r.receipt_number} recorded`, description: `${r.currency} ${parseFloat(r.amount).toFixed(2)} for ${r.group_name}` });
             }} />

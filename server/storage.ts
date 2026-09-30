@@ -539,6 +539,7 @@ export interface IStorage {
   hasPlatformReceivableForServiceReceipt(orgId: string, serviceReceiptId: string): Promise<boolean>;
   /** True if any commission ledger row references this payment transaction. */
   hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean>;
+  getCommissionPolicyIdsByDescriptionMarker(orgId: string, marker: string): Promise<string[]>;
   getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined>;
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
   getReceiptsByPolicy(policyId: string, orgId: string): Promise<Receipt[]>;
@@ -3830,6 +3831,17 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
     return !!row;
   }
+  /** Policies already credited commission for a lump-sum group receipt (its marker is in the
+   *  description) — lets the outbox follow-up retry without paying anyone twice. */
+  async getCommissionPolicyIdsByDescriptionMarker(orgId: string, marker: string): Promise<string[]> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb
+      .select({ policyId: commissionLedgerEntries.policyId })
+      .from(commissionLedgerEntries)
+      .where(and(eq(commissionLedgerEntries.organizationId, orgId), sql`position(${marker} in coalesce(${commissionLedgerEntries.description}, '')) > 0`));
+    return rows.map((r) => r.policyId).filter((id): id is string => !!id);
+  }
+
   async hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean> {
     const tdb = await getDbForOrg(orgId);
     const [row] = await tdb

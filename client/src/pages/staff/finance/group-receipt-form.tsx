@@ -36,10 +36,6 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [submitterNote, setSubmitterNote] = useState("");
-  // Lump-sum mode: receipt a single amount to the group's balance without picking members. The
-  // money sits as a group credit (group ledger) to be reconciled to members later — same flow
-  // legacy groups with no policies already use, just chosen explicitly here.
-  const [lumpSum, setLumpSum] = useState(false);
   const [paynowIntentId, setPaynowIntentId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   // Stable per submission attempt — collapses a double-click or retried submit onto one batch
@@ -207,36 +203,29 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
   };
 
   const selectedGroup = groups.find((g: any) => g.id === groupId);
-  // Legacy groups with no member policies yet are receipted as one lump sum against the
-  // group itself (no per-member allocation possible), same as the per-group panel in Groups.
-  const isLegacyLumpSum = !!selectedGroup?.isLegacy && groupPolicies.length === 0;
+  // Burial societies / legacy groups (ledger groups) always pay as one lump sum — nobody ticks
+  // members: every member is texted and each member policy's agent earns 10% of its share
+  // (server/ledger-group-receipt.ts). Normal groups (e.g. an Ekhaya group plan) tick who paid.
+  const isLedgerGroup = !!(selectedGroup?.hasLedger || selectedGroup?.isLegacy);
 
   return (
     <div className="space-y-4">
       <div>
         <Label htmlFor="group-id">Group</Label>
-        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setItemToggles({}); setPaynowIntentId(null); setPolling(false); setLumpSum(false); }}>
+        <Select value={groupId} onValueChange={(g) => { setGroupId(g); setPolicyIds(new Set()); setItemToggles({}); setPaynowIntentId(null); setPolling(false); }}>
           <SelectTrigger id="group-id" className="max-w-xs"><SelectValue placeholder="Select group" /></SelectTrigger>
           <SelectContent>
-            {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{(g as any).isLegacy ? " (Legacy)" : ""}</SelectItem>)}
+            {groups.map((g: any) => <SelectItem key={g.id} value={g.id}>{g.name}{g.hasLedger || g.isLegacy ? " (Society)" : ""}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
-      {groupId && !isLegacyLumpSum && (
-        <div className="flex items-center gap-2">
-          <Switch id="lump-sum-switch" checked={lumpSum} onCheckedChange={setLumpSum} />
-          <Label htmlFor="lump-sum-switch" className="cursor-pointer">
-            Receipt a lump sum to the group (skip member selection)
-          </Label>
-        </div>
-      )}
-      {groupId && (isLegacyLumpSum || lumpSum) ? (
+      {groupId && isLedgerGroup ? (
         <LegacyGroupReceiptForm
           groupId={groupId}
           onSuccess={onSuccess}
-          intro={lumpSum && !isLegacyLumpSum
-            ? "Record a single payment against the whole group. It's credited to the group's balance and shows in financials immediately — reconcile it to individual members later."
-            : undefined}
+          intro={groupPolicies.length > 0
+            ? `Enter what the society paid in total — no need to tick members. All ${groupPolicies.length} member policies are covered by this payment: each member gets an SMS, and each member's agent earns 10% of that member's share.`
+            : "Enter what the society paid in total. It's credited to the society's balance and shows in financials immediately."}
         />
       ) : groupId && (
         <>

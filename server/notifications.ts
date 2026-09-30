@@ -57,6 +57,7 @@ export const MERGE_TAGS: { tag: string; description: string; example: string }[]
   { tag: "{claim_number}", description: "Claim reference number", example: "CLM-000123" },
   { tag: "{activation_code}", description: "Client portal activation code", example: "ACT-4F8B2C1A" },
   { tag: "{document_label}", description: "Uploaded document name/type", example: "National ID" },
+  { tag: "{group_name}", description: "Group / burial society name", example: "Vusanani B/S" },
 ];
 
 export const EVENT_TYPES = [
@@ -80,6 +81,7 @@ export const EVENT_TYPES = [
   { value: "activation", label: "Client Activation" },
   { value: "claim_status_change", label: "Claim Status Changed" },
   { value: "kyc_status_change", label: "KYC Document Reviewed" },
+  { value: "group_receipt", label: "Group / Society Paid (texted to every member)" },
 ];
 
 const DEFAULT_MESSAGES: Record<string, { subject: string; body: string }> = {
@@ -159,6 +161,10 @@ const DEFAULT_MESSAGES: Record<string, { subject: string; body: string }> = {
     subject: "Claim {claim_number} — Status Update",
     body: "Dear {client_name}, your claim {claim_number} status has been changed to {status}.",
   },
+  group_receipt: {
+    subject: "{group_name} has paid",
+    body: "Dear {client_name}, {group_name} has paid {payment_amount} to {org_name}. Your cover continues. Thank you!",
+  },
   kyc_status_change: {
     subject: "Document Review Update",
     body: "Dear {client_name}, your submitted {document_label} has been {status}. Please contact us if you have any questions.",
@@ -192,6 +198,7 @@ export const DEFAULT_SMS_MESSAGES: Record<string, string> = {
   activation: "Welcome to {org_name}, {first_name}! Your portal activation code is {activation_code}.",
   claim_status_change: "{first_name}, claim {claim_number} is now: {status}. We are with you. Questions? Call us.",
   kyc_status_change: "{first_name}, your {document_label} has been {status}. Questions? Call us.",
+  group_receipt: "{first_name}, {group_name} has paid {payment_amount}. Your family stays covered. Thank you!",
 };
 
 export interface NotificationContext {
@@ -225,6 +232,7 @@ export interface NotificationContext {
   activationCode?: string;
   receiptId?: string;
   documentLabel?: string;
+  groupName?: string;
   /** Number to text when the client has no phone on file — e.g. a claim's funeral-case
    *  informant (next of kin). Never used as a merge tag, and only for the SMS channel. */
   fallbackPhone?: string;
@@ -287,6 +295,7 @@ function renderTemplate(template: string, ctx: NotificationContext): string {
     "{claim_number}": ctx.claimNumber,
     "{activation_code}": ctx.activationCode,
     "{document_label}": ctx.documentLabel,
+    "{group_name}": ctx.groupName,
     // Legacy compat
     "{name}": ctx.clientName,
   };
@@ -335,8 +344,9 @@ export async function notifyClientPush(orgId: string, clientId: string, subject:
 
 /** Events the client must always be texted about, even when the tenant hasn't set up an SMS
  *  template for them: the built-in wording is sent instead. Claim updates are here because a
- *  family dealing with a death should never have to phone in to find out where the claim is. */
-const SMS_ALWAYS_EVENTS = new Set(["claim_status_change"]);
+ *  family dealing with a death should never have to phone in to find out where the claim is;
+ *  group receipts because members of a society never see the receipt the treasurer was given. */
+const SMS_ALWAYS_EVENTS = new Set(["claim_status_change", "group_receipt"]);
 
 /** Text one rendered message to a client and record it in the notification log — the same
  *  phone fallback, country-code, unfilled-merge-tag and retry rules as a templated SMS. */

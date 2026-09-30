@@ -70,7 +70,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess, intro }: { groupId:
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {intro ?? "This group has no member policies yet. Record the lump-sum payment here — it will appear in financials immediately. Once members are added and given policies, future payments use the member-selection form below."}
+        {intro ?? "This group has no member policies yet. Record the lump-sum payment here — it will appear in financials immediately. Once members have policies, each payment also texts every member and pays their agents' commission."}
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-md">
         <div>

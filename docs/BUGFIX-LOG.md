@@ -10,6 +10,36 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Receipt SMS never sent (Falakhe: 0 in 5 days, ~250 receipts); claim texts cost 2 credits
+
+**Symptom:** Falakhe kept its "Payment Receipted" SMS template on while saving credits, but not one
+receipt text was ever logged. Claim-update texts such as "Approved — payment being processed" used
+2 credits each even though they were far under 160 characters.
+
+**Root cause:** (1) The main receipt screen (`POST /api/payments` → `payment_staff_followup`
+outbox) dispatched the `payment_received` event. Only PayNow and the rarely used
+`/api/admin/receipts/cash` path dispatched `payment_receipt`. So with `payment_received` switched
+off, cash receipts fired an event with no active template. Ticked group receipts
+(`/api/group-receipt`) dispatched nothing at all. (2) The claim status labels contain an em dash
+(`—`), which is not a GSM-7 character. One non-GSM character switches the whole SMS to Unicode:
+70 characters per credit instead of 160.
+
+**Fix:** `server/outbox-handlers.ts` runPaymentStaffFollowup now dispatches `payment_receipt` when
+a receipt was issued. `/api/group-receipt` texts each ticked member their receipt. New
+`shared/sms-text.ts` `toGsm7()`, applied centrally in `sendSms`, swaps curly quotes, dashes and
+accents for plain look-alikes before credits are counted.
+
+**Verified:** unit tests (`tests/unit/sms-text.test.ts`: the em-dash claim text goes from 2 parts
+to 1), full suite 860/860. Not yet live-tested: the next receipt on Falakhe should log a
+`payment_receipt` SMS.
+
+**Lesson for next time:** when an SMS/email event "sends 0", compare the event name the code
+*dispatches* on that path with the templates the tenant has *active*. Two near-synonymous events
+(`payment_received` vs `payment_receipt`) split across paths is the trap. When a short text costs
+2+ credits, look for a single non-GSM character (em dash, curly quote, emoji).
+
+---
+
 ## 2026-09-29 — Falakhe went read-only in production (receipting 500s) — caused by an ad-hoc script
 
 **Symptom:** Receipting payments returned "internal server error". The logs showed every write on

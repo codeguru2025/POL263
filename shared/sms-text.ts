@@ -88,7 +88,7 @@ export const SMS_TAG_MAX_LENGTH: Record<string, number> = {
   "{currency}": 3, "{payment_schedule}": 9, "{payment_method}": 14,
   "{effective_date}": 10, "{inception_date}": 10, "{grace_end}": 10, "{waiting_end}": 10,
   "{payment_date}": 10, "{birthday_date}": 10, "{cycle_end}": 10,
-  "{status}": 34, "{anniversary_years}": 2, "{document_label}": 20,
+  "{status}": 34, "{group_name}": 32, "{anniversary_years}": 2, "{document_label}": 20,
 };
 
 /** Credit cost of a template once its tags are filled with the longest realistic values. */
