@@ -4,14 +4,12 @@
  *
  * Each tenant is a distinct customer under our SMSala *reseller* account with their own API
  * token and Sender ID — a platform-wide shared credential can't represent that. Per-tenant
- * credentials live encrypted in control_plane.tenant_integrations (provider "sms_africala") and
- * take priority over the platform-level env vars. Unlike server/paynow-config.ts, there is no
- * legacy plaintext-column fallback to worry about — nothing existed before this pattern — so
- * the resolution order is just: control plane row -> platform env vars.
+ * credentials live encrypted in control_plane.tenant_integrations (provider "sms_africala").
  *
- * The platform env var fallback is kept for a transition period / for a tenant that hasn't
- * been given their own SMSala sub-account yet, but it is expected that most tenants will have
- * their own control-plane row once the settings UI (GET/POST /api/sms-config) is used.
+ * The platform env vars (AFRICALA_API_TOKEN / SMS_SENDER_ID, sender "POLZW") are POL263's OWN
+ * account and are never used for a tenant's messages: a tenant without its own row simply has
+ * no SMS. Platform credit is only spent through sendPlatformSms (platform-owner login codes,
+ * SMS-credit alerts to tenant admins).
  */
 
 import { and, eq } from "drizzle-orm";
@@ -34,9 +32,8 @@ interface SmsIntegrationConfigShape {
 
 const PROVIDER_KEY = "sms_africala";
 
-/** Platform-level fallback (env vars) — used when a tenant has no control-plane row yet, and
- *  directly (bypassing any per-org lookup) for platform-owner accounts, which have no
- *  organizationId to resolve a tenant's own config from — see sms-service.ts's sendPlatformSms. */
+/** POL263's own account (env vars). Used only by sms-service.ts's sendPlatformSms — never for
+ *  a tenant's messages. */
 export function platformConfig(): OrgSmsConfig {
   const apiToken = process.env.AFRICALA_API_TOKEN || "";
   const senderId = process.env.SMS_SENDER_ID || "";
@@ -48,21 +45,20 @@ export function platformConfig(): OrgSmsConfig {
   };
 }
 
-function buildConfig(cfg: SmsIntegrationConfigShape, platform: OrgSmsConfig): OrgSmsConfig {
-  const apiToken = cfg.apiToken || platform.apiToken;
-  const senderId = cfg.senderId || platform.senderId;
+function buildConfig(cfg: SmsIntegrationConfigShape): OrgSmsConfig {
+  const apiToken = cfg.apiToken || "";
+  const senderId = cfg.senderId || "";
   return {
-    provider: platform.provider,
+    provider: process.env.SMS_PROVIDER || "africala",
     apiToken,
     senderId,
     enabled: !!apiToken && !!senderId,
   };
 }
 
-/** Resolve SMS config for a specific org: control plane first, then platform env. */
+/** Resolve an org's own SMS account from the control plane. No row (or a half-filled one) means
+ *  the org has no SMS — it never borrows the platform's account or credit. */
 export async function getOrgSmsConfig(orgId: string): Promise<OrgSmsConfig> {
-  const platform = platformConfig();
-
   try {
     const [row] = await cpDb
       .select()
@@ -71,17 +67,14 @@ export async function getOrgSmsConfig(orgId: string): Promise<OrgSmsConfig> {
       .limit(1);
     if (row) {
       const decrypted = decryptFields(row.config as SmsIntegrationConfigShape, ["apiToken"]);
-      return buildConfig(decrypted, platform);
+      return buildConfig(decrypted);
     }
   } catch (err) {
-    structuredLog("error", "getOrgSmsConfig: control-plane lookup failed, falling back to platform env config", {
+    structuredLog("error", "getOrgSmsConfig: control-plane lookup failed — treating SMS as not configured", {
       orgId, error: (err as Error).message,
     });
   }
-
-  // No row for this org (not yet configured with their own SMSala sub-account), or the
-  // control plane was unreachable — fall back to the shared platform account, if any.
-  return platform;
+  return buildConfig({});
 }
 
 /**

@@ -121,7 +121,14 @@ function alertAccountIssue(orgId: string, issue: SmsAccountIssue): void {
   lastAccountAlert.set(key, Date.now());
   // notifyUsersWithPermission never throws; not awaited so a slow inbox write can't delay a send.
   void notifyUsersWithPermission(orgId, "manage:settings", { type: "GENERAL", ...ISSUE_ALERT[issue], metadata: { sms: issue } });
+  // The tenant's own account can't send, so the text comes from POL263's account.
+  void textOrgAdminsFromPlatform(orgId, (name) => ISSUE_SMS[issue](name));
 }
+const ISSUE_SMS: Record<SmsAccountIssue, (orgName: string) => string> = {
+  credit: (n) => `POL263: ${n}'s SMS account is out of credit, so texts to clients are not going out. Please top up your SMSala balance.`,
+  token: (n) => `POL263: ${n}'s SMS token was rejected, so texts to clients are not going out. Update it in Settings > SMS.`,
+  ip: (n) => `POL263: ${n}'s SMS account is blocking our server, so texts to clients are not going out. Please contact POL263.`,
+};
 
 /** Test hook — clears breaker + alert-throttle state between cases. */
 export function resetSmsHealthState(): void {
@@ -334,11 +341,13 @@ async function recordSmsMessage(
 }
 
 /**
- * Sends using only the platform-level fallback credentials, bypassing per-org resolution
- * entirely. For platform-owner accounts, which have no organizationId to resolve a tenant's own
- * SMS config from — currently only used by the staff MFA SMS-fallback flow (server/auth.ts).
+ * Sends from POL263's own account (sender POLZW, platform credit). Only for messages from the
+ * platform itself: platform-owner login codes (server/auth.ts) and textOrgAdminsFromPlatform
+ * below. Never for a tenant's own client messages — those go through sendSms on the tenant's
+ * account.
  */
 export async function sendPlatformSms(opts: SendSmsOptions): Promise<SmsSendResult> {
+  opts = { ...opts, message: toGsm7(opts.message) };
   const provider = getProvider();
   if (!provider) {
     return { ok: false, message: `SMS provider "${process.env.SMS_PROVIDER || "africala"}" is not recognized.` };
@@ -348,4 +357,32 @@ export async function sendPlatformSms(opts: SendSmsOptions): Promise<SmsSendResu
     return { ok: false, message: "SMS is not configured at the platform level." };
   }
   return provider.send(creds, opts);
+}
+
+/**
+ * Texts a tenant's administrators (manage:settings users with a phone number) from POL263's own
+ * account. Used for SMS-credit problems, where the tenant's own account may be unable to send.
+ * `buildMessage` gets the org name. Never throws.
+ */
+export async function textOrgAdminsFromPlatform(orgId: string, buildMessage: (orgName: string) => string): Promise<void> {
+  try {
+    const [org, admins, countryFlags] = await Promise.all([
+      storage.getOrganization(orgId),
+      storage.getUsersWithPermission(orgId, "manage:settings"),
+      storage.getCountryFlagSettings(orgId),
+    ]);
+    const message = buildMessage(org?.name || "Your company");
+    const numbers = new Set<string>();
+    for (const u of admins) {
+      const phone = (u as any).phone?.trim();
+      if (!phone || !(u as any).isActive) continue;
+      const msisdn = normalizeMsisdn(phone, countryFlags.homeCountryCode);
+      if (!msisdn || numbers.has(msisdn)) continue;
+      numbers.add(msisdn);
+      const r = await sendPlatformSms({ to: phone, message, countryCode: countryFlags.homeCountryCode });
+      if (!r.ok) structuredLog("warn", "Platform SMS to tenant admin failed", { orgId, userId: u.id, error: r.message });
+    }
+  } catch (err) {
+    structuredLog("error", "textOrgAdminsFromPlatform failed", { orgId, error: (err as Error).message });
+  }
 }

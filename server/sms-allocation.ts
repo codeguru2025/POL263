@@ -186,6 +186,12 @@ function alertAllowance(orgId: string, kind: "low" | "exhausted", a: SmsAllowanc
       };
   structuredLog("warn", "SMS allowance alert", { orgId, kind, remaining: a.remaining, allocated: a.allocated });
   void notifyUsersWithPermission(orgId, "manage:settings", { type: "GENERAL", ...payload, metadata: { smsAllowance: kind } });
+  // Also by text from POL263's own account (sender POLZW) — the tenant may have nothing left to
+  // send with. Dynamic import: sms-service imports this module.
+  void import("./sms-service").then(({ textOrgAdminsFromPlatform }) => textOrgAdminsFromPlatform(orgId, (name) => kind === "low"
+    ? `POL263: ${name} has ${a.remaining} SMS credits left. Texts to clients stop when they run out. Contact POL263 to top up.`
+    : `POL263: ${name}'s SMS credits are used up, so texts to clients are on hold. They resume once POL263 adds more credits.`,
+  )).catch(() => {});
 }
 
 /** Test hook. */
