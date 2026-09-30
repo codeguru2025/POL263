@@ -131,7 +131,7 @@ export function useFinancePermissions() {
     roles, permissions, authUser, isAgent,
     canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
-    commissionOnly, canManageSettings,
+    canReceipt, commissionOnly, canManageSettings,
     pendingApprovalsCount,
     tabVisibility, visibleTabDefs, visibleTabValues,
     activeTab, setActiveTab, handleTabChange,

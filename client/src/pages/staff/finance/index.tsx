@@ -43,7 +43,7 @@ export default function StaffFinance() {
     authUser, isAgent,
     canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
-    commissionOnly, canManageSettings,
+    canReceipt, commissionOnly, canManageSettings,
     pendingApprovalsCount,
     visibleTabDefs,
     activeTab, handleTabChange,
@@ -296,7 +296,7 @@ export default function StaffFinance() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              {canWriteFinance && (
+              {canReceipt && (
                 <Button onClick={handleOpenPaymentDialog} data-testid="button-new-payment">
                   <Plus className="h-4 w-4 mr-2" />Receipt a Policy
                 </Button>

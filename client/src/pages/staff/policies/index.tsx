@@ -29,7 +29,8 @@ export default function StaffPolicies() {
   const safePermissions = Array.isArray(permissions) ? permissions : [];
   const isAgent = isAgentScoped(safeRoles);
   const canWritePolicy = safePermissions.includes("write:policy");
-  const canWriteFinance = safePermissions.includes("write:finance");
+  // Receipting roles (cashiers, admins, clerks) receipt without write:finance.
+  const canReceipt = isPlatformOwner || ["write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer"].some((p) => safePermissions.includes(p));
   const canEditPremium = isPlatformOwner || safePermissions.includes("edit:premium");
   const canDeletePolicy = safePermissions.includes("delete:policy");
   const canEditPayment = safePermissions.includes("edit:payment");
@@ -227,7 +228,7 @@ export default function StaffPolicies() {
           products={products}
           addOns={addOns}
           canWritePolicy={canWritePolicy}
-          canWriteFinance={canWriteFinance}
+          canReceipt={canReceipt}
           canEditPremium={canEditPremium}
           canDeletePolicy={canDeletePolicy}
           canEditPayment={canEditPayment}

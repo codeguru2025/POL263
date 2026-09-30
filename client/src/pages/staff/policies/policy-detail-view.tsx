@@ -49,7 +49,7 @@ interface PolicyDetailViewProps {
   products: any[];
   addOns: any[];
   canWritePolicy: boolean;
-  canWriteFinance: boolean;
+  canReceipt: boolean;
   canEditPremium: boolean;
   canDeletePolicy: boolean;
   canEditPayment: boolean;
@@ -93,7 +93,7 @@ const staffEstatementUrl = (policyId: string, download?: boolean, dateFrom?: str
 export function PolicyDetailView({
   selectedPolicy, setSelectedPolicy, onBack, getClientName, countryFlagSettings, languages,
   branches, agents, groups, products, addOns,
-  canWritePolicy, canWriteFinance, canEditPremium, canDeletePolicy, canEditPayment, canDeletePayment,
+  canWritePolicy, canReceipt, canEditPremium, canDeletePolicy, canEditPayment, canDeletePayment,
   canEditReceipt, canDeleteReceipt, canManageApprovals, canReadAuditLog, isAgent,
   showEditDialog, setShowEditDialog, editForm, setEditForm, openEditDialog,
   showUpgradeDialog, setShowUpgradeDialog, upgradeForm, setUpgradeForm, openUpgradeDialog,
@@ -201,7 +201,7 @@ export function PolicyDetailView({
         </div>
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
-            {(canWriteFinance || isAgent) && (
+            {(canReceipt || isAgent) && (
               <Button
                 className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
                 onClick={receiptDialogs.openInPolicyReceipt}
@@ -210,7 +210,7 @@ export function PolicyDetailView({
                 <Receipt className="h-4 w-4" /> Receipt payment
               </Button>
             )}
-            {(canWriteFinance || isAgent) && (
+            {(canReceipt || isAgent) && (
               <Button
                 variant="outline"
                 className="gap-2 touch-target sm:h-9 sm:min-h-0 sm:min-w-0"
