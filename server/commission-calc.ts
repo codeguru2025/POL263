@@ -82,3 +82,6 @@ export function commissionSplits(priorMonths: number, paymentCents: Cents, month
   for (const s of out) s.commission = fromCents(mulCents(s.baseCents, s.rate / 100));
   return out.filter((s) => s.commission !== "0.00");
 }
+
+/** Report label for commission on a policy with no agent (ledger agent_id NULL). */
+export const WALK_IN_COMMISSION_NAME = "Walk-in (company)";

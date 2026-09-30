@@ -2638,9 +2638,8 @@ export const commissionLedgerEntries = pgTable(
     organizationId: uuid("organization_id")
       .notNull()
       .references(() => organizations.id),
-    agentId: uuid("agent_id")
-      .notNull()
-      .references(() => users.id),
+    /** NULL = the company "Walk-in" account: commission on a policy with no agent. */
+    agentId: uuid("agent_id").references(() => users.id),
     policyId: uuid("policy_id").references(() => policies.id),
     transactionId: uuid("transaction_id").references(() => paymentTransactions.id),
     entryType: text("entry_type").notNull(),

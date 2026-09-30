@@ -14,6 +14,7 @@ import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
+import { WALK_IN_COMMISSION_NAME } from "./commission-calc";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
   userRoles, userPermissionOverrides, auditLogs, clients, clientDocuments, dependents,
@@ -4842,9 +4843,9 @@ export class DatabaseStorage implements IStorage {
     };
 
     for (const r of rows as any[]) {
-      const agentId = r.agentId as string;
-      if (!agentId) continue;
-      const name = (r.agentDisplayName || r.agentEmail || "").trim() || agentId;
+      // agentId null = the company Walk-in account: counted in totals, paid to no one.
+      const agentId = (r.agentId as string | null) || "walk-in";
+      const name = r.agentId ? ((r.agentDisplayName || r.agentEmail || "").trim() || agentId) : WALK_IN_COMMISSION_NAME;
       const a = getAgg(agentId, name, String(r.currency || "USD").toUpperCase());
       // Sums are kept in integer cents; fmt() converts back.
       const amt = toCents(r.amount);
@@ -5012,7 +5013,8 @@ export class DatabaseStorage implements IStorage {
       commissionPayable: r.commissionAmount ?? null,
       commissionCurrency: r.commissionCurrency ?? r.currency,
       commissionType: r.commissionType ?? null,
-      agentName: (r.agentDisplayName || r.agentEmail || "").trim(),
+      // No agent but commission recorded = the company Walk-in account (route-helpers.ts).
+      agentName: (r.agentDisplayName || r.agentEmail || "").trim() || (r.commissionAmount != null ? WALK_IN_COMMISSION_NAME : ""),
       monthsPaidFor: calcMonths(r.periodFrom, r.periodTo, r.paymentSchedule),
       receiptCount: totalReceiptCounts[r.policyId] ?? 0,
       policyBranch: r.policyBranchName || "",

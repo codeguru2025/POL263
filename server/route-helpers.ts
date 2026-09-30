@@ -668,14 +668,19 @@ async function resolveCommissionRates(orgId: string, policy: any): Promise<{ rat
 /**
  * Records the agent's commission on one cleared payment. Every payment path must reach this
  * (cash, PayNow, group receipts, month-end run, approved override receipts) —
- * it is idempotent per transaction, so calling it twice is safe. Walk-in policies (no agent)
- * earn no commission.
+ * it is idempotent per transaction, so calling it twice is safe.
+ *
+ * A walk-in policy (no agent, not in a group) still earns: the entry goes to the company "Walk-in"
+ * account (agentId null) so it shows in reports and totals but no person is paid it. A group
+ * member with no agent earns nothing here — societies earn only through a group agent
+ * (ledger-group-receipt.ts). (Augustus, 2026-09-30.)
  *
  * Commission is per month paid (see commission-calc.ts): months already paid on the policy decide
  * the rate, and a 4-month prepayment is months 1-4, not "payment #1" at 50% on the lot.
  */
 export async function recordAgentCommission(orgId: string, policy: any, transactionId: string, paymentAmount: string) {
-  if (!policy.agentId) return;
+  if (!policy.agentId && policy.groupId) return;
+  const agentId: string | null = policy.agentId || null;
   try {
     if (await storage.hasCommissionLedgerForTransaction(orgId, transactionId)) return;
     const payments = await storage.getPaymentsByPolicy(policy.id, orgId);
@@ -703,18 +708,19 @@ export async function recordAgentCommission(orgId: string, policy: any, transact
       const span = s.fromMonth === s.toMonth ? `month ${s.fromMonth}` : `months ${s.fromMonth}-${s.toMonth}`;
       await storage.createCommissionLedgerEntry({
         organizationId: orgId,
-        agentId: policy.agentId,
+        agentId,
         policyId: policy.id,
         transactionId,
         entryType: s.entryType,
         amount: s.commission,
         currency,
-        description: `${s.rate}% commission on ${currency} ${fromCents(s.baseCents)} (${span}, ${s.entryType === "first_months" ? "initial" : "recurring"}, ${source})`,
+        description: `${agentId ? "" : "Walk-in (company): "}${s.rate}% commission on ${currency} ${fromCents(s.baseCents)} (${span}, ${s.entryType === "first_months" ? "initial" : "recurring"}, ${source})`,
         status: "earned",
       });
     }
+    if (!agentId) return;
     const total = fromCents(sumCents(splits.map((s) => s.commission)));
-    notifyUser(orgId, policy.agentId, {
+    notifyUser(orgId, agentId, {
       type: "COMMISSION_EARNED",
       title: "Commission Earned",
       body: `${currency} ${total} commission credited for policy ${policy.policyNumber || policy.id}.`,
