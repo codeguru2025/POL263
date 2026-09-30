@@ -239,6 +239,12 @@ async function provisionFromPending(pending: PendingTenantSignup): Promise<{ ten
     await cpDb.update(pendingTenantSignups).set({
       status: "provisioned", provisionedTenantId: org.id, updatedAt: new Date(),
     }).where(eq(pendingTenantSignups.id, pending.id));
+    // Texts from POL263's own account: welcome the new tenant, and tell the platform owner.
+    // Not awaited — a slow SMS provider must not hold up the signup page.
+    void import("./sms-service").then(({ textNumbersFromPlatform, textPlatformOwner }) => Promise.all([
+      textNumbersFromPlatform([pending.phone], `POL263: Welcome, ${pending.businessName}! Your account is ready. Sign in with ${pending.adminEmail}.`),
+      textPlatformOwner(`POL263: New sign-up - ${pending.businessName} (${pending.adminEmail}${pending.phone ? `, ${pending.phone}` : ""}).`),
+    ])).catch(() => {});
     return { tenantId: org.id };
   } catch (err) {
     await rollbackFailedProvisioning(org.id, pending.businessName);

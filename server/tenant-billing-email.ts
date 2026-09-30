@@ -90,6 +90,35 @@ async function send(orgId: string, subject: string, html: string, text: string, 
   }
 }
 
+/**
+ * The SMS twin of send(): texts the tenant's active administrators (or, if none has a phone, the
+ * organisation's own number) from POL263's account (sender POLZW). Never throws.
+ */
+async function sendText(orgId: string, message: string): Promise<void> {
+  try {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb
+      .select({ phone: users.phone })
+      .from(userRoles)
+      .innerJoin(roles, eq(roles.id, userRoles.roleId))
+      .innerJoin(users, eq(users.id, userRoles.userId))
+      .where(and(eq(roles.organizationId, orgId), eq(roles.name, "administrator"), eq(users.isActive, true)));
+    const { storage } = await import("./storage");
+    let phones: Array<string | null> = rows.map((r) => r.phone);
+    if (!phones.some((p) => p?.trim())) phones = [(await storage.getOrganization(orgId))?.phone ?? null];
+    const { homeCountryCode } = await storage.getCountryFlagSettings(orgId);
+    const { textNumbersFromPlatform } = await import("./sms-service");
+    await textNumbersFromPlatform(phones, message, homeCountryCode);
+  } catch (err) {
+    structuredLog("error", "Tenant billing SMS failed", { orgId, error: (err as Error).message });
+  }
+}
+
+/** "1 Oct 2026" — unambiguous in a text, unlike toLocaleDateString()'s server-locale default. */
+function smsDate(d: Date | string): string {
+  return new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
 async function tenantName(orgId: string): Promise<string> {
   const [row] = await cpDb.select({ name: cpTenants.name }).from(cpTenants).where(eq(cpTenants.id, orgId)).limit(1);
   return row?.name || "Your organization";
@@ -110,6 +139,9 @@ export async function sendInvoiceReminderEmail(invoice: TenantInvoice): Promise<
     `Your POL263 ${what} of ${invoice.currency} ${invoice.amount} is ${isSetup ? "now payable" : `due on ${due}`}.\nPay now: ${link}`,
     await billingPdfAttachment(invoice, "invoice"),
   );
+  await sendText(invoice.tenantId, isSetup
+    ? `POL263: ${name}, your account setup fee of ${invoice.currency} ${invoice.amount} is now payable. Pay here: ${link}`
+    : `POL263: ${name}, your POL263 bill of ${invoice.currency} ${invoice.amount} is due on ${smsDate(invoice.dueDate)}. Pay here: ${link}`);
 }
 
 /** Sent after a tenant invoice is paid — the branded PDF receipt. */
@@ -122,6 +154,7 @@ export async function sendInvoicePaidReceiptEmail(invoice: TenantInvoice): Promi
     `Thank you — we've received your payment of ${invoice.currency} ${invoice.amount}. Your receipt is attached.`,
     await billingPdfAttachment(invoice, "receipt"),
   );
+  await sendText(invoice.tenantId, `POL263: Thank you, ${name}. We have received your payment of ${invoice.currency} ${invoice.amount}. The receipt has been emailed to you.`);
 }
 
 export async function sendGracePeriodEmail(invoice: TenantInvoice, graceDeadline: Date): Promise<void> {
@@ -149,6 +182,7 @@ export async function sendSuspendedEmail(invoice: TenantInvoice): Promise<void> 
     `Your POL263 access has been suspended — payment wasn't received within the grace period.\nPay now to restore access instantly: ${link}`,
     await billingPdfAttachment(invoice, "invoice"),
   );
+  await sendText(invoice.tenantId, `POL263: ${name}'s system has been switched off because ${invoice.currency} ${invoice.amount} was not paid. Pay here and it comes back on at once: ${link}`);
 }
 
 export async function sendRestoredEmail(orgId: string): Promise<void> {

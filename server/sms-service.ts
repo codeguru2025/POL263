@@ -359,6 +359,38 @@ export async function sendPlatformSms(opts: SendSmsOptions): Promise<SmsSendResu
   return provider.send(creds, opts);
 }
 
+/** Texts a list of numbers from POL263's own account, skipping blanks and duplicates. Never throws. */
+export async function textNumbersFromPlatform(phones: Array<string | null | undefined>, message: string, countryCode?: string): Promise<void> {
+  const seen = new Set<string>();
+  for (const raw of phones) {
+    const phone = raw?.trim();
+    if (!phone) continue;
+    const msisdn = normalizeMsisdn(phone, countryCode);
+    if (!msisdn || seen.has(msisdn)) continue;
+    seen.add(msisdn);
+    try {
+      const r = await sendPlatformSms({ to: phone, message, countryCode });
+      if (!r.ok) structuredLog("warn", "Platform SMS failed", { to: maskMsisdn(msisdn), error: r.message });
+    } catch (err) {
+      structuredLog("error", "Platform SMS threw", { error: (err as Error).message });
+    }
+  }
+}
+function maskMsisdn(m: string): string {
+  return m.length > 4 ? `${"*".repeat(m.length - 4)}${m.slice(-4)}` : m;
+}
+
+/** Texts the platform owner (their user record's phone) from POL263's own account. Never throws. */
+export async function textPlatformOwner(message: string): Promise<void> {
+  try {
+    const { PLATFORM_OWNER_EMAIL } = await import("./constants");
+    const owner = await storage.getUserByEmail(PLATFORM_OWNER_EMAIL);
+    await textNumbersFromPlatform([(owner as any)?.phone], message);
+  } catch (err) {
+    structuredLog("error", "textPlatformOwner failed", { error: (err as Error).message });
+  }
+}
+
 /**
  * Texts a tenant's administrators (manage:settings users with a phone number) from POL263's own
  * account. Used for SMS-credit problems, where the tenant's own account may be unable to send.
@@ -372,16 +404,8 @@ export async function textOrgAdminsFromPlatform(orgId: string, buildMessage: (or
       storage.getCountryFlagSettings(orgId),
     ]);
     const message = buildMessage(org?.name || "Your company");
-    const numbers = new Set<string>();
-    for (const u of admins) {
-      const phone = (u as any).phone?.trim();
-      if (!phone || !(u as any).isActive) continue;
-      const msisdn = normalizeMsisdn(phone, countryFlags.homeCountryCode);
-      if (!msisdn || numbers.has(msisdn)) continue;
-      numbers.add(msisdn);
-      const r = await sendPlatformSms({ to: phone, message, countryCode: countryFlags.homeCountryCode });
-      if (!r.ok) structuredLog("warn", "Platform SMS to tenant admin failed", { orgId, userId: u.id, error: r.message });
-    }
+    const phones = admins.filter((u: any) => u.isActive).map((u: any) => u.phone);
+    await textNumbersFromPlatform(phones, message, countryFlags.homeCountryCode);
   } catch (err) {
     structuredLog("error", "textOrgAdminsFromPlatform failed", { orgId, error: (err as Error).message });
   }
