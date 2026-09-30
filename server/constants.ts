@@ -120,8 +120,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "read:lead", "read:notification", "use:ai",
   ],
 
-  // Runs the office day to day. No changing money after the fact, no finance posting or
-  // approvals, no payroll, no commission edits — those are finance_manager's.
+  // Runs the office day to day, including policy members, products and premiums. No changing
+  // money after the fact, no finance posting or approvals, no payroll, no commission edits —
+  // those are finance_manager's.
   administrator: [
     "read:organization", "write:organization", "read:branch", "write:branch",
     "read:user", "write:user", "delete:user", "read:role",
@@ -136,6 +137,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     "receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group",
     "view:own_clients", "view:all_clients",
     "delete:policy", "use:ai", "manage:attendance",
+    // Edits members, products and premiums on policies (Augustus, 2026-09-30). An off-premium
+    // receipt still waits for a finance_manager (approve:finance) before it counts.
+    "edit:premium",
   ],
 
   // The money powers: corrections, backdating, premium overrides, posting, approvals, payroll,

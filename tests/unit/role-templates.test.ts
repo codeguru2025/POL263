@@ -4,7 +4,7 @@ import { ROLE_PERMISSION_MAP, SYSTEM_PERMISSIONS } from "../../server/constants"
 // The money powers that belong to finance_manager, not the day-to-day administrator
 // (Augustus, 2026-09-30): whoever takes money in must not be able to quietly change it.
 const MONEY_POWERS = [
-  "edit:payment", "delete:payment", "edit:receipt", "delete:receipt", "backdate:payment", "edit:premium",
+  "edit:payment", "delete:payment", "edit:receipt", "delete:receipt", "backdate:payment",
   "write:finance", "approve:finance", "approve:settlements", "approve:waivers",
   "delete:expenditure", "delete:requisition",
   "read:payroll", "write:payroll", "write:commission",
@@ -15,14 +15,14 @@ describe("role templates", () => {
     for (const p of MONEY_POWERS) expect(ROLE_PERMISSION_MAP.administrator, p).not.toContain(p);
   });
 
-  it("administrator still receipts and sees finance read-only", () => {
-    for (const p of ["receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group", "read:finance", "read:commission", "manage:settings"]) {
+  it("administrator still receipts, edits policies/premiums and sees finance read-only", () => {
+    for (const p of ["receipt:cash", "receipt:mobile", "receipt:transfer", "receipt:group", "read:finance", "read:commission", "manage:settings", "write:policy", "edit:premium"]) {
       expect(ROLE_PERMISSION_MAP.administrator, p).toContain(p);
     }
   });
 
   it("finance_manager holds every money power", () => {
-    for (const p of MONEY_POWERS) expect(ROLE_PERMISSION_MAP.finance_manager, p).toContain(p);
+    for (const p of [...MONEY_POWERS, "edit:premium"]) expect(ROLE_PERMISSION_MAP.finance_manager, p).toContain(p);
   });
 
   it("no tenant role can edit roles/permissions or manage tenants", () => {
