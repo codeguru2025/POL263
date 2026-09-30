@@ -14,23 +14,11 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { cpDb } from "./control-plane-db";
 import { tenantSmsAllocations, tenantSmsAllocationEvents } from "@shared/control-plane-schema";
-import { isGsm7 } from "./phone";
 import { structuredLog } from "./logger";
 import { notifyUsersWithPermission } from "./user-notifications";
 
-// GSM-7 "extension table" characters take two septets each.
-const GSM7_EXTENDED = /[\^{}\\[\]~|€\f]/g;
-
-/** How many billable SMS parts `text` will be sent as. */
-export function countSmsSegments(text: string): number {
-  const body = String(text ?? "");
-  if (isGsm7(body)) {
-    const septets = body.length + (body.match(GSM7_EXTENDED)?.length ?? 0);
-    return septets <= 160 ? 1 : Math.ceil(septets / 153);
-  }
-  // UCS-2: count UTF-16 code units (an emoji is two).
-  return body.length <= 70 ? 1 : Math.ceil(body.length / 67);
-}
+// How many billable SMS parts a text will be sent as — shared with the template editor's meter.
+export { countSmsSegments } from "@shared/sms-text";
 
 export interface SmsAllowance {
   /** false = no allowance configured for this tenant: sends are not counted against anything. */

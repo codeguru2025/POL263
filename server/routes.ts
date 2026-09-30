@@ -119,7 +119,7 @@ import {
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
 import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES, findConflictingMemberClaim, isDeathClaimType } from "./claim-workflow";
 import { pool, db } from "./db";
-import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, broadcastNotification } from "./notifications";
+import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -9613,7 +9613,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/notification-merge-tags", requireAuth, requireTenantScope, requirePermission("read:notification"), (_req, res) => {
-    return res.json({ mergeTags: MERGE_TAGS, eventTypes: EVENT_TYPES });
+    return res.json({ mergeTags: MERGE_TAGS, eventTypes: EVENT_TYPES, smsDefaults: DEFAULT_SMS_MESSAGES });
   });
 
   app.post("/api/admin/notifications/broadcast", requireAuth, requireTenantScope, requirePermission("write:notification"), async (req, res) => {

@@ -305,7 +305,7 @@ describe("dispatchNotification — claim updates always go out by SMS", () => {
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
     await dispatchNotification("org1", "claim_status_change", "c1", ctx);
     expect(mockSendSms).toHaveBeenCalledTimes(1);
-    expect(mockSendSms.mock.calls[0][1].message).toBe("Dear Jane Doe, your claim CLM-000009 status has been changed to Approved.");
+    expect(mockSendSms.mock.calls[0][1].message).toBe("Jane, claim CLM-000009 is now: Approved. We are with you. Questions? Call us.");
   });
 
   it("still texts when the tenant only set up an email template for claims", async () => {

@@ -19,6 +19,7 @@ import { getOrgSmsConfig, platformConfig } from "./sms-config";
 import { notifyUsersWithPermission } from "./user-notifications";
 import { countSmsSegments, reserveSmsCredits, refundSmsCredits } from "./sms-allocation";
 import { storage } from "./storage";
+import { toGsm7 } from "@shared/sms-text";
 
 export interface SendSmsOptions {
   to: string;
@@ -256,6 +257,9 @@ export async function isSmsConfigured(orgId: string): Promise<boolean> {
 /** Send an SMS on behalf of an org. Never throws — returns {ok:false, message} if unconfigured
  *  or the send fails. Credentials are resolved per-org (see server/sms-config.ts). */
 export async function sendSms(orgId: string, opts: SendSmsOptions): Promise<SmsSendResult> {
+  // Curly quotes, dashes and accents (often in names, or pasted from Word) would switch the whole
+  // text to 70-character Unicode parts and double what it costs — swap them for plain look-alikes.
+  opts = { ...opts, message: toGsm7(opts.message) };
   const provider = getProvider();
   if (!provider) {
     return { ok: false, message: `SMS provider "${process.env.SMS_PROVIDER || "africala"}" is not recognized.` };

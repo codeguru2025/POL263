@@ -17,6 +17,30 @@ import { apiRequest } from "@/lib/queryClient";
 import { SmsEventToggles } from "@/components/sms-event-toggles";
 import { SmsUsagePanel } from "@/components/sms-usage-panel";
 import { useAuth } from "@/hooks/use-auth";
+import { smsTemplateWorstCase } from "@shared/sms-text";
+
+/** Worst-case SMS credits for a template (long names filled in) + a one-click short version. */
+function SmsCostMeter({ body, shortVersion, onUseShort }: { body: string; shortVersion?: string; onUseShort: (v: string) => void }) {
+  if (!body.trim()) return null;
+  const w = smsTemplateWorstCase(body);
+  const limit = w.unicode ? 70 : 160;
+  const ok = w.segments === 1;
+  return (
+    <div className={`mt-2 rounded-md border p-2 text-xs ${ok ? "border-emerald-500/40 bg-emerald-500/5" : "border-amber-500/50 bg-amber-500/10"}`} data-testid="sms-cost-meter">
+      <p className={ok ? "text-emerald-700 dark:text-emerald-400" : "text-amber-800 dark:text-amber-300"}>
+        {ok
+          ? `Costs 1 SMS credit per client, even with long names (up to ${w.length} of ${limit} characters).`
+          : `With long names this can cost ${w.segments} SMS credits per client (up to ${w.length} characters; 1 credit covers ${limit}). Shorten it to keep it at 1 credit.`}
+        {w.unicode && " It uses a special character (emoji or similar), which cuts one credit to 70 characters."}
+      </p>
+      {!ok && shortVersion && shortVersion !== body && (
+        <Button type="button" variant="outline" size="sm" className="mt-2 h-7 text-xs" onClick={() => onUseShort(shortVersion)} data-testid="button-use-short-sms">
+          Use the short 1-credit wording
+        </Button>
+      )}
+    </div>
+  );
+}
 
 interface MergeTag { tag: string; description: string; example: string }
 interface EventType { value: string; label: string }
@@ -105,12 +129,13 @@ export default function StaffNotifications() {
       autoRunPayments: paymentAutomationSettings.autoRunPayments !== false,
     });
   }, [paymentAutomationSettings]);
-  const { data: meta } = useQuery<{ mergeTags: MergeTag[]; eventTypes: EventType[] }>({
+  const { data: meta } = useQuery<{ mergeTags: MergeTag[]; eventTypes: EventType[]; smsDefaults?: Record<string, string> }>({
     queryKey: ["/api/notification-merge-tags"],
   });
 
   const mergeTags = meta?.mergeTags || [];
   const eventTypes = meta?.eventTypes || [];
+  const smsDefaults = meta?.smsDefaults || {};
 
   const resetForm = () => {
     setFormName(""); setFormEvent("policy_capture"); setFormChannel("in_app");
@@ -245,6 +270,8 @@ export default function StaffNotifications() {
     resetForm();
     setFormEvent(eventType);
     setFormChannel("sms");
+    setFormName(`SMS - ${eventTypes.find((e) => e.value === eventType)?.label ?? eventType}`);
+    setFormBody(smsDefaults[eventType] ?? "");
     setShowDialog(true);
   };
 
@@ -335,6 +362,7 @@ export default function StaffNotifications() {
                     </div>
                     <Textarea ref={bodyRef} value={formBody} onChange={e => setFormBody(e.target.value)} rows={6} required placeholder="Dear {client_name}, your payment of {payment_amount} for policy {policy_number} has been received..." data-testid="input-template-body" />
                     <p className="text-xs text-muted-foreground mt-1">Click "Insert Tag" above to add dynamic placeholders that auto-fill from policy data.</p>
+                    {formChannel === "sms" && <SmsCostMeter body={formBody} shortVersion={smsDefaults[formEvent]} onUseShort={setFormBody} />}
                   </div>
 
                   {formBody && (

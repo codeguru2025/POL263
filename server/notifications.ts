@@ -165,6 +165,35 @@ const DEFAULT_MESSAGES: Record<string, { subject: string; body: string }> = {
   },
 };
 
+/**
+ * Built-in SMS wording — separate from DEFAULT_MESSAGES (email / in-app can afford to be wordy).
+ * Each one fits a single SMS credit even with long names filled in (checked by
+ * smsTemplateWorstCase in tests/unit/sms-text.test.ts). First name only, and no org-name
+ * sign-off: the sender ID already shows who the text is from.
+ */
+export const DEFAULT_SMS_MESSAGES: Record<string, string> = {
+  policy_capture: "Welcome {first_name}! Policy {policy_number} is set up. Premium: {premium_amount} {payment_schedule}. Pay on time and your family stays covered.",
+  policy_activated: "Good news {first_name}! Policy {policy_number} is active from {effective_date}. Your family is now covered.",
+  payment_received: "Thank you {first_name}! {payment_amount} received for policy {policy_number}. Your family stays covered.",
+  payment_receipt: "Thank you {first_name}! {payment_amount} received for policy {policy_number}. Your family stays covered.",
+  premium_due: "{first_name}, your {premium_amount} premium for policy {policy_number} is due. Pay today and stay covered.",
+  grace_start: "{first_name}, policy {policy_number} is in its grace period. Pay by {grace_end} or your family loses cover.",
+  pre_lapse_warning: "URGENT {first_name}: policy {policy_number} lapses on {grace_end}. Pay now to keep your family covered.",
+  policy_lapsed: "{first_name}, policy {policy_number} has LAPSED. Your family is no longer covered. Pay now or call us to reinstate.",
+  policy_cancelled: "{first_name}, policy {policy_number} has been cancelled. If this is unexpected, call us.",
+  reinstatement: "Welcome back {first_name}! Policy {policy_number} is active again. Your family is covered.",
+  status_change: "{first_name}, policy {policy_number} is now: {status}. Questions? Call us.",
+  member_added: "{first_name}, {member_name} is now covered on policy {policy_number}.",
+  member_removed: "{first_name}, {member_name} has been removed from policy {policy_number}. Questions? Call us.",
+  birthday: "Happy birthday {birthday_name}! Warm wishes from all of us at {org_name}.",
+  anniversary: "{first_name}, thank you for {anniversary_years} year(s) with us! Policy {policy_number} turns another year today.",
+  policy_update: "{first_name}, policy {policy_number} has been updated. Questions? Call us.",
+  general_notice: "{first_name}, you have a new notice from {org_name}. Check your portal or call us.",
+  activation: "Welcome to {org_name}, {first_name}! Your portal activation code is {activation_code}.",
+  claim_status_change: "{first_name}, claim {claim_number} is now: {status}. We are with you. Questions? Call us.",
+  kyc_status_change: "{first_name}, your {document_label} has been {status}. Questions? Call us.",
+};
+
 export interface NotificationContext {
   clientId?: string;
   clientName?: string;
@@ -231,7 +260,8 @@ function renderTemplate(template: string, ctx: NotificationContext): string {
   let result = template;
   const replacements: Record<string, string | undefined> = {
     "{client_name}": ctx.clientName,
-    "{first_name}": ctx.firstName,
+    // Built-in SMS wording uses {first_name}; fall back to the first word of the full name.
+    "{first_name}": ctx.firstName ?? ctx.clientName?.trim().split(/\s+/)[0],
     "{last_name}": ctx.lastName,
     "{policy_number}": ctx.policyNumber,
     "{product_name}": ctx.productName,
@@ -539,8 +569,9 @@ export async function dispatchNotification(
     // one, send the built-in wording by SMS (templates for other channels still go out as above).
     if (SMS_ALWAYS_EVENTS.has(eventType) && smsAllowed && !templates.some((t) => t.channel === "sms")) {
       const defaults = DEFAULT_MESSAGES[eventType];
-      if (defaults) {
-        await sendDefaultClientSms(orgId, clientId, eventType, renderTemplate(defaults.subject, ctx), renderTemplate(defaults.body, ctx), ctx);
+      const smsBody = DEFAULT_SMS_MESSAGES[eventType] ?? defaults?.body;
+      if (defaults && smsBody) {
+        await sendDefaultClientSms(orgId, clientId, eventType, renderTemplate(defaults.subject, ctx), renderTemplate(smsBody, ctx), ctx);
       }
     }
   } catch (err) {
