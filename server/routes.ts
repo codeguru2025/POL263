@@ -58,6 +58,7 @@ import { logPolicyView, getPolicyActivityLog } from "./policy-activity-log";
 import { summarizePolicyOverview } from "./policy-overview";
 import { buildDueList, buildGraceList, summarizeGroups } from "./premium-due-list";
 import { buildLapsedList } from "./lapsed-report";
+import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14904,9 +14905,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/new-joinings", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    const offset = parseInt(String(req.query.offset)) || 0;
-    return res.json(await storage.getNewJoiningsReportByOrg(user.organizationId, limit, offset, filters));
+    // The whole period at once: the totals at the top must count every policy, not a first page.
+    const rows = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, filters);
+    return res.json({ rows, summary: summarizeNewJoinings(rows), truncated: rows.length >= REPORT_EXPORT_MAX_ROWS });
   });
   app.get("/api/reports/agent-productivity", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -15907,25 +15908,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "issued-policies":
         case "new-joinings": {
-          const issued = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          // "new-joinings" is new business only (migrated/legacy captures are data entry, not
+          // sales — server/new-joinings.ts); "issued-policies" lists everything captured.
+          const captured = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const list = reportType === "new-joinings" ? captured.filter((r) => !r.isLegacy) : captured;
+          const paidLabel = (r: NewJoiningReportRow) => (r.paid === "paid" ? "Yes" : r.paid === "group" ? "Through group" : "No");
           headers = [
-            "Franchise_ID", "Branch_ID", "Franchise", "BranchName", "MarketingManager",
-            "Member_ID", "Policy_Number", "Inception_Date", "Date_Captured", "currstatus",
-            "ID_Number", "Date_Of_Birth", "First_Name", "Surname", "PolicyHolder", "Title", "Initials",
-            "UsualPremium", "Currency", "Cell_Number", "EmailAddress", "PhysicalAddress", "PostalAddress",
-            "EasyPayNumber", "Payment_Method", "StopOrderNumber", "Product_Name",
-            "Waiting_Period", "InternalReferenceNumber", "AgentName", "MaturityTerm", "GroupName",
-            "fdate", "tdate",
+            "Policy No.", "Member No.", "Client", "National ID", "Date of Birth", "Phone", "Address",
+            "Product", "Premium", "Currency", "Pays", "Agent", "Group", "Branch",
+            "Captured On", "Start Date", "Status", "New or Existing Client", "Paid?", "First Payment Date", "First Payment",
           ];
           currencyTotals = null;
-          rows = issued.map((r: any) => [
-            r.Franchise_ID ?? "", r.Branch_ID ?? "", r.Franchise ?? "", r.BranchName ?? "", r.MarketingManager ?? "",
-            r.Member_ID ?? "", r.Policy_number ?? "", r.Inception_Date ?? "", r.Date_Captured ?? "", r.currstatus ?? "",
-            r.ID_Number ?? "", r.Date_Of_Birth ?? "", r.First_Name ?? "", r.Surname ?? "", r.PolicyHolder ?? "", r.Title ?? "", r.Initials ?? "",
-            r.UsualPremium ?? "", r.Currency ?? "", r.Cell_Number ?? "", r.EmailAddress ?? "", r.PhysicalAddress ?? "", r.PostalAddress ?? "",
-            r.EasyPayNumber ?? "", r.Payment_Method ?? "", r.StopOrderNumber ?? "", r.Product_Name ?? "",
-            r.Waiting_Period ?? "", r.InternalReferenceNumber ?? "", r.AgentName ?? "", r.MaturityTerm ?? "", r.GroupName ?? "",
-            r.fdate ?? "", r.tdate ?? "",
+          rows = list.map((r) => [
+            r.policyNumber, r.memberNumber, r.clientName, r.nationalId, r.dateOfBirth, r.phone, r.address,
+            r.productName, r.premium, r.currency, r.paymentSchedule, r.agentName, r.groupName, r.branchName,
+            r.capturedOn, r.startDate, r.status, r.isLegacy ? "Existing client (legacy)" : "New", paidLabel(r),
+            r.firstPaymentDate, r.firstPaymentAmount ? `${r.firstPaymentCurrency} ${r.firstPaymentAmount}` : "",
           ]);
           break;
         }
@@ -16025,16 +16023,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "new-joinings-summary": {
+          // New business per agent (walk-ins as their own line), premium kept per currency —
+          // never USD and ZAR added together.
           const joinRaw = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          const agentMap: Record<string, { name: string; count: number; premium: number }> = {};
-          for (const r of joinRaw) {
-            const key = r.agentEmail || r.agentDisplayName || "Unknown";
-            if (!agentMap[key]) agentMap[key] = { name: r.agentDisplayName || key, count: 0, premium: 0 };
-            agentMap[key].count++;
-            agentMap[key].premium += parseFloat(String(r.premiumAmount ?? 0)) || 0;
-          }
-          headers = ["Agent", "New Joinings", "Total Premium"];
-          rows = Object.values(agentMap).sort((a, b) => b.count - a.count).map((a) => [a.name, a.count, a.premium.toFixed(2)]);
+          const summary = summarizeNewJoinings(joinRaw);
+          const curs = Array.from(new Set(summary.byAgent.flatMap((a) => Object.keys(a.premium)))).sort();
+          headers = ["Agent", "New Joinings", "Paid", "Not Paid Yet", ...curs.map((c) => `Premium (${c})`)];
+          rows = summary.byAgent.map((a) => [a.agentName, a.count, a.paid, a.unpaid, ...curs.map((c) => a.premium[c] ?? "0.00")]);
           break;
         }
         case "cashiers-summary": {
@@ -16193,16 +16188,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "captured-per-employee": {
+          // Every policy captured (new and migrated), per the policy's agent, premium per currency.
           const joinRaw2 = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          const empMap: Record<string, { name: string; count: number; premium: number }> = {};
+          const empMap = new Map<string, { name: string; count: number; newCount: number; legacyCount: number; cents: Record<string, number> }>();
           for (const r of joinRaw2) {
-            const key = r.agentEmail || r.agentDisplayName || "Unknown";
-            if (!empMap[key]) empMap[key] = { name: r.agentDisplayName || key, count: 0, premium: 0 };
-            empMap[key].count++;
-            empMap[key].premium += parseFloat(String(r.premiumAmount ?? 0)) || 0;
+            const key = r.agentId ?? "";
+            const e = empMap.get(key) ?? { name: r.agentName, count: 0, newCount: 0, legacyCount: 0, cents: {} };
+            e.count++;
+            if (r.isLegacy) e.legacyCount++; else e.newCount++;
+            e.cents[r.currency] = (e.cents[r.currency] ?? 0) + toCents(r.premium);
+            empMap.set(key, e);
           }
-          headers = ["Agent / Employee", "Policies Captured", "Total Premium"];
-          rows = Object.values(empMap).sort((a, b) => b.count - a.count).map((e) => [e.name, e.count, e.premium.toFixed(2)]);
+          const curs2 = Array.from(new Set(Array.from(empMap.values()).flatMap((e) => Object.keys(e.cents)))).sort();
+          headers = ["Agent / Employee", "Policies Captured", "New", "Existing Clients (legacy)", ...curs2.map((c) => `Premium (${c})`)];
+          rows = Array.from(empMap.values()).sort((a, b) => b.count - a.count)
+            .map((e) => [e.name, e.count, e.newCount, e.legacyCount, ...curs2.map((c) => fromCents(e.cents[c] ?? 0))]);
           break;
         }
         case "complaint-report": {

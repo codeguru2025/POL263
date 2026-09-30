@@ -10,6 +10,47 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — New joinings: 5x over-count, activation codes in exports, per-agent summaries all "Unknown"
+
+**Symptoms:**
+- Reports → Policies → New joinings showed 172 new joinings for Sep 2026. The real figure was 36
+  new policies, 29 of them paid.
+- The export's "EasyPayNumber" column carried every client's portal **activation code**.
+- The "New Joinings Per Agent Summary" and "Captured per employee" exports put every policy under
+  "Unknown" with a premium of 0, and would have added USD and ZAR together.
+- Deleted policies were included, and dates were cut at UTC midnight.
+
+**Root causes:**
+- The query took every policy by `created_at`, so 136 existing paper clients typed in as legacy
+  policies counted as sales.
+- The row mapper copied an old system's column set (Easipol-style) and filled "EasyPayNumber" from
+  `clients.activation_code`.
+- The two summary exports read `r.agentEmail`, `r.agentDisplayName` and `r.premiumAmount`, fields
+  the report rows never had. The function returned `any[]`, so nothing flagged it.
+
+**Fix:**
+- `storage.getNewJoiningsReportByOrg` now uses `policyListConditions`, so dates are local and
+  deleted policies are left out. It returns typed `NewJoiningReportRow`s with plain fields and
+  paid / through group / unpaid status, plus the first receipt.
+- New pure `server/new-joinings.ts` `summarizeNewJoinings`: new business only, premium per
+  currency in cents, one line per agent (walk-in on its own line).
+- `/api/reports/new-joinings` returns `{ rows, summary }` over the whole period.
+- The exports were rewritten on the typed rows: "new-joinings" is new business only, and
+  "issued-policies" lists everything with a new/existing column.
+- New UI `reports/sections/new-joinings-panel.tsx`: totals at the top, by-agent table, and a
+  separate "Existing clients captured (legacy)" table.
+
+**Verified:** real Falakhe data, read-only.
+- Sep: 172 captured = 36 new (29 paid, 7 unpaid) + 136 legacy.
+- Aug: 252 captured (the deleted one excluded) = 35 new + 217 legacy.
+- New `tests/unit/new-joinings.test.ts`.
+
+**Lesson for next time:** a report function returning `any[]` let two consumers read fields that
+never existed, for months. Type report rows so the compiler catches it. And never map client
+secrets (activation codes, tokens) into a report row, even under an innocent-looking column name.
+
+---
+
 ## 2026-09-30 — Approvals could be decided twice; change-of-policyholder gaps; float premium rounding
 
 **Symptoms (all found in the 2026-09-26 review and left open until now):**

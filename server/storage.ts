@@ -13,6 +13,7 @@ import { tenantBranding as cpTenantBranding } from "../shared/control-plane-sche
 import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
+import type { NewJoiningReportRow } from "./new-joinings";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { WALK_IN_COMMISSION_NAME } from "./commission-calc";
 import {
@@ -492,7 +493,7 @@ export interface IStorage {
     note: string;
   }>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
-  getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
+  getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<NewJoiningReportRow[]>;
   /**
    * Policies registered (created) in the period that also have at least one issued receipt in the same period.
    * Requires fromDate and toDate on filters; otherwise returns an empty list.
@@ -2871,65 +2872,46 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]> {
+  /**
+   * Reports → Policies → New joinings: every policy captured in the period (tenant-local dates,
+   * deleted policies excluded), with whether it has been paid. The caller splits new business
+   * from migrated (isLegacy) captures — see server/new-joinings.ts. The status filter never
+   * applies: a new joining is a new joining whatever state it's in now.
+   */
+  async getNewJoiningsReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<NewJoiningReportRow[]> {
     const tdb = await getDbForOrg(organizationId);
-
-    // Fetch franchise (org) name from the registry database
-    const [orgRow] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, organizationId));
-    const franchiseName = orgRow?.name ?? "";
-
-    const conditions = [eq(policies.organizationId, organizationId)];
-    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else conditions.push(sql`1 = 0`);
-    }
+    const { status: _status, ...rest } = (filters ?? {}) as ReportFilters & { status?: string };
+    const conditions = await this.policyListConditions(organizationId, rest);
     const rows = await tdb
       .select({
         policyId: policies.id,
-        policyBranchId: policies.branchId,
         policyNumber: policies.policyNumber,
         status: policies.status,
+        isLegacy: policies.isLegacy,
         currency: policies.currency,
         premiumAmount: policies.premiumAmount,
         paymentSchedule: policies.paymentSchedule,
-        effectiveDate: policies.effectiveDate,
         inceptionDate: policies.inceptionDate,
-        waitingPeriodEndDate: policies.waitingPeriodEndDate,
-        currentCycleStart: policies.currentCycleStart,
-        currentCycleEnd: policies.currentCycleEnd,
-        graceEndDate: policies.graceEndDate,
-        policyCreatedAt: policies.createdAt,
-        clientId: clients.id,
-        clientTitle: clients.title,
+        createdAt: policies.createdAt,
+        groupId: policies.groupId,
+        agentId: policies.agentId,
         clientFirstName: clients.firstName,
         clientLastName: clients.lastName,
         clientNationalId: clients.nationalId,
         clientPhone: clients.phone,
         clientAddress: clients.address,
         clientPhysicalAddress: clients.physicalAddress,
-        clientPostalAddress: clients.postalAddress,
-        clientActivationCode: clients.activationCode,
         clientDateOfBirth: clients.dateOfBirth,
-        clientEmail: clients.email,
         productName: products.name,
-        productCode: products.code,
         branchName: branches.name,
         groupName: groups.name,
         agentEmail: users.email,
         agentDisplayName: users.displayName,
-        gracePeriodDays: productVersions.gracePeriodDays,
-        waitingPeriodDays: productVersions.waitingPeriodDays,
       })
       .from(policies)
       .innerJoin(clients, eq(policies.clientId, clients.id))
-      .innerJoin(productVersions, eq(policies.productVersionId, productVersions.id))
-      .innerJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .leftJoin(products, eq(productVersions.productId, products.id))
       .leftJoin(branches, eq(policies.branchId, branches.id))
       .leftJoin(groups, eq(policies.groupId, groups.id))
       .leftJoin(users, eq(policies.agentId, users.id))
@@ -2939,83 +2921,67 @@ export class DatabaseStorage implements IStorage {
       .offset(offset);
 
     const policyIds = rows.map((r) => r.policyId);
-    const memberMap: Record<string, string> = {};
+    const groupIds = Array.from(new Set(rows.map((r) => r.groupId).filter((g): g is string => !!g)));
+    const memberNumbers = new Map<string, string>();
+    const firstReceipts = new Map<string, { issuedAt: Date; amount: string; currency: string }>();
+    let groupsWithReceipts = new Map<string, { date: string; amount: string; currency: string }>();
     if (policyIds.length > 0) {
-      const members = await tdb.select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
-        .from(policyMembers)
-        .where(and(inArray(policyMembers.role, ["principal", "policy_holder"]), inArray(policyMembers.policyId, policyIds)));
-      for (const m of members) {
-        if (m.memberNumber && !memberMap[m.policyId]) memberMap[m.policyId] = m.memberNumber;
-      }
+      const [members, receipts, groupReceipts] = await Promise.all([
+        tdb.select({ policyId: policyMembers.policyId, memberNumber: policyMembers.memberNumber })
+          .from(policyMembers)
+          .where(and(inArray(policyMembers.role, ["policy_holder", "principal"]), inArray(policyMembers.policyId, policyIds))),
+        // The policy's first valid receipt (issued, and approved if it needed approval).
+        tdb.selectDistinctOn([paymentReceipts.policyId], {
+          policyId: paymentReceipts.policyId,
+          issuedAt: paymentReceipts.issuedAt,
+          amount: paymentReceipts.amount,
+          currency: paymentReceipts.currency,
+        })
+          .from(paymentReceipts)
+          .where(and(
+            inArray(paymentReceipts.policyId, policyIds),
+            eq(paymentReceipts.status, "issued"),
+            or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
+          ))
+          .orderBy(paymentReceipts.policyId, asc(paymentReceipts.issuedAt)),
+        this.getLatestGroupReceipts(organizationId, groupIds),
+      ]);
+      for (const m of members) if (m.memberNumber && !memberNumbers.has(m.policyId)) memberNumbers.set(m.policyId, m.memberNumber);
+      for (const r of receipts) if (r.policyId) firstReceipts.set(r.policyId, { issuedAt: r.issuedAt as Date, amount: String(r.amount), currency: r.currency });
+      groupsWithReceipts = groupReceipts;
     }
 
-    const idate = filters?.fromDate ?? "";
-    const tdate = filters?.toDate ?? "";
-
-    const initialsFrom = (first: string, last: string) => {
-      const a = (first || "").trim();
-      const b = (last || "").trim();
-      return `${a.charAt(0).toUpperCase()}${b.charAt(0).toUpperCase()}`.trim() || "";
-    };
-
-    const scheduleLabel = (s: string | null | undefined) => {
-      if (!s) return "";
-      return s.charAt(0).toUpperCase() + s.slice(1);
-    };
-
+    const tz = await getOrgTimezone(organizationId);
     return rows.map((r) => {
-      const memberNumber = memberMap[r.policyId] ?? "";
-      const prem = String(r.premiumAmount ?? "");
-      const usualPremium = prem ? `${r.currency || "USD"} ${prem}` : "";
-      const policyHolder = [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim();
-      const wpDays = r.waitingPeriodDays != null ? Number(r.waitingPeriodDays) : null;
-      const Waiting_Period = wpDays != null && !Number.isNaN(wpDays) ? `${wpDays} days` : "";
-      const maturityParts: string[] = [];
-      if (r.currentCycleEnd) maturityParts.push(`Cycle end ${r.currentCycleEnd}`);
-      if (r.waitingPeriodEndDate) maturityParts.push(`Waiting end ${r.waitingPeriodEndDate}`);
-      if (r.graceEndDate) maturityParts.push(`Grace end ${r.graceEndDate}`);
-      const MaturityTerm = maturityParts.join(" · ") || "";
-      const InternalReferenceNumber = [r.productCode, r.policyNumber].filter(Boolean).join(" · ") || String(r.policyId);
-      const agentName = r.agentDisplayName || r.agentEmail || "Walk-in";
-
+      const first = firstReceipts.get(r.policyId);
+      // A society member's premium is paid in the group's lump sum, not on the policy.
+      const paid: NewJoiningReportRow["paid"] = first ? "paid" : r.groupId && groupsWithReceipts.has(r.groupId) ? "group" : "unpaid";
+      const agentName = r.agentId ? ((r.agentDisplayName || r.agentEmail || "").trim() || "Agent") : "Walk-in";
       return {
-        _policyId: r.policyId,
-        _status: r.status,
-        _policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
-        Franchise_ID: organizationId,
-        Branch_ID: r.policyBranchId ?? "",
-        Franchise: franchiseName,
-        BranchName: r.branchName ?? "",
-        MarketingManager: agentName,
-        Member_ID: memberNumber,
-        Policy_number: r.policyNumber ?? "",
-        Inception_Date: r.inceptionDate ? String(r.inceptionDate) : "",
-        ID_Number: r.clientNationalId ?? "",
-        First_Name: r.clientFirstName ?? "",
-        Surname: r.clientLastName ?? "",
-        PolicyHolder: policyHolder,
-        Title: r.clientTitle ?? "",
-        Initials: initialsFrom(r.clientFirstName ?? "", r.clientLastName ?? ""),
-        UsualPremium: usualPremium,
-        Cell_Number: r.clientPhone ?? "",
-        PhysicalAddress: r.clientPhysicalAddress || r.clientAddress || "",
-        PostalAddress: r.clientPostalAddress ?? "",
-        EasyPayNumber: r.clientActivationCode ?? "",
-        Payment_Method: scheduleLabel(r.paymentSchedule),
-        StopOrderNumber: "",
-        Product_Name: r.productName ?? "",
-        Waiting_Period,
-        InternalReferenceNumber,
-        AgentName: agentName,
-        MaturityTerm,
-        GroupName: r.groupName ?? "",
-        Date_Of_Birth: r.clientDateOfBirth ? String(r.clientDateOfBirth) : "",
-        EmailAddress: r.clientEmail ?? "",
-        Currency: r.currency ?? "",
-        currstatus: r.status ?? "",
-        Date_Captured: r.policyCreatedAt ? String(r.policyCreatedAt).split("T")[0] : "",
-        fdate: idate,
-        tdate,
+        policyId: r.policyId,
+        policyNumber: r.policyNumber ?? "",
+        memberNumber: memberNumbers.get(r.policyId) ?? "",
+        clientName: [r.clientFirstName, r.clientLastName].filter(Boolean).join(" ").trim(),
+        nationalId: r.clientNationalId ?? "",
+        dateOfBirth: r.clientDateOfBirth ? String(r.clientDateOfBirth).slice(0, 10) : "",
+        phone: r.clientPhone ?? "",
+        address: (r.clientPhysicalAddress || r.clientAddress || "").trim(),
+        productName: r.productName ?? "",
+        premium: moneyString(r.premiumAmount ?? 0),
+        currency: r.currency || "USD",
+        paymentSchedule: r.paymentSchedule ?? "",
+        agentId: r.agentId ?? null,
+        agentName,
+        groupName: r.groupName ?? "",
+        branchName: r.branchName ?? "",
+        capturedOn: r.createdAt ? dateInTimezone(r.createdAt, tz) : "",
+        startDate: r.inceptionDate ? String(r.inceptionDate).slice(0, 10) : "",
+        status: r.status ?? "",
+        isLegacy: !!r.isLegacy,
+        paid,
+        firstPaymentDate: first ? dateInTimezone(first.issuedAt, tz) : paid === "group" ? groupsWithReceipts.get(r.groupId!)!.date : "",
+        firstPaymentAmount: first ? moneyString(first.amount) : "",
+        firstPaymentCurrency: first?.currency ?? "",
       };
     });
   }

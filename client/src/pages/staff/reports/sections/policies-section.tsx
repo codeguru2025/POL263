@@ -12,6 +12,7 @@ import { ActivePoliciesPanel } from "./active-policies-panel";
 import { AwaitingPaymentsPanel } from "./awaiting-payments-panel";
 import { GracePoliciesPanel } from "./grace-policies-panel";
 import { LapsedPoliciesPanel } from "./lapsed-policies-panel";
+import { NewJoiningsPanel } from "./new-joinings-panel";
 import { isLegacyPreLapseLink } from "@/lib/staff-reports-nav";
 
 const POLICY_DETAILS_PAGE = 500;
@@ -72,41 +73,6 @@ const policyDetailsColumns: EdtColumn<any>[] = [
 ];
 
 
-const newJoiningsColumns: EdtColumn<any>[] = [
-  { id: "franchiseBranchId", header: "Franchise_Branch_ID", accessor: (r) => r.Franchise_Branch_ID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Franchise_Branch_ID || "—"}</span> },
-  { id: "franchiseBranchName", header: "Franchise_BranchName", accessor: (r) => r.Franchise_BranchName || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[120px] truncate block" title={r.Franchise_BranchName}>{r.Franchise_BranchName || "—"}</span> },
-  { id: "marketingMemberId", header: "Marketing_Member_ID", accessor: (r) => r.Marketing_Member_ID || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Marketing_Member_ID || "—"}</span> },
-  { id: "policyNum", header: "Policy_num", accessor: (r) => r.Policy_num, cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Policy_num}</span> },
-  { id: "inceptionDate", header: "Inception_Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
-  { id: "idNumber", header: "ID_Number", accessor: (r) => r.ID_Number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.ID_Number || "—"}</span> },
-  { id: "firstName", header: "First_Name", accessor: (r) => r.First_Name, cell: (r) => <span className="text-xs whitespace-nowrap">{r.First_Name}</span> },
-  { id: "surname", header: "Surname", accessor: (r) => r.Surname, cell: (r) => <span className="text-xs whitespace-nowrap">{r.Surname}</span> },
-  { id: "policyHolder", header: "PolicyHolder", accessor: (r) => r.PolicyHolder || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.PolicyHolder}>{r.PolicyHolder || "—"}</span> },
-  { id: "title", header: "Title", accessor: (r) => r.Title || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Title || "—"}</span> },
-  { id: "initials", header: "Initials", accessor: (r) => r.Initials || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Initials || "—"}</span> },
-  { id: "usualPrem", header: "UsualPrem", accessor: (r) => r.UsualPrem || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.UsualPrem || "—"}</span> },
-  { id: "cellNum", header: "Cell_Num", accessor: (r) => r.Cell_Num || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Cell_Num || "—"}</span> },
-  { id: "physicalAdd", header: "PhysicalAdd", accessor: (r) => r.PhysicalAdd || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.PhysicalAdd}>{r.PhysicalAdd || "—"}</span> },
-  { id: "postalAdd", header: "PostalAdd", accessor: (r) => r.PostalAdd || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.PostalAdd}>{r.PostalAdd || "—"}</span> },
-  { id: "easyPayNo", header: "EasyPayNo", accessor: (r) => r.EasyPayNo || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.EasyPayNo || "—"}</span> },
-  { id: "paymentM", header: "Payment_M", accessor: (r) => r.Payment_M || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Payment_M || "—"}</span> },
-  { id: "stopOrder", header: "StopOrder", accessor: (r) => r.StopOrder || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.StopOrder || "—"}</span> },
-  { id: "productN", header: "Product_N", accessor: (r) => r.Product_N || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.Product_N}>{r.Product_N || "—"}</span> },
-  { id: "waitingPe", header: "Waiting_Pe", accessor: (r) => r.Waiting_Pe || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Waiting_Pe || "—"}</span> },
-  { id: "internalRe", header: "InternalRe", accessor: (r) => r.InternalRe || "", cell: (r) => <span className="text-xs font-mono max-w-[120px] truncate block" title={r.InternalRe}>{r.InternalRe || "—"}</span> },
-  { id: "agentNam", header: "AgentNam", accessor: (r) => r.AgentNam || "Walk-in", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[100px] truncate block" title={r.AgentNam}>{r.AgentNam || "Walk-in"}</span> },
-  { id: "maturityTe", header: "MaturityTe", accessor: (r) => r.MaturityTe || "", cell: (r) => <span className="text-xs max-w-[160px] truncate block" title={r.MaturityTe}>{r.MaturityTe || "—"}</span> },
-  { id: "groupName", header: "GroupName", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[100px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
-  { id: "idate", header: "Idate", accessor: (r) => r.Idate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Idate || "—"}</span> },
-  { id: "tdate", header: "tdate", accessor: (r) => r.tdate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.tdate || "—"}</span> },
-  { id: "status", header: "Status", accessor: (r) => r._status || "", cell: (r) => <Badge variant="outline" className="text-xs">{r._status || "—"}</Badge> },
-  {
-    id: "captured",
-    header: "Captured",
-    accessor: (r) => r._policyCreatedAt ? new Date(r._policyCreatedAt) : "",
-    cell: (r) => <span className="text-xs text-muted-foreground whitespace-nowrap">{r._policyCreatedAt ? new Date(r._policyCreatedAt).toLocaleDateString() : "—"}</span>,
-  },
-];
 
 function statusHistoryColumns(dateHeader: string, dateAccessor: (r: any) => any): EdtColumn<any>[] {
   return [
@@ -156,15 +122,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: newJoinings = [], isLoading: loadingNewJoinings } = useQuery<any[]>({
-    queryKey: ["reports", "new-joinings", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/new-joinings?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("newJoinings"),
-  });
   const { data: activations = [], isLoading: loadingActivations } = useQuery<any[]>({
     queryKey: ["reports", "activations", runKey, ...fk],
     queryFn: async () => {
@@ -259,18 +216,7 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="new-joinings">
-        <CardSection title="New joinings report" icon={FileText} description="All policies captured in the date range (inactive through cancelled), paid or unpaid. Filter by branch, product, or agent above; status filter does not apply to this report." headerRight={<ExportButton reportType="new-joinings" filters={filters} />} flush>
-          {loadingNewJoinings ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={newJoiningsColumns}
-              rows={newJoinings}
-              getRowKey={(r) => r._policyId || `${r.Policy_num}-${r._policyCreatedAt}`}
-              exportFilename="new-joinings"
-              storageKey="reports-new-joinings"
-              emptyMessage="No policies in range. Set from/to dates or widen filters."
-            />
-          )}
-        </CardSection>
+        <NewJoiningsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("newJoinings")} />
       </TabsContent>
 
       <TabsContent value="activations">
