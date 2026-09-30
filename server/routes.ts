@@ -3885,6 +3885,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (branchId) filters.branchId = branchId;
     if (productId) filters.productId = productId;
     if (search) filters.search = search;
+    if (req.query.ungrouped === "1") filters.ungrouped = true;
     if (isAgent) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     else if (agentIdParam) filters.agentId = agentIdParam;
     const hasFilter = Object.keys(filters).length > 0;

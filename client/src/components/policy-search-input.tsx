@@ -11,6 +11,8 @@ interface PolicyOption {
   policyNumber: string;
   clientId: string;
   status?: string;
+  currency?: string;
+  premiumAmount?: string;
 }
 
 export function PolicySearchInput({
@@ -19,6 +21,8 @@ export function PolicySearchInput({
   placeholder = "Search by policy number or client name...",
   disabled,
   id,
+  ungrouped,
+  limit = 20,
   "data-testid": dataTestId,
 }: {
   value: string;
@@ -26,6 +30,9 @@ export function PolicySearchInput({
   placeholder?: string;
   disabled?: boolean;
   id?: string;
+  /** Only policies that aren't in a group yet. */
+  ungrouped?: boolean;
+  limit?: number;
   "data-testid"?: string;
 }) {
   const [query, setQuery] = useState("");
@@ -54,7 +61,7 @@ export function PolicySearchInput({
       setLoading(true);
       try {
         const res = await fetch(
-          getApiBase() + `/api/policies?q=${encodeURIComponent(query.trim())}&limit=20`,
+          getApiBase() + `/api/policies?q=${encodeURIComponent(query.trim())}&limit=${limit}${ungrouped ? "&ungrouped=1" : ""}`,
           { credentials: "include" }
         );
         if (seq !== searchSeq.current) return;
@@ -77,7 +84,7 @@ export function PolicySearchInput({
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, ungrouped, limit]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -161,7 +168,9 @@ export function PolicySearchInput({
                 onClick={() => selectPolicy(p)}
               >
                 <span className="font-mono font-medium">{p.policyNumber}</span>
-                {p.status && <span className="text-muted-foreground text-xs">{p.status}</span>}
+                <span className="text-muted-foreground text-xs">
+                  {[p.status, p.premiumAmount != null ? `${p.currency ?? ""} ${parseFloat(p.premiumAmount).toFixed(2)}`.trim() : null].filter(Boolean).join(" · ")}
+                </span>
               </li>
             ))
           )}

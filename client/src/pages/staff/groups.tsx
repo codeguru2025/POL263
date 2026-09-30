@@ -24,6 +24,7 @@ import {
 import { printDocument } from "@/lib/print-document";
 import { shareDocument } from "@/lib/share-document";
 import { LegacyGroupReceiptForm } from "@/components/legacy-group-receipt-form";
+import { PolicySearchInput } from "@/components/policy-search-input";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -519,8 +520,6 @@ function GroupDetailPanel({ group }: { group: Group }) {
     },
   });
 
-  const { data: allPolicies = [] } = useQuery<any[]>({ queryKey: ["/api/policies"] });
-  const unassigned = (allPolicies as any[]).filter((p: any) => !p.groupId);
 
   const { data: receiptHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/groups", group.id, "receipts"],
@@ -885,24 +884,22 @@ function GroupDetailPanel({ group }: { group: Group }) {
       </Dialog>
 
       {/* Assign existing policy dialog */}
-      <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
+      <Dialog open={showAssignDialog} onOpenChange={(o) => { setShowAssignDialog(o); if (!o) setAssignPolicyId(""); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Assign Existing Policy — {group.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Label htmlFor="assign-policy-id">Select Policy</Label>
-            <Select value={assignPolicyId} onValueChange={setAssignPolicyId}>
-              <SelectTrigger id="assign-policy-id"><SelectValue placeholder="Choose a policy…" /></SelectTrigger>
-              <SelectContent>
-                {unassigned.map((p: any) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.policyNumber} — {p.status} ({p.currency} {parseFloat(p.premiumAmount).toFixed(2)})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {unassigned.length === 0 && <p className="text-sm text-muted-foreground">No unassigned policies available.</p>}
+            <PolicySearchInput
+              id="assign-policy-id"
+              value={assignPolicyId}
+              onChange={(policyId) => setAssignPolicyId(policyId)}
+              placeholder="Search by policy number or client name…"
+              ungrouped
+              limit={50}
+            />
+            <p className="text-xs text-muted-foreground">Searches every policy that isn't in a group yet.</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAssignDialog(false)}>Cancel</Button>

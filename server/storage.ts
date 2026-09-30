@@ -198,6 +198,8 @@ export interface ReportFilters {
   /** Leave out migrated (is_legacy) policies that have no payment recorded in POL263 — no
    *  issued receipt and, for a group policy, no group receipt either. */
   excludeUnpaidMigrated?: boolean;
+  /** Only policies not in any group (the group "assign existing policy" picker). */
+  ungrouped?: boolean;
 }
 
 export interface PolicyReportRow {
@@ -1925,6 +1927,7 @@ export class DatabaseStorage implements IStorage {
           AND pr.status = 'issued' AND (pr.approval_status IS NULL OR pr.approval_status = 'approved'))
         AND (${policies.groupId} IS NULL OR NOT EXISTS (SELECT 1 FROM legacy_group_receipts g WHERE g.group_id = ${policies.groupId})))`);
     }
+    if (filters?.ungrouped) conditions.push(isNull(policies.groupId));
     if (filters?.status) conditions.push(eq(policies.status, filters.status));
     if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
     if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
