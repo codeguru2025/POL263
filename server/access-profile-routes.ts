@@ -8,6 +8,7 @@
 import type { Express } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import { requireAuth, requireTenantScope, requirePermission } from "./auth";
+import { permissionGrantError } from "./role-assignment-guard";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { accessProfiles, permissions as permissionsTable } from "@shared/schema";
@@ -88,6 +89,13 @@ export function registerAccessProfileRoutes(app: Express): void {
     const exclusive = req.query.mode === "exclusive";
     const allowSet = new Set(profile.permissions);
     const allNames = (await db.select({ name: permissionsTable.name }).from(permissionsTable)).map((p) => p.name);
+
+    // Same grant rules as a single custom permission (platform-owner-only powers; agents never
+    // get cash) — checked for the whole profile before anything is applied.
+    for (const name of profile.permissions) {
+      const grantError = await permissionGrantError(req.user as any, target.id, name);
+      if (grantError) return res.status(400).json({ message: `Can't apply "${profile.name}": ${grantError}` });
+    }
 
     let applied = 0;
     for (const name of profile.permissions) {

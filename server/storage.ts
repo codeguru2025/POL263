@@ -1,3 +1,4 @@
+import { isAgentScoped } from "@shared/roles";
 import crypto from "crypto";
 import { eq, and, asc, desc, sql, count, sum, max, gte, lte, lt, gt, inArray, or, ilike, isNull, isNotNull, exists, getTableColumns, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -1344,6 +1345,12 @@ export class DatabaseStorage implements IStorage {
     for (const o of overrides) {
       if (o.isGranted) permSet.add(o.permissionName);
       else permSet.delete(o.permissionName);
+    }
+
+    // Agents never handle cash — even if another role or a custom grant would give it to them.
+    if (isAgentScoped(roleRows.map((r) => ({ name: r.roleName })))) {
+      permSet.delete("receipt:cash");
+      permSet.delete("receipt:group");
     }
 
     if (user?.email?.toLowerCase() === PLATFORM_SUPERUSER_EMAIL.toLowerCase()) {

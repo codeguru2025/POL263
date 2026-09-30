@@ -45,3 +45,31 @@ export async function manageUserError(actor: Actor, targetUserId: string): Promi
   }
   return null;
 }
+
+/** Only the platform owner may hand these out: they create tenants or let the holder grant
+ *  permissions themselves (a superuser granting write:role would create another permission-granter). */
+export const PLATFORM_OWNER_ONLY_PERMISSIONS = new Set([
+  "create:tenant", "delete:tenant", "manage:whitelabel", "write:role", "manage:permissions",
+]);
+
+/** Agents never handle cash (Augustus, 2026-09-30) — whatever roles or custom grants they hold. */
+export const CASH_PERMISSIONS = new Set(["receipt:cash", "receipt:group"]);
+
+/**
+ * Error message if `actor` may not give `targetUserId` a custom grant of `permissionName`
+ * (taking a permission away is always allowed). Used by the per-user overrides and Access Profiles.
+ */
+export async function permissionGrantError(actor: Actor, targetUserId: string, permissionName: string): Promise<string | null> {
+  const known = (await storage.getPermissions()).some((p) => p.name === permissionName);
+  if (!known) return `"${permissionName}" isn't a permission.`;
+  if (PLATFORM_OWNER_ONLY_PERMISSIONS.has(permissionName) && !actor.isPlatformOwner) {
+    return `Only the platform owner can grant "${permissionName}".`;
+  }
+  if (CASH_PERMISSIONS.has(permissionName)) {
+    const { isAgentScoped } = await import("@shared/roles");
+    if (isAgentScoped(await storage.getUserRoles(targetUserId, actor.organizationId))) {
+      return "Agents can't handle cash, so they can't be given cash or group receipting.";
+    }
+  }
+  return null;
+}

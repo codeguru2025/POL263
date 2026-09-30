@@ -122,7 +122,7 @@ import { pool, db } from "./db";
 import { notifyClientPush, dispatchNotification, buildPolicyContext, receiptEventFor, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
 import { receiptablePolicies } from "./ledger-group-receipt";
 import { registerAgentScopeGuard } from "./agent-scope-guard";
-import { roleAssignmentError, manageUserError } from "./role-assignment-guard";
+import { roleAssignmentError, manageUserError, permissionGrantError } from "./role-assignment-guard";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -2730,6 +2730,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: "isGranted (boolean) is required" });
     }
     const permissionName = req.params.permissionName as string;
+    if (isGranted) {
+      const grantError = await permissionGrantError(user, target.id, permissionName);
+      if (grantError) return res.status(400).json({ message: grantError });
+    }
     try {
       await storage.setUserPermissionOverride(target.id, permissionName, isGranted, user.organizationId);
     } catch (err: any) {
@@ -7445,6 +7449,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const preparerId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     const body = req.body as any;
     const amountsByMethod = body.amountsByMethod && typeof body.amountsByMethod === "object" ? body.amountsByMethod : { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
+    if (toCents(amountsByMethod.cash ?? 0) > 0 && isAgentScoped(await storage.getUserRoles(user.id, user.organizationId))) {
+      return res.status(403).json({ message: "Agents don't handle cash, so an agent's cash-up can't include cash. Hand cash payments to a cashier." });
+    }
     const totalAmount = sumMoney(Object.values(amountsByMethod));
     const parsed = insertCashupSchema.parse({
       organizationId: user.organizationId,
@@ -7489,6 +7496,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const hasFinance = perms.includes("write:finance");
     const body = req.body as any;
     const resolvedActorId = await resolveUserIdForOrgDatabase(user.id, user.organizationId);
+    if (body.amountsByMethod && toCents(body.amountsByMethod.cash ?? 0) > 0 && isAgentScoped(await storage.getUserRoles(user.id, user.organizationId))) {
+      return res.status(403).json({ message: "Agents don't handle cash, so an agent's cash-up can't include cash. Hand cash payments to a cashier." });
+    }
 
     if (cashup.status === "draft" && body.action === "submit") {
       if (cashup.preparedBy !== resolvedActorId) return res.status(403).json({ message: "Only the preparer can submit" });

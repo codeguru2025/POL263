@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { apiRequest, getApiBase } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -139,7 +140,17 @@ function PayStep({
   const prefilled = policy.premiumAmount ? parseFloat(policy.premiumAmount).toFixed(2) : "";
   const [amount, setAmount] = useState(prefilled);
   const [currency, setCurrency] = useState(policy.currency || "USD");
-  const [method, setMethod] = useState<PayMethod>("cash");
+  // Only offer methods this person may receipt (the server enforces the same). Agents never
+  // have receipt:cash, so they never see Cash.
+  const { permissions, isPlatformOwner } = useAuth();
+  const perms = Array.isArray(permissions) ? permissions : [];
+  const can = (p: string) => !!isPlatformOwner || perms.includes("write:finance") || perms.includes(p);
+  const allowedMethods: PayMethod[] = [
+    ...(can("receipt:cash") ? ["cash" as const] : []),
+    ...(can("receipt:transfer") ? ["bank" as const] : []),
+    ...(can("receipt:mobile") ? ["ecocash" as const, "onemoney" as const, "innbucks" as const] : []),
+  ];
+  const [method, setMethod] = useState<PayMethod>(allowedMethods[0] ?? "ecocash");
   const [phone, setPhone] = useState(policy.clientPhone || "");
   const [reference, setReference] = useState("");
   // Stable for the lifetime of this step (one policy, one attempt) so a retried/double-submitted
@@ -259,11 +270,11 @@ function PayStep({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="cash">Cash</SelectItem>
-            <SelectItem value="bank">Bank transfer</SelectItem>
-            <SelectItem value="ecocash">EcoCash</SelectItem>
-            <SelectItem value="onemoney">OneMoney</SelectItem>
-            <SelectItem value="innbucks">InnBucks</SelectItem>
+            {allowedMethods.includes("cash") && <SelectItem value="cash">Cash</SelectItem>}
+            {allowedMethods.includes("bank") && <SelectItem value="bank">Bank transfer</SelectItem>}
+            {allowedMethods.includes("ecocash") && <SelectItem value="ecocash">EcoCash</SelectItem>}
+            {allowedMethods.includes("onemoney") && <SelectItem value="onemoney">OneMoney</SelectItem>}
+            {allowedMethods.includes("innbucks") && <SelectItem value="innbucks">InnBucks</SelectItem>}
           </SelectContent>
         </Select>
       </div>

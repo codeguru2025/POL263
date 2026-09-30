@@ -4,14 +4,14 @@ const { mockStorage } = vi.hoisted(() => ({
   mockStorage: {
     getPolicy: vi.fn(), getClient: vi.fn(), isClientAccessibleByAgent: vi.fn(), getClaim: vi.fn(),
     getLead: vi.fn(), getPaymentReceiptById: vi.fn(), getGroup: vi.fn(),
-    getPermissions: vi.fn(), getRolePermissions: vi.fn(), getUserEffectivePermissions: vi.fn(),
+    getPermissions: vi.fn(), getRolePermissions: vi.fn(), getUserEffectivePermissions: vi.fn(), getUserRoles: vi.fn(),
   },
 }));
 vi.mock("../../server/storage", () => ({ storage: mockStorage }));
 vi.mock("../../server/tenant-db", () => ({ resolveOrSyncTenantUserId: async (_o: string, id: string) => id }));
 
 import { agentOwns } from "../../server/agent-scope-guard";
-import { roleAssignmentError, manageUserError } from "../../server/role-assignment-guard";
+import { roleAssignmentError, manageUserError, permissionGrantError } from "../../server/role-assignment-guard";
 
 describe("agentOwns — agents only reach their own records", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -68,5 +68,31 @@ describe("role assignment guard — no privilege escalation", () => {
   });
   it("the platform owner can do anything", async () => {
     expect(await roleAssignmentError({ ...admin, isPlatformOwner: true }, [{ id: "r-su", name: "superuser" }], "u-admin")).toBeNull();
+  });
+});
+
+describe("custom permission grants (superuser / platform owner)", () => {
+  const superuser = { id: "u-su", organizationId: "o" };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStorage.getPermissions.mockResolvedValue(
+      ["delete:receipt", "receipt:cash", "receipt:group", "write:role", "create:tenant"].map((name) => ({ name })));
+    mockStorage.getUserRoles.mockImplementation(async (id: string) => id === "u-agent" ? [{ name: "agent" }] : [{ name: "administrator" }]);
+  });
+  it("a superuser can give one admin an extra power", async () => {
+    expect(await permissionGrantError(superuser, "u-admin", "delete:receipt")).toBeNull();
+  });
+  it("agents can never be given cash", async () => {
+    expect(await permissionGrantError(superuser, "u-agent", "receipt:cash")).toMatch(/cash/);
+    expect(await permissionGrantError(superuser, "u-agent", "receipt:group")).toMatch(/cash/);
+    expect(await permissionGrantError(superuser, "u-admin", "receipt:cash")).toBeNull();
+  });
+  it("only the platform owner grants permission-granting and tenant powers", async () => {
+    expect(await permissionGrantError(superuser, "u-admin", "write:role")).toMatch(/platform owner/);
+    expect(await permissionGrantError(superuser, "u-admin", "create:tenant")).toMatch(/platform owner/);
+    expect(await permissionGrantError({ ...superuser, isPlatformOwner: true }, "u-admin", "write:role")).toBeNull();
+  });
+  it("rejects made-up permission names", async () => {
+    expect(await permissionGrantError(superuser, "u-admin", "do:anything")).toMatch(/isn't a permission/);
   });
 });

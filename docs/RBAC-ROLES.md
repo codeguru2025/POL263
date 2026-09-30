@@ -49,3 +49,21 @@ deploy. Hand edits to built-in roles are overwritten. Reviewed with Augustus on 
 - **A person can hold more than one role.** Their powers add up. An agent who is also an
   Administrator, Branch Manager, Finance Manager, Sales Team Leader or Customer Service person
   isn't limited to their own book.
+
+## Custom privileges for one person
+
+A **superuser** or the **platform owner** can give one person an extra permission, or take one
+away, on top of their role: **Users → edit the person → Permissions**. For example, one
+administrator can be allowed to delete receipts while the other administrators can't. Only that
+person gets it. **Access Profiles** (Settings menu) save a set of extra permissions under a name,
+so the same package can be applied to several people.
+
+Rules (`server/role-assignment-guard.ts`):
+- Only the platform owner can grant the powers to edit roles and permissions (`write:role`,
+  `manage:permissions`) or tenant-level powers. Otherwise a superuser could create more people
+  who hand out permissions.
+- **Agents never handle cash.** They can't be given cash or group receipting, not by role, custom
+  grant or Access Profile. An agent's cash-up can't include cash, and cash isn't offered on their
+  receipt screens. This holds even if another role or a custom grant would give it.
+- A custom grant counts as part of that person's powers. So once someone has an extra power, only
+  people with at least the same powers can reset their password or change their roles.

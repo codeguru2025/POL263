@@ -358,7 +358,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
           items: filterNav([
             { href: "/staff/finance?tab=payments", label: "Receipt a Payment", icon: Receipt, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=receipting-by-staff", label: "Receipting by Staff", icon: Users, permission: "read:finance", agentHidden: true },
-            { href: "/staff/finance?tab=paynow", label: "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
+            { href: "/staff/finance?tab=paynow", label: isAgent ? "Mobile Payments" : "Mobile & Cash", icon: Smartphone, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=cashups", label: "Cash-up", icon: Wallet2, permissions: ["read:finance", "read:commission"] },
             { href: "/staff/finance?tab=group-receipt", label: "Group Receipt", icon: Layers, permission: "write:finance", agentHidden: true },
             { href: "/staff/finance?tab=banking", label: "Banking & Cash", icon: Landmark, permission: "read:finance", agentHidden: true },
