@@ -10,6 +10,51 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Income Statement left out most costs; trend chart left out society income
+
+**Symptom:** Falakhe's Sep 2026 Income Statement showed about USD 14,814 surplus against only
+USD 264 of expenses. Missing entirely:
+- POL263 fees: USD 349.24 + ZAR 565.38
+- agent commission earned: USD 171.40
+- approved payroll, petty cash spending, and cash-in-lieu claims (all zero this month)
+
+The executive report's income trend also left out society lump sums: USD 6,148 + ZAR 11,150 that
+month.
+
+**Root causes:**
+- Expenses were only `payment_disbursements` plus commission entries with `status='paid'`. Nothing
+  ever marks commission paid, so that was always 0, and it was dated by `created_at`, the earn
+  date.
+- Platform fees, payroll and petty cash were never queried.
+- Claims were only in the Trial Balance (`claimsInPeriod`), so the statement and the TB disagreed.
+- `buildIncomeTimeSeries` had its own four queries and had never been given society lump sums.
+- Also: UTC day cut-offs; unapproved or rejected premium receipts would have counted; the branch
+  filter didn't apply to lump sums.
+
+**Fix:** `server/financial-statements.ts`.
+- New queries: `queryCommissionsEarned` (agent_id not null; walk-in is company money),
+  `queryPlatformFees`, `queryPayroll` (runs approved, processed or paid), `queryPettyCash` (type
+  disbursement), `queryClaimsPaid` (by decided_at).
+- All periods use `dayRangeForOrg`, and receipts must be approved where approval applies.
+- Lump sums and payroll aren't kept per branch, so they are left out of a one-branch statement and
+  the statement says so (`excludedForBranch`).
+- The rate's date is shown (`fxRatesSetOn`).
+- `buildIncomeTimeSeries` follows the same definitions.
+- `general-ledger.ts`: the Trial Balance takes claims from the statement's `claims` line, so they
+  aren't counted twice.
+
+**Verified:** Falakhe Sep 2026 (read-only).
+- Expenses are now USD 784.64 + ZAR 565.38, and the net is USD 14,264.84 all together.
+- The trend series equals the statement.
+- `tests/unit/financial-statements.test.ts` was updated for the new sources.
+
+**Lesson for next time:** when two functions claim "same definitions as X" (statement vs. time
+series), they drift. Check both whenever one changes. And a cost line that depends on a status
+nobody sets (commission `paid`) is silently always zero; check the status is actually used before
+filtering on it.
+
+---
+
 ## 2026-09-30 — Activations / Conversions / Reinstatements: three overlapping, inflated reports
 
 **Symptom:**

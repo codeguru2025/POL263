@@ -2,18 +2,22 @@
  * Income statement & cash-flow statement (cash basis), multi-currency with a
  * consolidated USD total.
  *
- * Income  = issued premium + service receipts (cash received).
- * Expenses = payment_disbursements (single cash-out ledger, covering requisitions
- *            and expenditures) + paid commission ledger entries.
+ * Income  = premium receipts (issued, and approved where approval was needed) + service
+ *           receipts + society lump sums.
+ * Expenses (income statement) = payment_disbursements (requisitions and expenditures) + petty
+ *           cash spending + agent commission earned + POL263 platform fees + approved payroll +
+ *           cash-in-lieu claims. Commission and platform fees are recognised when incurred, not
+ *           when paid out; the cash-flow statement still counts commission only when paid.
+ * All periods are tenant-local days (dayRangeForOrg), never UTC midnight.
  *
  * Amounts are kept per-currency (no implicit conversion). The consolidated block
  * converts to USD using fx_rates; currencies without a rate are listed as
  * unconvertible and excluded from that total.
  */
-import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
+import { and, eq, gte, lte, lt, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { todayForOrg } from "./date-utils";
+import { todayForOrg, dayRangeForOrg, getOrgTimezone } from "./date-utils";
 import { roundMoney, subMoney } from "@shared/money";
 import {
   paymentReceipts,
@@ -76,13 +80,25 @@ const round2 = (m: AmountMap): AmountMap =>
 
 // ─── Shared query helpers ──────────────────────────────────────────────────
 
+/** The period as tenant-local days: [start, endExclusive) — never UTC midnight. */
+async function periodBounds(orgId: string, from: string, to: string): Promise<{ start: Date; end: Date }> {
+  const { start, endExclusive } = await dayRangeForOrg(orgId, from, to);
+  return { start: start!, end: endExclusive! };
+}
+
+/** A receipt counts once it is issued and, if it needed approval, approved — a receipt still
+ *  waiting for approval (or rejected) is not money the business has. */
+const validPaymentReceipt = sql`(${paymentReceipts.approvalStatus} IS NULL OR ${paymentReceipts.approvalStatus} = 'approved')`;
+
 /** Premium + service receipts in the period, grouped by currency and payment channel. */
 async function queryReceipts(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
   const prConds: any[] = [
     eq(paymentReceipts.organizationId, orgId),
     eq(paymentReceipts.status, "issued"),
-    gte(paymentReceipts.issuedAt, fromTs(from)),
-    lte(paymentReceipts.issuedAt, toTs(to)),
+    validPaymentReceipt,
+    gte(paymentReceipts.issuedAt, start),
+    lt(paymentReceipts.issuedAt, end),
   ];
   if (branchId) prConds.push(eq(paymentReceipts.branchId, branchId));
 
@@ -101,8 +117,8 @@ async function queryReceipts(tdb: any, orgId: string, from: string, to: string, 
   const srConds: any[] = [
     eq(serviceReceipts.organizationId, orgId),
     eq(serviceReceipts.status, "issued"),
-    gte(serviceReceipts.issuedAt, fromTs(from)),
-    lte(serviceReceipts.issuedAt, toTs(to)),
+    gte(serviceReceipts.issuedAt, start),
+    lt(serviceReceipts.issuedAt, end),
   ];
   if (branchId) srConds.push(eq(serviceReceipts.branchId, branchId));
   const serviceRows = await tdb
@@ -138,8 +154,9 @@ async function queryDisbursements(tdb: any, orgId: string, from: string, to: str
     .groupBy(paymentDisbursements.entityType, paymentDisbursements.entityId, paymentDisbursements.currency);
 }
 
-/** Commission ledger entries with status='paid' in the period. */
+/** Commission ledger entries marked paid in the period — cash actually paid to agents (cash flow). */
 async function queryCommissions(tdb: any, orgId: string, from: string, to: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
   return tdb
     .select({
       currency: commissionLedgerEntries.currency,
@@ -149,41 +166,115 @@ async function queryCommissions(tdb: any, orgId: string, from: string, to: strin
     .where(and(
       eq(commissionLedgerEntries.organizationId, orgId),
       eq(commissionLedgerEntries.status, "paid"),
-      sql`${commissionLedgerEntries.createdAt} >= ${fromTs(from)}`,
-      sql`${commissionLedgerEntries.createdAt} <= ${toTs(to)}`,
+      gte(commissionLedgerEntries.createdAt, start),
+      lt(commissionLedgerEntries.createdAt, end),
     ))
     .groupBy(commissionLedgerEntries.currency);
 }
 
+const rowsOf = <T>(r: any): T[] => (r?.rows ?? r) as T[];
+
+/** Commission earned by agents in the period (clawbacks net off), whether or not it has been paid
+ *  out yet — the cost is incurred when the premium comes in. Walk-in commission (agent_id NULL)
+ *  goes to the company's own account and is paid to no one, so it is not a cost. */
+async function queryCommissionsEarned(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
+  return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
+    SELECT e.currency, COALESCE(SUM(e.amount), 0)::text AS total
+    FROM commission_ledger_entries e
+    LEFT JOIN policies p ON p.id = e.policy_id
+    WHERE e.organization_id = ${orgId} AND e.agent_id IS NOT NULL
+      AND e.created_at >= ${start} AND e.created_at < ${end}
+      ${branchId ? sql`AND p.branch_id = ${branchId}` : sql``}
+    GROUP BY e.currency`));
+}
+
+/** POL263's per-payment platform fees charged in the period (settled or not — they're owed). */
+async function queryPlatformFees(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
+  return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
+    SELECT f.currency, COALESCE(SUM(f.amount), 0)::text AS total
+    FROM platform_receivables f
+    LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
+    LEFT JOIN policies p ON p.id = t.policy_id
+    LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
+    WHERE f.organization_id = ${orgId}
+      AND f.created_at >= ${start} AND f.created_at < ${end}
+      ${branchId ? sql`AND COALESCE(p.branch_id, s.branch_id) = ${branchId}` : sql``}
+    GROUP BY f.currency`));
+}
+
+/** Approved payroll whose pay period ends in the range (gross pay). Payroll isn't kept per branch
+ *  or per currency, so it is left out of a single-branch statement. */
+async function queryPayroll(tdb: any, orgId: string, from: string, to: string) {
+  return rowsOf<{ total: string }>(await tdb.execute(sql`
+    SELECT COALESCE(SUM(total_gross), 0)::text AS total
+    FROM payroll_runs
+    WHERE organization_id = ${orgId} AND status IN ('approved', 'processed', 'paid')
+      AND period_end >= ${from}::date AND period_end <= ${to}::date`));
+}
+
+/** Petty cash spent in the period, by category. Top-ups and adjustments are movements of the
+ *  float, not spending. */
+async function queryPettyCash(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  return rowsOf<{ category: string | null; currency: string; total: string }>(await tdb.execute(sql`
+    SELECT t.category, f.currency, COALESCE(SUM(t.amount), 0)::text AS total
+    FROM petty_cash_transactions t JOIN petty_cash_floats f ON f.id = t.float_id
+    WHERE t.organization_id = ${orgId} AND t.type = 'disbursement'
+      AND t.transaction_date >= ${from}::date AND t.transaction_date <= ${to}::date
+      ${branchId ? sql`AND f.branch_id = ${branchId}` : sql``}
+    GROUP BY t.category, f.currency`));
+}
+
+/** Cash-in-lieu claims decided (approved or later) in the period. */
+async function queryClaimsPaid(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  const { start, end } = await periodBounds(orgId, from, to);
+  return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
+    SELECT c.currency, COALESCE(SUM(c.cash_in_lieu_amount), 0)::text AS total
+    FROM claims c LEFT JOIN policies p ON p.id = c.policy_id
+    WHERE c.organization_id = ${orgId}
+      AND c.status IN ('approved', 'payable', 'paid', 'settled', 'completed', 'closed')
+      AND COALESCE(c.decided_at, c.created_at) >= ${start} AND COALESCE(c.decided_at, c.created_at) < ${end}
+      AND COALESCE(c.cash_in_lieu_amount, 0) <> 0
+      ${branchId ? sql`AND COALESCE(c.branch_id, p.branch_id) = ${branchId}` : sql``}
+    GROUP BY c.currency`));
+}
+
 // ─── Legacy group receipts (no policy — cash subscriptions) ───────────────
 
-async function queryLegacyGroupReceipts(tdb: any, orgId: string, from: string, to: string) {
-  try {
-    const rows = await tdb.execute(
-      sql`SELECT currency, SUM(amount)::text AS total
-          FROM legacy_group_receipts
-          WHERE organization_id = ${orgId}
-            AND payment_date >= ${from}::date
-            AND payment_date <= ${to}::date
-          GROUP BY currency`
-    );
-    return (rows.rows ?? rows) as { currency: string; total: string }[];
-  } catch {
-    return [];
-  }
+/** Society lump sums. Groups aren't kept per branch, so a single-branch statement leaves them out
+ *  (and says so) rather than counting every branch's society money against one branch. */
+async function queryLegacyGroupReceipts(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
+  if (branchId) return [];
+  return rowsOf<{ currency: string; total: string }>(await tdb.execute(
+    sql`SELECT currency, SUM(amount)::text AS total
+        FROM legacy_group_receipts
+        WHERE organization_id = ${orgId}
+          AND payment_date >= ${from}::date
+          AND payment_date <= ${to}::date
+        GROUP BY currency`,
+  ));
 }
 
 // ─── Income Statement ──────────────────────────────────────────────────────
 
+export type ExpenseSource = "requisition" | "expenditure" | "commission" | "platform_fee" | "payroll" | "petty_cash" | "claims";
+
 export async function buildIncomeStatement(orgId: string, params: StatementParams) {
   const tdb = await getDbForOrg(orgId);
   const { from, to, branchId } = params;
-  const fx = await fxMapFor(orgId);
+  const [fx, fxRates] = await Promise.all([fxMapFor(orgId), storage.getFxRates(orgId)]);
 
-  const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
-  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to);
-  const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
-  const commRows = await queryCommissions(tdb, orgId, from, to);
+  const [{ premiumRows, serviceRows }, legacyRows, disbRows, commRows, feeRows, payrollRows, pettyRows, claimRows] = await Promise.all([
+    queryReceipts(tdb, orgId, from, to, branchId),
+    queryLegacyGroupReceipts(tdb, orgId, from, to, branchId),
+    queryDisbursements(tdb, orgId, from, to, branchId),
+    queryCommissionsEarned(tdb, orgId, from, to, branchId),
+    queryPlatformFees(tdb, orgId, from, to, branchId),
+    branchId ? Promise.resolve([] as { total: string }[]) : queryPayroll(tdb, orgId, from, to),
+    queryPettyCash(tdb, orgId, from, to, branchId),
+    queryClaimsPaid(tdb, orgId, from, to, branchId),
+  ]);
 
   // ── Income ──
   const premiumIndividual: AmountMap = {};
@@ -198,11 +289,8 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   for (const r of legacyRows) add(legacyGroupIncome, r.currency, parseFloat(r.total));
 
   // ── Expenses — look up entity categories in bulk ──
-  // Collect unique entity IDs per type so we can join category labels.
   const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
   const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
-
-  // Fetch categories for requisitions and expenditures in one query each.
   const reqCategoryMap: Record<string, string> = {};
   if (reqIds.length) {
     const rows = await tdb.select({ id: requisitions.id, category: requisitions.category })
@@ -216,9 +304,10 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     for (const r of rows) expCategoryMap[r.id] = r.category || "Uncategorised";
   }
 
-  const expenseLines: { label: string; source: "requisition" | "expenditure" | "commission"; amounts: AmountMap }[] = [];
-  const expenseByKey: Record<string, { label: string; source: "requisition" | "expenditure" | "commission"; amounts: AmountMap }> = {};
-  const pushExpense = (label: string, source: "requisition" | "expenditure" | "commission", currency: string, amount: number) => {
+  const expenseLines: { label: string; source: ExpenseSource; amounts: AmountMap }[] = [];
+  const expenseByKey: Record<string, { label: string; source: ExpenseSource; amounts: AmountMap }> = {};
+  const pushExpense = (label: string, source: ExpenseSource, currency: string, amount: number) => {
+    if (!amount) return;
     const key = `${source}:${label}`;
     if (!expenseByKey[key]) {
       expenseByKey[key] = { label, source, amounts: {} };
@@ -232,9 +321,11 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     const cat = type === "requisition" ? (reqCategoryMap[d.entityId] || "Uncategorised") : (expCategoryMap[d.entityId] || "Uncategorised");
     pushExpense(cat, type, d.currency, parseFloat(d.total));
   }
-  for (const r of commRows) {
-    pushExpense("Agent commissions", "commission", r.currency, parseFloat(r.total));
-  }
+  for (const r of pettyRows) pushExpense(`Petty cash — ${r.category || "Uncategorised"}`, "petty_cash", r.currency, parseFloat(r.total));
+  for (const r of commRows) pushExpense("Agent commissions (earned)", "commission", r.currency, parseFloat(r.total));
+  for (const r of feeRows) pushExpense("POL263 fees", "platform_fee", r.currency, parseFloat(r.total));
+  for (const r of payrollRows) pushExpense("Salaries and wages (approved payroll)", "payroll", "USD", parseFloat(r.total));
+  for (const r of claimRows) pushExpense("Claims paid (cash in lieu)", "claims", r.currency, parseFloat(r.total));
 
   // ── Totals ──
   const incomeTotal: AmountMap = {};
@@ -252,6 +343,10 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
 
   return {
     from, to, branchId: branchId ?? null, currencies, fxRates: fx,
+    /** When each rate was last set, so a stale rate is visible on the statement. */
+    fxRatesSetOn: Object.fromEntries(fxRates.map((r: any) => [String(r.currency).toUpperCase(), r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : null])),
+    /** A single-branch statement can't include what isn't kept per branch. */
+    excludedForBranch: branchId ? ["Society lump sums", "Payroll"] : [],
     income: {
       premiumIndividual: round2(premiumIndividual),
       premiumGroup: round2(premiumGroup),
@@ -282,11 +377,10 @@ export interface IncomeTimeSeriesPoint {
 }
 
 /**
- * Same income/expense definitions as buildIncomeStatement (issued premium + service receipts
- * minus paid disbursements + paid commissions), bucketed over time for trend charts — the
- * executive report needs a series, not just one period total. One grouped SQL query per source
- * table (date_trunc bucket), not N calls to buildIncomeStatement per bucket, to keep this cheap
- * over long ranges.
+ * Same income/expense definitions as buildIncomeStatement, bucketed over time (tenant-local
+ * days) for trend charts — the executive report needs a series, not just one period total. One
+ * grouped SQL query per source table, not N calls to buildIncomeStatement per bucket, to keep
+ * this cheap over long ranges.
  */
 export async function buildIncomeTimeSeries(
   orgId: string,
@@ -295,55 +389,50 @@ export async function buildIncomeTimeSeries(
   const { from, to, branchId } = params;
   const bucket = params.bucket ?? (daysBetweenInclusive(from, to) > 45 ? "week" : "day");
   const tdb = await getDbForOrg(orgId);
+  const { start, end } = await periodBounds(orgId, from, to);
+  const tz = await getOrgTimezone(orgId);
+  const local = (col: any) => sql`date_trunc(${bucket}, ${col} AT TIME ZONE ${tz})::date`;
+  const onDate = (col: any) => sql`date_trunc(${bucket}, ${col}::timestamp)::date`;
+  const br = (col: any) => (branchId ? sql`AND ${col} = ${branchId}` : sql``);
 
-  const branchClausePr = branchId ? sql`AND branch_id = ${branchId}` : sql``;
+  const q = (s: any) => tdb.execute(s).then(rowsOf<{ bucket: string; currency: string; total: string }>);
+  const [premium, service, lump, disb, comm, fees, payroll, petty, claimRows] = await Promise.all([
+    q(sql`SELECT ${local(sql`issued_at`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM payment_receipts
+      WHERE organization_id = ${orgId} AND status = 'issued' AND (approval_status IS NULL OR approval_status = 'approved')
+        AND issued_at >= ${start} AND issued_at < ${end} ${br(sql`branch_id`)} GROUP BY 1, 2`),
+    q(sql`SELECT ${local(sql`issued_at`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM service_receipts
+      WHERE organization_id = ${orgId} AND status = 'issued' AND issued_at >= ${start} AND issued_at < ${end} ${br(sql`branch_id`)} GROUP BY 1, 2`),
+    branchId ? Promise.resolve([]) : q(sql`SELECT ${onDate(sql`payment_date`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM legacy_group_receipts
+      WHERE organization_id = ${orgId} AND payment_date >= ${from}::date AND payment_date <= ${to}::date GROUP BY 1, 2`),
+    q(sql`SELECT ${onDate(sql`paid_date`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM payment_disbursements
+      WHERE organization_id = ${orgId} AND paid_date >= ${from} AND paid_date <= ${to} ${br(sql`branch_id`)} GROUP BY 1, 2`),
+    q(sql`SELECT ${local(sql`e.created_at`)} AS bucket, e.currency, COALESCE(SUM(e.amount), 0) AS total
+      FROM commission_ledger_entries e LEFT JOIN policies p ON p.id = e.policy_id
+      WHERE e.organization_id = ${orgId} AND e.agent_id IS NOT NULL AND e.created_at >= ${start} AND e.created_at < ${end} ${br(sql`p.branch_id`)} GROUP BY 1, 2`),
+    q(sql`SELECT ${local(sql`f.created_at`)} AS bucket, f.currency, COALESCE(SUM(f.amount), 0) AS total
+      FROM platform_receivables f LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
+        LEFT JOIN policies p ON p.id = t.policy_id LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
+      WHERE f.organization_id = ${orgId} AND f.created_at >= ${start} AND f.created_at < ${end} ${br(sql`COALESCE(p.branch_id, s.branch_id)`)} GROUP BY 1, 2`),
+    branchId ? Promise.resolve([]) : q(sql`SELECT ${onDate(sql`period_end`)} AS bucket, 'USD' AS currency, COALESCE(SUM(total_gross), 0) AS total FROM payroll_runs
+      WHERE organization_id = ${orgId} AND status IN ('approved', 'processed', 'paid') AND period_end >= ${from}::date AND period_end <= ${to}::date GROUP BY 1, 2`),
+    q(sql`SELECT ${onDate(sql`t.transaction_date`)} AS bucket, f.currency, COALESCE(SUM(t.amount), 0) AS total
+      FROM petty_cash_transactions t JOIN petty_cash_floats f ON f.id = t.float_id
+      WHERE t.organization_id = ${orgId} AND t.type = 'disbursement' AND t.transaction_date >= ${from}::date AND t.transaction_date <= ${to}::date ${br(sql`f.branch_id`)} GROUP BY 1, 2`),
+    q(sql`SELECT ${local(sql`COALESCE(c.decided_at, c.created_at)`)} AS bucket, c.currency, COALESCE(SUM(c.cash_in_lieu_amount), 0) AS total
+      FROM claims c LEFT JOIN policies p ON p.id = c.policy_id
+      WHERE c.organization_id = ${orgId} AND c.status IN ('approved', 'payable', 'paid', 'settled', 'completed', 'closed')
+        AND COALESCE(c.decided_at, c.created_at) >= ${start} AND COALESCE(c.decided_at, c.created_at) < ${end}
+        ${br(sql`COALESCE(c.branch_id, p.branch_id)`)} GROUP BY 1, 2`),
+  ]);
 
-  const premiumRows = await tdb.execute(sql`
-    SELECT date_trunc(${bucket}, issued_at)::date AS bucket, currency,
-           COALESCE(SUM(amount::numeric), 0) AS total
-    FROM payment_receipts
-    WHERE organization_id = ${orgId} AND status = 'issued'
-      AND issued_at >= ${fromTs(from)} AND issued_at <= ${toTs(to)}
-      ${branchClausePr}
-    GROUP BY 1, 2
-  `);
-  const serviceRows = await tdb.execute(sql`
-    SELECT date_trunc(${bucket}, issued_at)::date AS bucket, currency,
-           COALESCE(SUM(amount::numeric), 0) AS total
-    FROM service_receipts
-    WHERE organization_id = ${orgId} AND status = 'issued'
-      AND issued_at >= ${fromTs(from)} AND issued_at <= ${toTs(to)}
-      ${branchClausePr}
-    GROUP BY 1, 2
-  `);
-  const disbRows = await tdb.execute(sql`
-    SELECT date_trunc(${bucket}, paid_date::timestamp)::date AS bucket, currency,
-           COALESCE(SUM(amount::numeric), 0) AS total
-    FROM payment_disbursements
-    WHERE organization_id = ${orgId}
-      AND paid_date >= ${from} AND paid_date <= ${to}
-      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-    GROUP BY 1, 2
-  `);
-  const commRows = await tdb.execute(sql`
-    SELECT date_trunc(${bucket}, created_at)::date AS bucket, currency,
-           COALESCE(SUM(amount::numeric), 0) AS total
-    FROM commission_ledger_entries
-    WHERE organization_id = ${orgId} AND status = 'paid'
-      AND created_at >= ${fromTs(from)} AND created_at <= ${toTs(to)}
-    GROUP BY 1, 2
-  `);
-
-  const rowsOf = (r: any): { bucket: string; currency: string; total: string }[] => r.rows ?? r;
   const byBucket = new Map<string, { income: AmountMap; expenses: AmountMap }>();
-  const ensure = (b: string) => {
-    if (!byBucket.has(b)) byBucket.set(b, { income: {}, expenses: {} });
-    return byBucket.get(b)!;
+  const ensure = (b: any) => {
+    const key = typeof b === "string" ? b.slice(0, 10) : new Date(b).toISOString().slice(0, 10);
+    if (!byBucket.has(key)) byBucket.set(key, { income: {}, expenses: {} });
+    return byBucket.get(key)!;
   };
-  for (const r of rowsOf(premiumRows)) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
-  for (const r of rowsOf(serviceRows)) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
-  for (const r of rowsOf(disbRows)) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
-  for (const r of rowsOf(commRows)) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
+  for (const r of [...premium, ...service, ...lump]) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
+  for (const r of [...disb, ...comm, ...fees, ...payroll, ...petty, ...claimRows]) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
 
   const points: IncomeTimeSeriesPoint[] = Array.from(byBucket.entries())
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -381,7 +470,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   const fx = await fxMapFor(orgId);
 
   const { premiumRows, serviceRows } = await queryReceipts(tdb, orgId, from, to, branchId);
-  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to);
+  const legacyRows = await queryLegacyGroupReceipts(tdb, orgId, from, to, branchId);
   const disbRows = await queryDisbursements(tdb, orgId, from, to, branchId);
   const commRows = await queryCommissions(tdb, orgId, from, to);
 

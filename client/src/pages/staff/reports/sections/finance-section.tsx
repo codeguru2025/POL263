@@ -358,7 +358,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="income-statement">
         <CardSection
           title="Income Statement"
-          description="Cash basis — income from issued receipts (premium individual/group + cash services) less paid requisitions and expenditures, for the selected period. Per-currency, with a consolidated USD total."
+          description="Money in (premiums, funeral services and society lump sums) less the cost of running the business: spending, petty cash, agent commission earned, POL263 fees, approved payroll and cash claims. Per currency, with a USD total."
           icon={DollarSign}
           flush
           headerRight={
@@ -386,6 +386,15 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                 {cu.unconvertible?.length > 0 && (
                   <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">No FX rate set for {cu.unconvertible.join(", ")} — excluded from the consolidated USD total. Set rates in Settings → FX Rates.</p>
                 )}
+                {Object.entries(is.fxRates ?? {}).filter(([c]) => c !== "USD" && curs.includes(c)).length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    USD total uses {Object.entries(is.fxRates ?? {}).filter(([c]) => c !== "USD" && curs.includes(c)).map(([c, r]: [string, any]) =>
+                      `${c} ${Number(r) > 0 ? `${(1 / Number(r)).toLocaleString(undefined, { maximumFractionDigits: 2 })} = USD 1` : r}${is.fxRatesSetOn?.[c] ? ` (set ${new Date(is.fxRatesSetOn[c] + "T00:00:00").toLocaleDateString()})` : ""}`).join(" · ")}. Update it in Settings → FX Rates.
+                  </p>
+                )}
+                {is.excludedForBranch?.length > 0 && (
+                  <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">One branch selected: {is.excludedForBranch.join(" and ")} aren't recorded by branch, so they're not in this statement. Clear the branch filter to include them.</p>
+                )}
                 <div className="overflow-x-auto">
                   <DataTable containerClassName="border rounded-md min-w-[520px]">
                     <TableHeader className={dataTableStickyHeaderClass}>
@@ -397,13 +406,13 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                       <TableRow><TableCell>Premium — Group</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.premiumGroup, c)}</TableCell>)}</TableRow>
                       <TableRow><TableCell>Cash services</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.cashServices, c)}</TableCell>)}</TableRow>
                       {Object.keys(is.income.legacyGroupIncome ?? {}).some((c) => (is.income.legacyGroupIncome[c] || 0) !== 0) && (
-                        <TableRow><TableCell>Legacy group receipts</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.legacyGroupIncome, c)}</TableCell>)}</TableRow>
+                        <TableRow><TableCell>Society lump sums</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.legacyGroupIncome, c)}</TableCell>)}</TableRow>
                       )}
                       <TableRow className="font-semibold border-t"><TableCell>Total income</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.income.total, c)}</TableCell>)}</TableRow>
                       <TableRow className="bg-muted/30"><TableCell className="font-semibold" colSpan={curs.length + 1}>Expenses</TableCell></TableRow>
                       {is.expenses.lines.length === 0 && <TableRow><TableCell className="text-muted-foreground text-sm" colSpan={curs.length + 1}>No expenses in period</TableCell></TableRow>}
                       {is.expenses.lines.map((l: any, i: number) => (
-                        <TableRow key={i}><TableCell>{l.label} <span className="text-[10px] text-muted-foreground">({l.source})</span></TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(l.amounts, c)}</TableCell>)}</TableRow>
+                        <TableRow key={i}><TableCell>{l.label}{(l.source === "requisition" || l.source === "expenditure") && <span className="text-[10px] text-muted-foreground"> ({l.source})</span>}</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(l.amounts, c)}</TableCell>)}</TableRow>
                       ))}
                       <TableRow className="font-semibold border-t"><TableCell>Total expenses</TableCell>{curs.map((c) => <TableCell key={c} className="text-right tabular-nums">{money(is.expenses.total, c)}</TableCell>)}</TableRow>
                       <TableRow className="font-bold border-t-2"><TableCell>Net surplus / (deficit)</TableCell>{curs.map((c) => <TableCell key={c} className={`text-right tabular-nums ${Number(is.net?.[c] || 0) >= 0 ? "text-emerald-600" : "text-destructive"}`}>{money(is.net, c)}</TableCell>)}</TableRow>

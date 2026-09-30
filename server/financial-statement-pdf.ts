@@ -194,7 +194,7 @@ export function renderIncomeStatementBody(ctx: DocContext, is: any) {
   kv(ctx, "Individual premiums", currencyLines(is.income.premiumIndividual));
   kv(ctx, "Group premiums", currencyLines(is.income.premiumGroup));
   kv(ctx, "Cash services", currencyLines(is.income.cashServices));
-  kv(ctx, "Legacy group receipts", currencyLines(is.income.legacyGroupIncome));
+  kv(ctx, "Society lump sums", currencyLines(is.income.legacyGroupIncome));
   kv(ctx, "Total income", currencyLines(is.income.total), C_INCOME);
 
   sectionBand(ctx, "Expenses");

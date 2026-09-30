@@ -89,28 +89,9 @@ export interface TrialBalanceResult {
   note: string;
 }
 
-/** Claims and benefits paid/approved in the period (cash-in-lieu), per currency. */
-async function claimsInPeriod(orgId: string, from: string, to: string): Promise<AmountMap> {
-  const tdb = await getDbForOrg(orgId);
-  const rows = await tdb
-    .select({ currency: claims.currency, total: sql<string>`COALESCE(SUM(${claims.cashInLieuAmount}::numeric), 0)` })
-    .from(claims)
-    .where(and(
-      eq(claims.organizationId, orgId),
-      inArray(claims.status, ["approved", "paid", "settled", "closed"]),
-      gte(claims.createdAt, new Date(from + "T00:00:00.000Z")),
-      lte(claims.createdAt, new Date(to + "T23:59:59.999Z")),
-    ))
-    .groupBy(claims.currency);
-  const out: AmountMap = {};
-  for (const r of rows) { const v = parseFloat(r.total); if (Math.abs(v) > 0.004) add(out, r.currency, v); }
-  return out;
-}
-
 export async function buildTrialBalance(orgId: string, params: { from: string; to: string; branchId?: string }): Promise<TrialBalanceResult> {
   const { from, to, branchId } = params;
   const is = await buildIncomeStatement(orgId, { from, to, branchId });
-  const claimsPaid = await claimsInPeriod(orgId, from, to);
 
   const rows: TrialBalanceRow[] = [];
   const cr = (code: string, m: AmountMap) => {
@@ -130,11 +111,12 @@ export async function buildTrialBalance(orgId: string, params: { from: string; t
   cr("4300", is.income.cashServices);
   cr("4400", is.income.legacyGroupIncome);
 
-  // Expenses — debits. Commission lines vs operating lines are tagged by source on the income statement.
+  // Expenses — debits, by the source each income-statement line is tagged with.
+  const claimsPaid: AmountMap = {};
   const commission: AmountMap = {};
   const operating: AmountMap = {};
   for (const line of is.expenses.lines) {
-    const target = line.source === "commission" ? commission : operating;
+    const target = line.source === "claims" ? claimsPaid : line.source === "commission" ? commission : operating;
     for (const [c, v] of Object.entries(line.amounts)) add(target, c, v);
   }
   dr("5100", claimsPaid);
@@ -145,7 +127,6 @@ export async function buildTrialBalance(orgId: string, params: { from: string; t
   const netCash: AmountMap = {};
   for (const [c, v] of Object.entries(is.income.total)) add(netCash, c, v);
   for (const [c, v] of Object.entries(is.expenses.total)) add(netCash, c, -v);
-  for (const [c, v] of Object.entries(claimsPaid)) add(netCash, c, -v);
   // netCash > 0 → cash went up → debit 1100; < 0 → credit.
   const cashDr: AmountMap = {}, cashCr: AmountMap = {};
   for (const [c, v] of Object.entries(round2(netCash))) {
