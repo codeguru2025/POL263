@@ -10,6 +10,44 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Activations / Conversions / Reinstatements: three overlapping, inflated reports
+
+**Symptom:**
+- Activations showed 255 for Sep 2026. Only 32 were new policies making their first payment.
+- Conversions showed 176, including 144 legacy captures.
+- Reinstatements repeated 5 rows that Activations already contained.
+- All three used UTC day cut-offs, included deleted policies, and stopped silently at 1,000 rows.
+
+**Root cause:** each report was a raw `policy_status_history` filter (`to_status='active'`,
+optionally by `from_status`). Nothing interpreted what the move meant, so these all counted the
+same:
+- a legacy policy auto-activated on capture
+- a late payer leaving grace
+- a real first premium
+
+**Fix:**
+- New pure `server/activations-report.ts` with `classifyActivation` and `summarizeActivations`.
+  The types are first payment, legacy, back from grace, reinstated, reactivated and correction.
+- `storage.getActivationsReport` replaces the three `get*History` functions. It uses local dates,
+  leaves out deleted policies, adds agent, product, premium and group, and matches each event to
+  its triggering receipt (or the group's lump-sum receipt).
+- `/api/reports/activations` returns `{ rows, summary }`.
+- The old endpoints and exports became filtered views of the same data.
+- UI `reports/sections/activations-panel.tsx`: totals by type and filter buttons. The Conversions
+  and Reinstatements tabs were removed, and their old links redirect to Activations pre-filtered
+  (`legacyActivationsTabType`).
+
+**Verified:** Falakhe Sep 2026, read-only.
+- 255 = 32 first payments + 144 legacy + 73 back from grace + 5 reinstated + 1 correction.
+- Every payment-driven row matched a receipt.
+- New `tests/unit/activations-report.test.ts`.
+
+**Lesson for next time:** a status-history row says *that* something changed, not *why*. Any
+report built on `policy_status_history` must classify each transition (from what, legacy or not)
+before counting it, or legacy data capture and routine late payments swamp the real events.
+
+---
+
 ## 2026-09-30 — New joinings: 5x over-count, activation codes in exports, per-agent summaries all "Unknown"
 
 **Symptoms:**

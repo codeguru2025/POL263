@@ -59,6 +59,7 @@ import { summarizePolicyOverview } from "./policy-overview";
 import { buildDueList, buildGraceList, summarizeGroups } from "./premium-due-list";
 import { buildLapsedList } from "./lapsed-report";
 import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
+import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14800,23 +14801,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
+  // Activations, conversions and reinstatements are one report (server/activations-report.ts):
+  // the old Conversions and Reinstatements endpoints are kept as filtered views of it.
   app.get("/api/reports/reinstatements", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const list = await storage.getReinstatementHistory(user.organizationId, filters);
-    return res.json(list);
+    const rows = await storage.getActivationsReport(user.organizationId, filters, REPORT_EXPORT_MAX_ROWS);
+    return res.json(rows.filter((r) => r.type === "reinstated"));
   });
 
   app.get("/api/reports/conversions", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getConversionHistory(user.organizationId, filters));
+    const rows = await storage.getActivationsReport(user.organizationId, filters, REPORT_EXPORT_MAX_ROWS);
+    return res.json(rows.filter((r) => r.type === "first_payment"));
   });
 
   app.get("/api/reports/activations", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getActivationHistory(user.organizationId, filters));
+    const rows = await storage.getActivationsReport(user.organizationId, filters, REPORT_EXPORT_MAX_ROWS);
+    return res.json({ rows, summary: summarizeActivations(rows), truncated: rows.length >= REPORT_EXPORT_MAX_ROWS });
   });
   app.get("/api/reports/active-policies", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
@@ -15689,22 +15694,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
           break;
         }
-        case "reinstatements": {
-          const reinstatements = await storage.getReinstatementHistory(user.organizationId, reportFilters);
-          headers = ["Policy Number", "Client", "Previous Status", "Reinstated At", "Reason", "Current Status"];
-          rows = reinstatements.map((r: any) => [r.policyNumber, r.clientName, r.fromStatus || "", r.reinstatedAt, r.reason || "", r.currentStatus]);
-          break;
-        }
-        case "conversions": {
-          const conversions = await storage.getConversionHistory(user.organizationId, reportFilters);
-          headers = ["Policy Number", "Client", "Converted At", "Reason", "Current Status"];
-          rows = conversions.map((r: any) => [r.policyNumber, r.clientName, r.convertedAt, r.reason || "", r.currentStatus]);
-          break;
-        }
+        case "reinstatements":
+        case "conversions":
         case "activations": {
-          const activations = await storage.getActivationHistory(user.organizationId, reportFilters);
-          headers = ["Policy Number", "Client", "Previous Status", "Activated At", "Reason", "Current Status"];
-          rows = activations.map((r: any) => [r.policyNumber, r.clientName, r.fromStatus || "", r.activatedAt, r.reason || "", r.currentStatus]);
+          // One report; the old Conversions / Reinstatements exports are its first-payment and
+          // reinstated rows (server/activations-report.ts).
+          const all = await storage.getActivationsReport(user.organizationId, reportFilters, REPORT_EXPORT_MAX_ROWS);
+          const list = reportType === "conversions" ? all.filter((r) => r.type === "first_payment")
+            : reportType === "reinstatements" ? all.filter((r) => r.type === "reinstated")
+            : all;
+          headers = [
+            "Activated On", "Type", "Policy No.", "Client", "Phone", "Product", "Premium", "Currency",
+            "Agent", "Group", "Was", "Payment Date", "Payment", "Receipt No.", "Status Now", "Reason",
+          ];
+          currencyTotals = null;
+          rows = list.map((r) => [
+            r.activatedOn, ACTIVATION_TYPE_LABEL[r.type], r.policyNumber, r.clientName, r.phone, r.productName, r.premium, r.currency,
+            r.agentName, r.groupName, r.fromStatus ?? "", r.paymentDate,
+            r.paymentAmount ? `${r.paymentCurrency} ${r.paymentAmount}${r.paymentSource === "group" ? " (group receipt)" : ""}` : "",
+            r.paymentReceiptNumber, r.currentStatus, r.reason,
+          ]);
           break;
         }
         case "active-policies": {

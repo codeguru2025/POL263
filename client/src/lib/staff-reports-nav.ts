@@ -15,9 +15,7 @@ export type ReportDatasetId =
   | "commissionPlans"
   | "commissionSummary"
   | "platformReceivables"
-  | "reinstatements"
   | "activations"
-  | "conversions"
   | "activePolicies"
   | "awaitingPayments"
   | "overduePolicies"
@@ -77,8 +75,6 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "lapsed", label: "Lapsed", testId: "tab-lapsed" },
     { value: "new-joinings", label: "New joinings", testId: "tab-new-joinings" },
     { value: "activations", label: "Activations", testId: "tab-activations" },
-    { value: "conversions", label: "Conversions", testId: "tab-conversions-report" },
-    { value: "reinstatements", label: "Reinstatements", testId: "tab-reinstatements-report" },
   ],
   finance: [
     { value: "income-statement", label: "Income Statement", testId: "tab-income-statement" },
@@ -173,8 +169,6 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   lapsed: ["lapsedPolicies"],
   "new-joinings": ["newJoinings"],
   activations: ["activations"],
-  conversions: ["conversions"],
-  reinstatements: ["reinstatements"],
   "income-statement": ["incomeStatement"],
   "cash-flow": ["cashFlow"],
   "trial-balance": ["trialBalance"],
@@ -228,11 +222,19 @@ export function reportContextLabel(section: ReportSectionId, tabValue: string): 
 /** Retired tabs → the tab that replaced them, so old links and bookmarks still land somewhere. */
 const TAB_ALIASES: Record<string, string> = {
   "pre-lapse": "overdue", // merged into Overdue / grace ("Lapsing within 7 days" filter)
+  conversions: "activations", // merged into Activations ("First payment" filter)
+  reinstatements: "activations", // merged into Activations ("Reinstated" filter)
 };
 
 /** True when the URL asked for the retired Pre-lapse tab — the merged tab opens pre-filtered. */
 export function isLegacyPreLapseLink(search: string): boolean {
   return new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("tab") === "pre-lapse";
+}
+
+/** The retired Conversions / Reinstatements tabs open Activations pre-filtered to that type. */
+export function legacyActivationsTabType(search: string): "first_payment" | "reinstated" | undefined {
+  const tab = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search).get("tab");
+  return tab === "conversions" ? "first_payment" : tab === "reinstatements" ? "reinstated" : undefined;
 }
 
 export function parseReportSearchParams(search: string): { section: ReportSectionId; tab: string } {

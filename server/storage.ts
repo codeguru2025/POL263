@@ -14,6 +14,7 @@ import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import type { NewJoiningReportRow } from "./new-joinings";
+import { classifyActivation, type ActivationType, type ActivationReportRow } from "./activations-report";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { WALK_IN_COMMISSION_NAME } from "./commission-calc";
 import {
@@ -176,18 +177,6 @@ import {
 /** Drizzle handle for this org's data database (shared `DATABASE_URL` pool or isolated tenant Postgres). */
 export type OrgDrizzleDb = Awaited<ReturnType<typeof getDbForOrg>>;
 
-export interface ReinstatementEntry {
-  policyId: string;
-  policyNumber: string;
-  clientId: string | null;
-  clientName: string;
-  fromStatus: string | null;
-  toStatus: string;
-  reinstatedAt: Date;
-  reason: string | null;
-  currentStatus: string;
-}
-
 export interface ReportFilters {
   fromDate?: string; // YYYY-MM-DD
   toDate?: string;
@@ -314,28 +303,6 @@ export interface UnderwriterPayableReportResult {
     policyCount: number;
     byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }>;
   };
-}
-
-export interface ActivationEntry {
-  policyId: string;
-  policyNumber: string;
-  clientId: string | null;
-  clientName: string;
-  fromStatus: string | null;
-  toStatus: string;
-  activatedAt: Date;
-  reason: string | null;
-  currentStatus: string;
-}
-
-export interface ConversionEntry {
-  policyId: string;
-  policyNumber: string;
-  clientId: string | null;
-  clientName: string;
-  convertedAt: Date;
-  reason: string | null;
-  currentStatus: string;
 }
 
 /** One roster member + their historical contributions, for formalizing an existing informal
@@ -522,9 +489,7 @@ export interface IStorage {
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }>;
   createPolicyStatusHistory(policyId: string, fromStatus: string | null, toStatus: string, reason?: string, changedBy?: string, organizationId?: string): Promise<void>;
-  getReinstatementHistory(organizationId: string, filters?: ReportFilters): Promise<ReinstatementEntry[]>;
-  getConversionHistory(organizationId: string, filters?: ReportFilters): Promise<ConversionEntry[]>;
-  getActivationHistory(organizationId: string, filters?: ReportFilters): Promise<ActivationEntry[]>;
+  getActivationsReport(organizationId: string, filters?: ReportFilters, maxRows?: number): Promise<ActivationReportRow[]>;
   getPolicyMembers(policyId: string, orgId: string): Promise<PolicyMember[]>;
   getPolicyMembersBatch(policyIds: string[], orgId: string): Promise<Record<string, PolicyMember[]>>;
   countCoveredLives(orgId: string): Promise<{ coveredLives: number; activePolicyCount: number }>;
@@ -3503,16 +3468,21 @@ export class DatabaseStorage implements IStorage {
     }
     await db.insert(policyStatusHistory).values({ policyId, fromStatus, toStatus, reason, changedBy });
   }
-  async getReinstatementHistory(organizationId: string, filters?: ReportFilters): Promise<ReinstatementEntry[]> {
+  /**
+   * Reports → Policies → Activations: every time a policy became active in the period
+   * (tenant-local dates, deleted policies excluded), classified by what actually happened —
+   * server/activations-report.ts — with the payment that triggered it where there was one.
+   */
+  async getActivationsReport(organizationId: string, filters?: ReportFilters, maxRows = 20000): Promise<ActivationReportRow[]> {
     const tdb = await getDbForOrg(organizationId);
-    const reinstatementFromStatuses = ["lapsed"];
-    const conditions = [
+    const conditions: SQL[] = [
       eq(policies.organizationId, organizationId),
+      isNull(policies.deletedAt),
       eq(policyStatusHistory.toStatus, "active"),
-      inArray(policyStatusHistory.fromStatus, reinstatementFromStatuses),
     ];
-    if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
+    const { start, endExclusive } = await dayRangeForOrg(organizationId, filters?.fromDate, filters?.toDate);
+    if (start) conditions.push(gte(policyStatusHistory.createdAt, start));
+    if (endExclusive) conditions.push(lt(policyStatusHistory.createdAt, endExclusive));
     if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
     if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
     if (filters?.productId) {
@@ -3523,125 +3493,110 @@ export class DatabaseStorage implements IStorage {
     }
     const rows = await tdb
       .select({
+        historyId: policyStatusHistory.id,
         policyId: policyStatusHistory.policyId,
         fromStatus: policyStatusHistory.fromStatus,
-        toStatus: policyStatusHistory.toStatus,
-        reinstatedAt: policyStatusHistory.createdAt,
-        reason: policyStatusHistory.reason,
-        policyNumber: policies.policyNumber,
-        clientId: policies.clientId,
-        currentStatus: policies.status,
-        firstName: clients.firstName,
-        lastName: clients.lastName,
-      })
-      .from(policyStatusHistory)
-      .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
-      .leftJoin(clients, eq(policies.clientId, clients.id))
-      .where(and(...conditions))
-      .orderBy(desc(policyStatusHistory.createdAt))
-      .limit(1000);
-    return rows.map((r) => ({
-      policyId: r.policyId,
-      policyNumber: r.policyNumber,
-      clientId: r.clientId,
-      clientName: [r.firstName, r.lastName].filter(Boolean).join(" ") || "—",
-      fromStatus: r.fromStatus,
-      toStatus: r.toStatus,
-      reinstatedAt: r.reinstatedAt,
-      reason: r.reason,
-      currentStatus: r.currentStatus ?? "active",
-    }));
-  }
-  async getConversionHistory(organizationId: string, filters?: ReportFilters): Promise<ConversionEntry[]> {
-    const tdb = await getDbForOrg(organizationId);
-    const conditions = [
-      eq(policies.organizationId, organizationId),
-      eq(policyStatusHistory.toStatus, "active"),
-      eq(policyStatusHistory.fromStatus, "inactive"),
-    ];
-    if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else conditions.push(sql`1 = 0`);
-    }
-    const rows = await tdb
-      .select({
-        policyId: policyStatusHistory.policyId,
-        convertedAt: policyStatusHistory.createdAt,
-        reason: policyStatusHistory.reason,
-        policyNumber: policies.policyNumber,
-        clientId: policies.clientId,
-        currentStatus: policies.status,
-        firstName: clients.firstName,
-        lastName: clients.lastName,
-      })
-      .from(policyStatusHistory)
-      .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
-      .leftJoin(clients, eq(policies.clientId, clients.id))
-      .where(and(...conditions))
-      .orderBy(desc(policyStatusHistory.createdAt))
-      .limit(1000);
-    return rows.map((r) => ({
-      policyId: r.policyId,
-      policyNumber: r.policyNumber,
-      clientId: r.clientId,
-      clientName: [r.firstName, r.lastName].filter(Boolean).join(" ") || "—",
-      convertedAt: r.convertedAt,
-      reason: r.reason,
-      currentStatus: r.currentStatus ?? "active",
-    }));
-  }
-  async getActivationHistory(organizationId: string, filters?: ReportFilters): Promise<ActivationEntry[]> {
-    const tdb = await getDbForOrg(organizationId);
-    const conditions = [
-      eq(policies.organizationId, organizationId),
-      eq(policyStatusHistory.toStatus, "active"),
-    ];
-    if (filters?.fromDate) conditions.push(gte(policyStatusHistory.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policyStatusHistory.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else conditions.push(sql`1 = 0`);
-    }
-    const rows = await tdb
-      .select({
-        policyId: policyStatusHistory.policyId,
-        fromStatus: policyStatusHistory.fromStatus,
-        toStatus: policyStatusHistory.toStatus,
         activatedAt: policyStatusHistory.createdAt,
         reason: policyStatusHistory.reason,
         policyNumber: policies.policyNumber,
-        clientId: policies.clientId,
+        isLegacy: policies.isLegacy,
         currentStatus: policies.status,
+        premiumAmount: policies.premiumAmount,
+        currency: policies.currency,
+        groupId: policies.groupId,
+        agentId: policies.agentId,
         firstName: clients.firstName,
         lastName: clients.lastName,
+        phone: clients.phone,
+        productName: products.name,
+        groupName: groups.name,
+        agentEmail: users.email,
+        agentDisplayName: users.displayName,
       })
       .from(policyStatusHistory)
       .innerJoin(policies, eq(policyStatusHistory.policyId, policies.id))
       .leftJoin(clients, eq(policies.clientId, clients.id))
+      .leftJoin(productVersions, eq(policies.productVersionId, productVersions.id))
+      .leftJoin(products, eq(productVersions.productId, products.id))
+      .leftJoin(groups, eq(policies.groupId, groups.id))
+      .leftJoin(users, eq(policies.agentId, users.id))
       .where(and(...conditions))
       .orderBy(desc(policyStatusHistory.createdAt))
-      .limit(1000);
-    return rows.map((r) => ({
-      policyId: r.policyId,
-      policyNumber: r.policyNumber,
-      clientId: r.clientId,
-      clientName: [r.firstName, r.lastName].filter(Boolean).join(" ") || "—",
-      fromStatus: r.fromStatus,
-      toStatus: r.toStatus,
-      activatedAt: r.activatedAt,
-      reason: r.reason,
-      currentStatus: r.currentStatus ?? "active",
-    }));
+      .limit(maxRows);
+
+    // The payment behind each activation: the policy's latest valid receipt issued up to a few
+    // minutes after the status change (an approved override activates at approval, after issue);
+    // for a society member, the group's latest lump-sum receipt on or before that day.
+    const policyIds = Array.from(new Set(rows.map((r) => r.policyId)));
+    const groupIds = Array.from(new Set(rows.map((r) => r.groupId).filter((g): g is string => !!g)));
+    const [receipts, groupReceipts] = await Promise.all([
+      policyIds.length
+        ? tdb.select({ policyId: paymentReceipts.policyId, issuedAt: paymentReceipts.issuedAt, amount: paymentReceipts.amount, currency: paymentReceipts.currency, receiptNumber: paymentReceipts.receiptNumber })
+          .from(paymentReceipts)
+          .where(and(
+            inArray(paymentReceipts.policyId, policyIds),
+            eq(paymentReceipts.status, "issued"),
+            or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
+          ))
+          .orderBy(desc(paymentReceipts.issuedAt))
+        : Promise.resolve([]),
+      groupIds.length
+        ? tdb.select({ groupId: legacyGroupReceipts.groupId, paymentDate: legacyGroupReceipts.paymentDate, amount: legacyGroupReceipts.amount, currency: legacyGroupReceipts.currency, receiptNumber: legacyGroupReceipts.receiptNumber })
+          .from(legacyGroupReceipts)
+          .where(and(eq(legacyGroupReceipts.organizationId, organizationId), inArray(legacyGroupReceipts.groupId, groupIds)))
+          .orderBy(desc(legacyGroupReceipts.paymentDate))
+        : Promise.resolve([]),
+    ]);
+    const receiptsByPolicy = new Map<string, typeof receipts>();
+    for (const r of receipts) {
+      if (!r.policyId) continue;
+      const list = receiptsByPolicy.get(r.policyId) ?? [];
+      list.push(r);
+      receiptsByPolicy.set(r.policyId, list);
+    }
+    const tz = await getOrgTimezone(organizationId);
+    const SLACK_MS = 10 * 60 * 1000;
+
+    return rows.map((r) => {
+      const type: ActivationType = classifyActivation(r.fromStatus, !!r.isLegacy);
+      const activatedAt = r.activatedAt as Date;
+      const activatedOn = dateInTimezone(activatedAt, tz);
+      let payment: { date: string; amount: string; currency: string; receiptNumber: string; source: "receipt" | "group" } | null = null;
+      if (type !== "correction") {
+        const own = (receiptsByPolicy.get(r.policyId) ?? []).find((x) => new Date(x.issuedAt as Date).getTime() <= activatedAt.getTime() + SLACK_MS);
+        if (own) {
+          payment = { date: dateInTimezone(own.issuedAt as Date, tz), amount: moneyString(own.amount), currency: own.currency, receiptNumber: String(own.receiptNumber ?? ""), source: "receipt" };
+        } else if (r.groupId) {
+          const g = groupReceipts.find((x) => x.groupId === r.groupId && String(x.paymentDate).slice(0, 10) <= activatedOn);
+          if (g) payment = { date: String(g.paymentDate).slice(0, 10), amount: moneyString(g.amount), currency: g.currency, receiptNumber: String(g.receiptNumber ?? ""), source: "group" };
+        }
+      }
+      return {
+        id: r.historyId,
+        policyId: r.policyId,
+        policyNumber: r.policyNumber ?? "",
+        clientName: [r.firstName, r.lastName].filter(Boolean).join(" ").trim() || "—",
+        phone: r.phone ?? "",
+        productName: r.productName ?? "",
+        premium: moneyString(r.premiumAmount ?? 0),
+        currency: r.currency || "USD",
+        agentId: r.agentId ?? null,
+        agentName: r.agentId ? ((r.agentDisplayName || r.agentEmail || "").trim() || "Agent") : "Walk-in",
+        groupName: r.groupName ?? "",
+        type,
+        fromStatus: r.fromStatus ?? null,
+        activatedAt: activatedAt.toISOString(),
+        activatedOn,
+        reason: r.reason ?? "",
+        currentStatus: r.currentStatus ?? "",
+        isLegacy: !!r.isLegacy,
+        paymentDate: payment?.date ?? "",
+        paymentAmount: payment?.amount ?? "",
+        paymentCurrency: payment?.currency ?? "",
+        paymentReceiptNumber: payment?.receiptNumber ?? "",
+        paymentSource: payment?.source ?? null,
+      };
+    });
   }
   async getPolicyMembers(policyId: string, orgId: string): Promise<PolicyMember[]> {
     const tdb = await getDbForOrg(orgId);

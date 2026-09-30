@@ -13,7 +13,8 @@ import { AwaitingPaymentsPanel } from "./awaiting-payments-panel";
 import { GracePoliciesPanel } from "./grace-policies-panel";
 import { LapsedPoliciesPanel } from "./lapsed-policies-panel";
 import { NewJoiningsPanel } from "./new-joinings-panel";
-import { isLegacyPreLapseLink } from "@/lib/staff-reports-nav";
+import { ActivationsPanel } from "./activations-panel";
+import { isLegacyPreLapseLink, legacyActivationsTabType } from "@/lib/staff-reports-nav";
 
 const POLICY_DETAILS_PAGE = 500;
 
@@ -74,33 +75,6 @@ const policyDetailsColumns: EdtColumn<any>[] = [
 
 
 
-function statusHistoryColumns(dateHeader: string, dateAccessor: (r: any) => any): EdtColumn<any>[] {
-  return [
-    { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm">{r.policyNumber}</span> },
-    { id: "client", header: "Client", accessor: (r) => r.clientName },
-    { id: "previousStatus", header: "Previous status", accessor: (r) => r.fromStatus || "", cell: (r) => <Badge variant="outline">{r.fromStatus || "—"}</Badge> },
-    {
-      id: "date",
-      header: dateHeader,
-      accessor: dateAccessor,
-      cell: (r) => {
-        const d = dateAccessor(r);
-        return <span className="text-sm text-muted-foreground">{d ? d.toLocaleString() : "—"}</span>;
-      },
-    },
-    { id: "reason", header: "Reason", accessor: (r) => r.reason || "" },
-    {
-      id: "currentStatus",
-      header: "Current status",
-      accessor: (r) => r.currentStatus,
-      cell: (r) => <Badge variant={r.currentStatus === "active" ? "default" : "secondary"}>{r.currentStatus}</Badge>,
-    },
-  ];
-}
-
-const activationsColumns = statusHistoryColumns("Activated at", (r) => r.activatedAt ? new Date(r.activatedAt) : "");
-const conversionsColumns = statusHistoryColumns("Converted at", (r) => r.convertedAt ? new Date(r.convertedAt) : "");
-const reinstatementsColumns = statusHistoryColumns("Reinstated date", (r) => r.reinstatedAt ? new Date(r.reinstatedAt) : "");
 
 export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: ReportSectionBaseProps) {
   // Paged: the server sends X-Total-Count so the table can say "showing X of Y" and load the rest
@@ -122,33 +96,6 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
   });
   const policyDetails = policyDetailsQuery.data?.pages.flatMap((p) => p.rows) ?? [];
   const policyDetailsTotal = policyDetailsQuery.data?.pages[0]?.total ?? 0;
-  const { data: activations = [], isLoading: loadingActivations } = useQuery<any[]>({
-    queryKey: ["reports", "activations", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/activations" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("activations"),
-  });
-  const { data: conversions = [], isLoading: loadingConversions } = useQuery<any[]>({
-    queryKey: ["reports", "conversions", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/conversions" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("conversions"),
-  });
-  const { data: reinstatements = [], isLoading: loadingReinstatements } = useQuery<any[]>({
-    queryKey: ["reports", "reinstatements", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/reinstatements" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("reinstatements"),
-  });
 
   return (
     <>
@@ -220,53 +167,7 @@ export function PoliciesSection({ filters, q, qAppend, fk, runKey, need }: Repor
       </TabsContent>
 
       <TabsContent value="activations">
-        <CardSection title="Policy activations" icon={UserCheck} description="Rows when a policy moved to active (status history). From/to filter that event time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="activations" filters={filters} />} flush>
-          {loadingActivations ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={activationsColumns}
-              rows={activations}
-              getRowKey={(r) => `${r.policyId}-${r.activatedAt}`}
-              exportFilename="policy-activations"
-              storageKey="reports-activations"
-              emptyMessage="No activations in this period."
-            />
-          )}
-        </CardSection>
-      </TabsContent>
-
-      <TabsContent value="conversions">
-        <CardSection title="Policy conversions" icon={RotateCcw} description="Inactive to active conversions. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="conversions" filters={filters} />} flush>
-          {loadingConversions ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={conversionsColumns}
-              rows={conversions}
-              getRowKey={(r) => `${r.policyId}-${r.convertedAt}`}
-              exportFilename="policy-conversions"
-              storageKey="reports-conversions"
-              emptyMessage="No conversions in this period."
-            />
-          )}
-        </CardSection>
-      </TabsContent>
-
-      <TabsContent value="reinstatements">
-        <CardSection title="Reinstated policies" icon={RotateCcw} description="Lapsed to active reinstatements. From/to filter the status-change time; branch, product, and agent filter the policy." headerRight={<ExportButton reportType="reinstatements" filters={filters} />} flush>
-          {loadingReinstatements ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={reinstatementsColumns}
-              rows={reinstatements}
-              getRowKey={(r) => `${r.policyId}-${r.reinstatedAt}`}
-              rowTestId={(r) => `row-reinstatement-${r.policyId}`}
-              exportFilename="reinstatements"
-              storageKey="reports-reinstatements"
-              emptyMessage="No reinstatements in this period."
-            />
-          )}
-        </CardSection>
+        <ActivationsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("activations")} initialType={typeof window !== "undefined" ? legacyActivationsTabType(window.location.search) : undefined} />
       </TabsContent>
     </>
   );
