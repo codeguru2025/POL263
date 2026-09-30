@@ -27,8 +27,8 @@ export interface LumpSumMember {
 /**
  * Lump-sum receipt for a society / legacy group — it pays in whatever it has saved, not one
  * premium per member. When the group has member policies, the admin ticks who this payment
- * covers (all ticked by default): those members are texted, listed on the receipt, and their
- * agents share the 10% commission. A group with no policies yet can list members as free text.
+ * covers (all ticked by default): those members are texted and listed on the receipt; the
+ * group's agent earns 10% of the whole payment. A group with no policies yet can list members as free text.
  * Shared between groups.tsx's receipt tab and the finance Group Receipt tab.
  */
 export function LegacyGroupReceiptForm({ groupId, onSuccess, intro, members: groupMembers = [] }: {
@@ -101,7 +101,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess, intro, members: gro
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {intro ?? "This group has no member policies yet. Record the lump-sum payment here — it will appear in financials immediately. Once members have policies, each payment also texts every member and pays their agents' commission."}
+        {intro ?? "This group has no member policies yet. Record the lump-sum payment here — it will appear in financials immediately. Once members have policies, each payment also texts the members it covers. The group's agent earns 10% of every payment."}
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-md">
         <div>
@@ -150,7 +150,7 @@ export function LegacyGroupReceiptForm({ groupId, onSuccess, intro, members: gro
             ))}
           </div>
           <p className="px-3 py-2 border-t text-xs text-muted-foreground">
-            Ticked members get an SMS, are listed on the receipt, and their agents share the 10% commission.
+            Ticked members get an SMS and are listed on the receipt. The group's agent earns 10% of the whole payment, whoever is ticked.
           </p>
         </div>
       )}

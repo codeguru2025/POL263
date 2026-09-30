@@ -4576,6 +4576,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Manual premium override is gated by the dedicated edit:premium permission.
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canEditPremium = !!user.isPlatformOwner || effPerms.includes("edit:premium");
+    // Agent and group are admin decisions: moving a policy into a group now also moves it to the
+    // group's agent, so an agent (who has write:policy) must not be able to reassign either.
+    const canAssignAgentOrGroup = canEditPremium || effPerms.includes("manage:settings");
 
     const body = { ...req.body };
     const rawPremium = body.premiumAmount;
@@ -4594,7 +4597,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     delete body.memberAddOns;
     delete body.addOnIds;
     delete body.beneficiary;
-    if (!canEditPremium) delete body.agentId;
+    if (!canAssignAgentOrGroup) {
+      const changes = (k: "agentId" | "groupId") => k in body && (body[k] || null) !== ((before as any)[k] ?? null);
+      if (changes("agentId") || changes("groupId")) {
+        return res.status(403).json({ message: "Only an administrator can change a policy's agent or group." });
+      }
+      delete body.agentId;
+      delete body.groupId;
+    }
 
     const isLegacyRequest = canEditPremium && body.isLegacy === true && !before.isLegacy;
     delete body.isLegacy;
@@ -13152,7 +13162,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       // Legacy groups and burial societies always keep a ledger; any other group only if asked.
       const hasLedger = req.body.isLegacy === true || req.body.type === "burial_society" || req.body.hasLedger === true;
-      const parsed = insertGroupSchema.parse({ ...req.body, hasLedger, organizationId: user.organizationId });
+      let agentId: string | null = req.body.agentId || null;
+      if (agentId) {
+        const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+        if (!user.isPlatformOwner && !effPerms.includes("edit:premium") && !effPerms.includes("manage:settings")) agentId = null;
+      }
+      const parsed = insertGroupSchema.parse({ ...req.body, agentId, hasLedger, organizationId: user.organizationId });
       const group = await storage.createGroup(parsed);
       await auditLog(req, "CREATE_GROUP", "Group", group.id, null, group);
       return res.status(201).json(group);
@@ -13171,6 +13186,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!existing) return res.status(404).json({ message: "Group not found" });
       if (existing.organizationId !== user.organizationId) return res.status(403).json({ message: "Forbidden" });
       const patch = { ...req.body };
+      // The responsible agent is set separately (it also moves every policy in the group) and
+      // only by admins — an agent could otherwise take over a whole society's policies.
+      const agentChange = Object.prototype.hasOwnProperty.call(patch, "agentId") ? (patch.agentId || null) : undefined;
+      delete patch.agentId;
+      if (agentChange !== undefined && agentChange !== (existing.agentId ?? null)) {
+        const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+        if (!user.isPlatformOwner && !effPerms.includes("edit:premium") && !effPerms.includes("manage:settings")) {
+          return res.status(403).json({ message: "Only an administrator can change a group's agent." });
+        }
+      }
       const nextIsLegacy = patch.isLegacy ?? existing.isLegacy;
       const nextType = patch.type ?? existing.type;
       if (nextIsLegacy === true || nextType === "burial_society") patch.hasLedger = true;
@@ -13179,9 +13204,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const entries = await storage.getGroupLedgerEntries(user.organizationId, id);
         if (entries.length > 0) return res.status(400).json({ message: "This group already has ledger entries, so it has to stay a ledger group." });
       }
-      const updated = await storage.updateGroup(id, patch, user.organizationId);
-      await auditLog(req, "UPDATE_GROUP", "Group", id, existing, updated);
-      return res.json(updated);
+      let updated = Object.keys(patch).length > 0 ? await storage.updateGroup(id, patch, user.organizationId) : existing;
+      let policiesMoved = 0;
+      if (agentChange !== undefined && agentChange !== (existing.agentId ?? null)) {
+        const r = await storage.setGroupAgent(user.organizationId, id, agentChange);
+        updated = r.group ?? updated;
+        policiesMoved = r.policiesMoved;
+      }
+      await auditLog(req, "UPDATE_GROUP", "Group", id, existing, { ...updated, policiesMovedToAgent: policiesMoved });
+      return res.json({ ...updated, policiesMoved });
     } catch (err: any) {
       structuredLog("error", "PATCH /api/groups/:id failed", { error: err?.message, id });
       return res.status(500).json({ message: safeError(err) });
@@ -13721,7 +13752,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!group) return res.status(404).json({ message: "Group not found" });
     // A society brings whatever it has saved — not one premium per member — so the admin ticks
     // which members this payment covers. Those members are texted, listed on the receipt, and
-    // their agents share the 10% commission. Not sent (older screens, imports) = every member.
+    // the group's agent earns 10% of the whole payment. Not sent (older screens, imports) = every member.
     const groupMembers = receiptablePolicies(await storage.getPoliciesByGroupId(user.organizationId, groupId));
     let included = groupMembers;
     if (includedPolicyIds !== undefined) {

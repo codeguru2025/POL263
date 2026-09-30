@@ -539,7 +539,7 @@ export interface IStorage {
   hasPlatformReceivableForServiceReceipt(orgId: string, serviceReceiptId: string): Promise<boolean>;
   /** True if any commission ledger row references this payment transaction. */
   hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean>;
-  getCommissionPolicyIdsByDescriptionMarker(orgId: string, marker: string): Promise<string[]>;
+  hasCommissionWithDescriptionMarker(orgId: string, marker: string): Promise<boolean>;
   getPaymentTransactionByIdempotencyKey(key: string, orgId: string): Promise<PaymentTransaction | undefined>;
   createReceipt(receipt: InsertReceipt): Promise<Receipt>;
   getReceiptsByPolicy(policyId: string, orgId: string): Promise<Receipt[]>;
@@ -733,6 +733,7 @@ export interface IStorage {
   getGroup(id: string, orgId: string): Promise<Group | undefined>;
   createGroup(group: InsertGroup): Promise<Group>;
   updateGroup(id: string, data: Partial<InsertGroup>, orgId: string): Promise<Group | undefined>;
+  setGroupAgent(orgId: string, groupId: string, agentId: string | null): Promise<{ group: Group | undefined; policiesMoved: number }>;
   getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]>;
   getPoliciesByGroupId(orgId: string, groupId: string): Promise<Policy[]>;
   // Pool-society engine (Phase 3d) — server/pool-society.ts.
@@ -3388,9 +3389,17 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(policies.policyNumber, policyNumber), eq(policies.organizationId, orgId)));
     return policy;
   }
+  /** A policy in a group with a responsible agent belongs to that agent. */
+  private async withGroupAgent<T extends { groupId?: string | null; agentId?: string | null }>(db: OrgDataDb, orgId: string, data: T): Promise<T> {
+    if (!data.groupId) return data;
+    const [g] = await db.select({ agentId: groups.agentId }).from(groups)
+      .where(and(eq(groups.id, data.groupId), eq(groups.organizationId, orgId)));
+    return g?.agentId ? { ...data, agentId: g.agentId } : data;
+  }
+
   async createPolicy(policy: InsertPolicy): Promise<Policy> {
     const tdb = await getDbForOrg(policy.organizationId);
-    const [created] = await tdb.insert(policies).values(policy).returning();
+    const [created] = await tdb.insert(policies).values(await this.withGroupAgent(tdb, policy.organizationId, policy)).returning();
     return created;
   }
 
@@ -3404,7 +3413,7 @@ export class DatabaseStorage implements IStorage {
     },
   ): Promise<{ policy: Policy; members: PolicyMember[] }> {
     return withOrgTransaction(orgId, async (tx) => {
-      const [policy] = await tx.insert(policies).values(data.policy).returning();
+      const [policy] = await tx.insert(policies).values(await this.withGroupAgent(tx, orgId, data.policy)).returning();
       await tx.insert(policyStatusHistory).values({
         policyId: policy.id,
         fromStatus: data.statusHistory.fromStatus,
@@ -3480,6 +3489,8 @@ export class DatabaseStorage implements IStorage {
 
   async updatePolicy(id: string, data: Partial<InsertPolicy>, orgId: string): Promise<Policy | undefined> {
     const tdb = await getDbForOrg(orgId);
+    // Moved into a group with a responsible agent → the policy goes to that agent.
+    if (data.groupId) data = await this.withGroupAgent(tdb, orgId, data);
     const [updated] = await tdb.update(policies).set(stripImmutableKeys(data)).where(and(eq(policies.id, id), eq(policies.organizationId, orgId))).returning();
     return updated;
   }
@@ -3831,15 +3842,16 @@ export class DatabaseStorage implements IStorage {
       .limit(1);
     return !!row;
   }
-  /** Policies already credited commission for a lump-sum group receipt (its marker is in the
-   *  description) — lets the outbox follow-up retry without paying anyone twice. */
-  async getCommissionPolicyIdsByDescriptionMarker(orgId: string, marker: string): Promise<string[]> {
+  /** Whether commission was already credited for a lump-sum group receipt (its marker is in the
+   *  description) — lets the outbox follow-up retry without paying the agent twice. */
+  async hasCommissionWithDescriptionMarker(orgId: string, marker: string): Promise<boolean> {
     const tdb = await getDbForOrg(orgId);
-    const rows = await tdb
-      .select({ policyId: commissionLedgerEntries.policyId })
+    const [row] = await tdb
+      .select({ id: commissionLedgerEntries.id })
       .from(commissionLedgerEntries)
-      .where(and(eq(commissionLedgerEntries.organizationId, orgId), sql`position(${marker} in coalesce(${commissionLedgerEntries.description}, '')) > 0`));
-    return rows.map((r) => r.policyId).filter((id): id is string => !!id);
+      .where(and(eq(commissionLedgerEntries.organizationId, orgId), sql`position(${marker} in coalesce(${commissionLedgerEntries.description}, '')) > 0`))
+      .limit(1);
+    return !!row;
   }
 
   async hasCommissionLedgerForTransaction(orgId: string, transactionId: string): Promise<boolean> {
@@ -6121,6 +6133,20 @@ export class DatabaseStorage implements IStorage {
     const tdb = await getDbForOrg(orgId);
     const [updated] = await tdb.update(groups).set(stripImmutableKeys(data)).where(and(eq(groups.id, id), eq(groups.organizationId, orgId))).returning();
     return updated;
+  }
+
+  /** Set a group's responsible agent and move every (non-deleted) policy in it to that agent, in
+   *  one transaction. Clearing the agent (null) leaves the policies' agents as they are. */
+  async setGroupAgent(orgId: string, groupId: string, agentId: string | null): Promise<{ group: Group | undefined; policiesMoved: number }> {
+    return withOrgTransaction(orgId, async (tx) => {
+      const [group] = await tx.update(groups).set({ agentId }).where(and(eq(groups.id, groupId), eq(groups.organizationId, orgId))).returning();
+      if (!group || !agentId) return { group, policiesMoved: 0 };
+      const moved = await tx.update(policies).set({ agentId })
+        .where(and(eq(policies.organizationId, orgId), eq(policies.groupId, groupId), isNull(policies.deletedAt),
+          or(isNull(policies.agentId), sql`${policies.agentId} <> ${agentId}`)))
+        .returning({ id: policies.id });
+      return { group, policiesMoved: moved.length };
+    });
   }
 
   async getGroupsWhereClientIsExecutive(orgId: string, clientId: string): Promise<Group[]> {

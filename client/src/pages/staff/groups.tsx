@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, apiFetch, getApiBase, getCsrfToken } from "@/lib/queryClient";
 import {
   Plus, Search, Pencil, Layers, FileStack, Loader2, LinkIcon, UserPlus,
@@ -54,6 +55,8 @@ interface Group {
   /** Ledger group (legacy group / burial society) — keeps a group ledger that receipts credit
    *  and approved member claims debit. Plain group policies don't. */
   hasLedger: boolean;
+  /** Responsible agent — every policy in the group belongs to them. */
+  agentId: string | null;
   payoutRules: PoolPayoutRule[] | null;
   createdAt: string;
 }
@@ -71,6 +74,7 @@ interface GroupFormData {
   description: string;
   isLegacy: boolean;
   hasLedger: boolean;
+  agentId: string;
   chairpersonName: string;
   chairpersonPhone: string;
   chairpersonEmail: string;
@@ -91,7 +95,7 @@ interface GroupFormData {
 }
 
 const emptyForm: GroupFormData = {
-  name: "", type: "community", description: "", isLegacy: false, hasLedger: false,
+  name: "", type: "community", description: "", isLegacy: false, hasLedger: false, agentId: "",
   chairpersonName: "", chairpersonPhone: "", chairpersonEmail: "",
   secretaryName: "", secretaryPhone: "", secretaryEmail: "",
   treasurerName: "", treasurerPhone: "", treasurerEmail: "",
@@ -1973,10 +1977,14 @@ export default function StaffGroups() {
       const res = await apiRequest("PATCH", `/api/groups/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { policiesMoved?: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/policies"] });
       setShowEditDialog(false);
-      toast({ title: "Group updated" });
+      toast({
+        title: "Group updated",
+        description: data?.policiesMoved ? `${data.policiesMoved} polic${data.policiesMoved === 1 ? "y" : "ies"} in this group moved to the group's agent.` : undefined,
+      });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -1996,6 +2004,7 @@ export default function StaffGroups() {
       name: group.name, type: group.type, description: group.description || "",
       isLegacy: group.isLegacy ?? false,
       hasLedger: group.hasLedger ?? false,
+      agentId: group.agentId || "",
       chairpersonName: group.chairpersonName || "", chairpersonPhone: group.chairpersonPhone || "", chairpersonEmail: group.chairpersonEmail || "",
       secretaryName: group.secretaryName || "", secretaryPhone: group.secretaryPhone || "", secretaryEmail: group.secretaryEmail || "",
       treasurerName: group.treasurerName || "", treasurerPhone: group.treasurerPhone || "", treasurerEmail: group.treasurerEmail || "",
@@ -2187,6 +2196,11 @@ export default function StaffGroups() {
 
 function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFormData; setFormData: (d: GroupFormData) => void; prefix: string }) {
   const update = (field: keyof GroupFormData, value: string) => setFormData({ ...formData, [field]: value });
+  // Only admins pick the group's agent (the server enforces the same rule).
+  const { permissions, isPlatformOwner } = useAuth();
+  const perms = Array.isArray(permissions) ? permissions : [];
+  const canAssignAgent = !!isPlatformOwner || perms.includes("edit:premium") || perms.includes("manage:settings");
+  const { data: agents = [] } = useQuery<any[]>({ queryKey: ["/api/agents"], enabled: canAssignAgent });
 
   return (
     <div className="space-y-6">
@@ -2211,6 +2225,22 @@ function GroupFormFields({ formData, setFormData, prefix }: { formData: GroupFor
             <Textarea value={formData.description} onChange={(e) => update("description", e.target.value)} placeholder="Optional description…" rows={2} data-testid={`input-${prefix}-group-description`} />
           </div>
         </div>
+        {canAssignAgent && (
+          <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
+            <Label htmlFor={`${prefix}-group-agent`} className="font-medium">Responsible agent</Label>
+            <Select value={formData.agentId || "none"} onValueChange={(v) => update("agentId", v === "none" ? "" : v)}>
+              <SelectTrigger id={`${prefix}-group-agent`} data-testid={`select-${prefix}-group-agent`}><SelectValue placeholder="No agent" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No agent</SelectItem>
+                {agents.map((a: any) => <SelectItem key={a.id} value={a.id}>{a.displayName || a.email}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Every policy in this group moves to this agent, and policies added later go to them too.
+              {(formData.isLegacy || formData.type === "burial_society" || formData.hasLedger) && " For a society, the agent earns 10% of every amount the group pays."}
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-3 rounded-lg border p-3 bg-muted/30">
           <Switch id={`${prefix}-is-legacy`} checked={formData.isLegacy} onCheckedChange={(c) => setFormData({ ...formData, isLegacy: c })} data-testid={`switch-${prefix}-is-legacy`} />
           <div>

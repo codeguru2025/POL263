@@ -4219,6 +4219,9 @@ export const groups = pgTable(
     /** Ledger group (legacy group / burial society): keeps a running group ledger that group
      *  receipts credit and approved member claims debit. Plain group policies leave this false. */
     hasLedger: boolean("has_ledger").default(false).notNull(),
+    /** Responsible agent. Setting it moves every policy in the group to this agent; policies
+     *  added later pick it up. For ledger groups the agent earns 10% of each group payment. */
+    agentId: uuid("agent_id").references(() => users.id),
     /**
      * Pool-society engine (server/pool-society.ts, Phase 3d) — configurable payout amounts per
      * event type: array of { eventType, label, amount, currency }. Null for every group today;

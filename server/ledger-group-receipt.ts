@@ -5,9 +5,8 @@
  * A society brings whatever it has saved (it keeps a running ledger with the tenant), not one
  * premium per member, so the admin ticks which members a payment covers.
  *
- *  1. Commission — the legacy-group rule: 10% of what the group paid, split evenly across the
- *     ticked member policies; each policy's agent gets its part. Walk-in policies (no agent) keep
- *     their part of the split but earn nobody commission.
+ *  1. Commission — on the group's payment, not per policy: the group's agent (groups.agent_id)
+ *     earns 10% of whatever the group paid. A group with no agent earns nobody commission.
  *  2. SMS — every ticked member is told the group has paid (one text per client, even if they
  *     hold several policies in the group).
  *
@@ -19,7 +18,7 @@ import { structuredLog } from "./logger";
 import { notifyUser } from "./user-notifications";
 import { dispatchNotification, buildPolicyContext } from "./notifications";
 import { LEGACY_COMMISSION_RATES } from "./commission-calc";
-import { allocateProRata, fromCents, toCents, type Cents } from "@shared/money";
+import { fromCents, toCents, type Cents } from "@shared/money";
 
 export interface LedgerGroupReceiptPayload {
   receiptId: string;
@@ -36,78 +35,52 @@ export function receiptablePolicies<T extends { deletedAt?: unknown; status?: st
   return policies.filter((p) => !p.deletedAt && p.status !== "cancelled");
 }
 
-export interface CommissionShare { policyId: string; agentId: string; shareCents: Cents; commissionCents: Cents }
-
-/**
- * Splits `totalCents` evenly across `policies` and returns each agent-held policy's commission
- * (`ratePercent` of the whole payment, split the same way). Walk-in policies still take their
- * part — they just earn nobody commission — so an agent never earns on another member's part.
- */
-export function ledgerGroupCommissionShares(
-  totalCents: Cents,
-  policies: { id: string; agentId?: string | null }[],
-  ratePercent: number,
-): CommissionShare[] {
-  if (totalCents <= 0 || policies.length === 0 || ratePercent <= 0) return [];
-  const weights = policies.map(() => 1);
-  const shares = allocateProRata(totalCents, weights);
-  // 10% of the whole payment first, then split the same way — rounding each share's 10%
-  // separately loses cents (USD 100 over 3 members → 3 × 3.33 = 9.99).
-  const commissions = allocateProRata(Math.round((totalCents * ratePercent) / 100) as Cents, weights);
-  const out: CommissionShare[] = [];
-  policies.forEach((p, i) => {
-    if (!p.agentId || commissions[i] <= 0) return;
-    out.push({ policyId: p.id, agentId: p.agentId, shareCents: shares[i], commissionCents: commissions[i] });
-  });
-  return out;
+/** The society agent's commission: `ratePercent` of what the group paid, to the cent. */
+export function ledgerGroupCommissionCents(totalCents: Cents, ratePercent: number): Cents {
+  if (totalCents <= 0 || ratePercent <= 0) return 0 as Cents;
+  return Math.round((totalCents * ratePercent) / 100) as Cents;
 }
 
-// Trailing space matters: the lookup is a "contains" match, and "…-100 " must not match "…-1000 (".
+// Trailing space matters: the lookup is a "contains" match, so "…-100 " must not match "…-1000 ".
 const commissionMarker = (receiptNumber: string) => `lump-sum group receipt ${receiptNumber} `;
 
 export async function runLedgerGroupReceiptFollowup(orgId: string, payload: LedgerGroupReceiptPayload): Promise<void> {
   const group = await storage.getGroup(payload.groupId, orgId);
   if (!group) return;
+
+  // 1. Commission — on the group's payment, not per policy: the society's agent earns 10% of
+  //    whatever the group paid. No agent on the group = nobody earns. Idempotent on retry.
+  const rate = LEGACY_COMMISSION_RATES.recurringRate;
+  const commissionCents = ledgerGroupCommissionCents(toCents(payload.amount), rate);
+  if (group.agentId && commissionCents > 0) {
+    const marker = commissionMarker(payload.receiptNumber);
+    if (!(await storage.hasCommissionWithDescriptionMarker(orgId, marker))) {
+      await storage.createCommissionLedgerEntry({
+        organizationId: orgId,
+        agentId: group.agentId,
+        policyId: null,
+        transactionId: null,
+        entryType: "recurring",
+        amount: fromCents(commissionCents),
+        currency: payload.currency,
+        description: `${rate}% commission on ${payload.currency} ${fromCents(toCents(payload.amount))} paid by ${group.name} — ${marker}`,
+        status: "earned",
+      });
+      notifyUser(orgId, group.agentId, {
+        type: "COMMISSION_EARNED",
+        title: "Commission Earned",
+        body: `${payload.currency} ${fromCents(commissionCents)} commission from ${group.name}'s payment (${payload.receiptNumber}).`,
+        metadata: { groupId: group.id, receiptId: payload.receiptId, amount: fromCents(commissionCents), currency: payload.currency },
+      }).catch(() => {});
+    }
+  }
+
+  // 2. Text every ticked member (once per client). dispatchNotification never throws.
   let members = receiptablePolicies(await storage.getPoliciesByGroupId(orgId, payload.groupId));
   if (payload.includedPolicyIds) {
     const wanted = new Set(payload.includedPolicyIds);
     members = members.filter((p) => wanted.has(p.id));
   }
-  if (members.length === 0) return;
-
-  // 1. Commission — idempotent: an outbox retry skips policies already credited for this receipt.
-  const rate = LEGACY_COMMISSION_RATES.recurringRate;
-  const shares = ledgerGroupCommissionShares(toCents(payload.amount), members, rate);
-  if (shares.length > 0) {
-    const marker = commissionMarker(payload.receiptNumber);
-    const done = new Set(await storage.getCommissionPolicyIdsByDescriptionMarker(orgId, marker));
-    const byAgent = new Map<string, Cents>();
-    for (const s of shares) {
-      if (done.has(s.policyId)) continue;
-      await storage.createCommissionLedgerEntry({
-        organizationId: orgId,
-        agentId: s.agentId,
-        policyId: s.policyId,
-        transactionId: null,
-        entryType: "recurring",
-        amount: fromCents(s.commissionCents),
-        currency: payload.currency,
-        description: `${rate}% commission on ${payload.currency} ${fromCents(s.shareCents)} — this policy's share of ${marker}(${group.name})`,
-        status: "earned",
-      });
-      byAgent.set(s.agentId, ((byAgent.get(s.agentId) ?? 0) + s.commissionCents) as Cents);
-    }
-    for (const [agentId, cents] of Array.from(byAgent)) {
-      notifyUser(orgId, agentId, {
-        type: "COMMISSION_EARNED",
-        title: "Commission Earned",
-        body: `${payload.currency} ${fromCents(cents)} commission from ${group.name}'s payment (${payload.receiptNumber}).`,
-        metadata: { groupId: group.id, receiptId: payload.receiptId, amount: fromCents(cents), currency: payload.currency },
-      }).catch(() => {});
-    }
-  }
-
-  // 2. Text every member (once per client). dispatchNotification never throws and logs each send.
   const amountLabel = `${payload.currency} ${fromCents(toCents(payload.amount))}`;
   const texted = new Set<string>();
   for (const p of members) {

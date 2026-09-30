@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { CurrencySelect } from "@/components/currency-select";
 import { CountryFlagFields, type CountryFlagSettings } from "@/components/country-flag-fields";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest } from "@/lib/queryClient";
 import { Loader2 } from "lucide-react";
 
@@ -57,6 +58,10 @@ export function EditPolicyDialog({
   selectedPolicy, displayPolicy, showEditDialog, setShowEditDialog, editForm, setEditForm,
   canEditPremium, countryFlagSettings, branches, agents, groups, todayISO, onUpdated,
 }: EditPolicyDialogProps) {
+  // Agent and group are admin decisions (the server enforces the same rule).
+  const { permissions, isPlatformOwner } = useAuth();
+  const canAssignAgentOrGroup = canEditPremium || !!isPlatformOwner
+    || (Array.isArray(permissions) && permissions.includes("manage:settings"));
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -85,8 +90,8 @@ export function EditPolicyDialog({
     if (editForm.effectiveDate !== (displayPolicy.effectiveDate || "")) data.effectiveDate = editForm.effectiveDate || null;
     if (canEditPremium && editForm.inceptionDate !== (displayPolicy.inceptionDate || "")) data.inceptionDate = editForm.inceptionDate || null;
     if (editForm.branchId !== (displayPolicy.branchId || "")) data.branchId = editForm.branchId || null;
-    if (canEditPremium && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
-    if (canEditPremium && editForm.groupId !== (displayPolicy.groupId || "")) data.groupId = editForm.groupId || null;
+    if (canAssignAgentOrGroup && editForm.agentId !== (displayPolicy.agentId || "")) data.agentId = editForm.agentId || null;
+    if (canAssignAgentOrGroup && editForm.groupId !== (displayPolicy.groupId || "")) data.groupId = editForm.groupId || null;
     if (editForm.beneficiaryFirstName !== (displayPolicy.beneficiaryFirstName || "")) data.beneficiaryFirstName = editForm.beneficiaryFirstName || null;
     if (editForm.beneficiaryLastName !== (displayPolicy.beneficiaryLastName || "")) data.beneficiaryLastName = editForm.beneficiaryLastName || null;
     if (editForm.beneficiaryRelationship !== (displayPolicy.beneficiaryRelationship || "")) data.beneficiaryRelationship = editForm.beneficiaryRelationship || null;
@@ -162,7 +167,7 @@ export function EditPolicyDialog({
                 </SelectContent>
               </Select>
             </div>
-            {canEditPremium && (
+            {canAssignAgentOrGroup && (
               <>
                 <div>
                   <Label className="text-xs">Agent</Label>
@@ -187,6 +192,15 @@ export function EditPolicyDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                  {(() => {
+                    const g = groups.find((x: any) => x.id === editForm.groupId);
+                    const a = g?.agentId ? agents.find((x: any) => x.id === g.agentId) : null;
+                    return g?.agentId && g.id !== (displayPolicy.groupId || "") ? (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This group's agent is {a?.displayName || a?.email || "set"} — the policy will move to them.
+                      </p>
+                    ) : null;
+                  })()}
                 </div>
               </>
             )}
