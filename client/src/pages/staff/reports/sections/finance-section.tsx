@@ -591,6 +591,17 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
             return (
               <div className="p-4">
                 {tbl("Trial balance — movements for the period", tb.rows, tb.totals, tb.balanced)}
+                {tb.surplus && Object.keys(tb.surplus).length > 0 && (
+                  <p className="text-sm -mt-2 mb-4">
+                    Surplus / (deficit) for the period:{" "}
+                    {Object.entries(tb.surplus).map(([c, v]: [string, any]) => (
+                      <span key={c} className={`font-semibold tabular-nums mr-3 ${Number(v) >= 0 ? "text-emerald-600" : "text-destructive"}`}>
+                        {c} {Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    ))}
+                    <span className="text-xs text-muted-foreground">(income less expenses — already in the lines above)</span>
+                  </p>
+                )}
                 {tbl(`Statement of financial position — as of ${pos.asOf}`, pos.rows, pos.totals, pos.balanced)}
                 <p className="text-[11px] text-muted-foreground">{tb.note}</p>
               </div>

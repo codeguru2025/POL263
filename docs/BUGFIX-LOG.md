@@ -10,6 +10,43 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — Trial Balance never balanced
+
+**Symptom:** Falakhe Sep 2026 showed Dr USD 13,947.00 against Cr USD 24,295.06, and ZAR was off the
+same way. `balanced` was false for every period with a profit or loss.
+
+**Root cause:** `buildTrialBalance` listed the income and expense accounts and then *also* a
+"Surplus for the period" (3900) line mirroring cash, so the profit was counted twice. Its comment
+claimed the cash and surplus lines "keep Dr = Cr", but that only holds if income equals expenses.
+It also:
+- deducted accrued costs from cash (commission earned, POL263 fees) though no cash had moved;
+- ignored commission actually paid through requisitions;
+- derived cash as income − expenses, not from the cash-flow statement.
+
+**Fix:** `server/general-ledger.ts`.
+- New pure `assembleTrialBalance`:
+  - Income and expenses come from the income statement.
+  - Cash (1100) is the cash-flow statement's net movement.
+  - Recognised-but-unpaid costs go to their payables: commission payable 2300 (earned − paid),
+    platform fees payable 2900 (fees − POL263 bills paid), other payables 2400 (approved − paid
+    payroll), claims payable 2100.
+  - No surplus line. The surplus is returned as a memo, shown under the table and in the export's
+    text (not in a Dr/Cr column).
+- It works in integer cents, and `balanced` is exact equality.
+
+**Verified:** Sep 2026: Dr = Cr = USD 14,311.64 / ZAR 23,180.38. August, March–September and a
+single branch all balance too. New tests in `tests/unit/general-ledger.test.ts` assert Dr = Cr.
+
+**Still open:** the Statement of financial position on the same tab (a re-dressing of the Balance
+Sheet) doesn't balance either. It has no cash line, and premium receivables have no matching
+credit. That's to be fixed at the source in the Balance Sheet review.
+
+**Lesson for next time:** a "balancing entry" that is computed from the same numbers it balances
+proves nothing. Test the invariant (Dr = Cr) on real figures with a profit, not on a hand-picked
+break-even case.
+
+---
+
 ## 2026-09-30 — Cash Flow: commission counted twice, lump sums called cash, payouts missing; USD 8.4k of requisitions stuck
 
 **Symptoms:**

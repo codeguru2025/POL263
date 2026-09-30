@@ -17,7 +17,8 @@
  *  - General ledger (account detail): every subsidiary-ledger transaction for one account code,
  *    for a period.
  */
-import { buildIncomeStatement, buildBalanceSheet, buildTransactionLedger, type LedgerEntry } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, type LedgerEntry } from "./financial-statements";
+import { toCents, centsToNumber } from "@shared/money";
 import { getDbForOrg } from "./tenant-db";
 import { claims, policies } from "@shared/schema";
 import { and, eq, gte, lte, inArray, sql } from "drizzle-orm";
@@ -84,83 +85,125 @@ export interface TrialBalanceResult {
   currencies: string[];
   rows: TrialBalanceRow[];
   totals: { debit: AmountMap; credit: AmountMap };
-  /** per currency: |debit - credit| < 0.01 */
+  /** per currency: debits equal credits to the cent */
   balanced: Record<string, boolean>;
+  /** Income less expenses for the period — shown under the table, not as a line (the income and
+   *  expense accounts are already in it). */
+  surplus: AmountMap;
   note: string;
+}
+
+/** The parts of the income and cash-flow statements a trial balance is built from. */
+export interface TrialBalanceInputs {
+  income: { premiumIndividual: AmountMap; premiumGroup: AmountMap; cashServices: AmountMap; legacyGroupIncome: AmountMap; total: AmountMap };
+  expenses: { lines: { source: string; amounts: AmountMap }[]; total: AmountMap };
+  cashFlow: {
+    netCash: AmountMap;
+    outflows: { commissions?: AmountMap; payroll?: AmountMap; claims?: AmountMap; pol263Bills?: AmountMap };
+  };
+}
+
+/**
+ * Movements trial balance for a period, built the standard way:
+ *  - income and expense accounts straight from the income statement;
+ *  - cash and bank = net cash movement from the cash-flow statement;
+ *  - anything recognised as a cost but not yet paid (or paid beyond what was recognised) is the
+ *    movement on its liability: commission payable (earned − paid), platform fees payable (fees −
+ *    POL263 bills paid), other payables (approved payroll − payroll paid), claims payable
+ *    (claims recognised − cash claims paid).
+ * Because the income statement's cash-basis lines are exactly the cash-flow statement's, those
+ * payables are the only gap between profit and cash, so debits equal credits by construction.
+ * Pure — exported for tests.
+ */
+export function assembleTrialBalance(inp: TrialBalanceInputs): { rows: TrialBalanceRow[]; surplus: AmountMap } {
+  // Signed movements in cents per account: + = debit, − = credit.
+  const moves = new Map<string, Record<string, number>>();
+  const post = (code: string, m: AmountMap | undefined, sign: 1 | -1) => {
+    for (const [c, v] of Object.entries(m ?? {})) {
+      const cents = toCents(v);
+      if (!cents) continue;
+      const k = (c || "USD").toUpperCase();
+      const acc = moves.get(code) ?? {};
+      acc[k] = (acc[k] ?? 0) + sign * cents;
+      moves.set(code, acc);
+    }
+  };
+  const sumSource = (sources: string[]) => {
+    const out: AmountMap = {};
+    for (const l of inp.expenses.lines) if (sources.includes(l.source)) for (const [c, v] of Object.entries(l.amounts)) add(out, c, v);
+    return out;
+  };
+
+  // Income — credits.
+  post("4100", inp.income.premiumIndividual, -1);
+  post("4200", inp.income.premiumGroup, -1);
+  post("4300", inp.income.cashServices, -1);
+  post("4400", inp.income.legacyGroupIncome, -1);
+
+  // Expenses — debits, by the source each income-statement line is tagged with.
+  const claimsCost = sumSource(["claims"]);
+  const commissionCost = sumSource(["commission"]);
+  const feesCost = sumSource(["platform_fee"]);
+  const payrollCost = sumSource(["payroll"]);
+  post("5100", claimsCost, 1);
+  post("5200", commissionCost, 1);
+  post("5400", Object.fromEntries(
+    Object.entries(inp.expenses.total).map(([c, v]) => [c, v - (claimsCost[c] ?? 0) - (commissionCost[c] ?? 0)]),
+  ), 1);
+
+  // Cash — the cash-flow statement's net movement.
+  post("1100", inp.cashFlow.netCash, 1);
+
+  // Liabilities — cost recognised (credit) less cash paid against it (debit).
+  const out = inp.cashFlow.outflows;
+  post("2300", commissionCost, -1); post("2300", out.commissions, 1);
+  post("2900", feesCost, -1); post("2900", out.pol263Bills, 1);
+  post("2400", payrollCost, -1); post("2400", out.payroll, 1);
+  post("2100", claimsCost, -1); post("2100", out.claims, 1);
+
+  const rows: TrialBalanceRow[] = [];
+  for (const [code, byCur] of Array.from(moves.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    const debit: AmountMap = {}, credit: AmountMap = {};
+    for (const [c, cents] of Object.entries(byCur)) {
+      if (cents > 0) debit[c] = centsToNumber(cents);
+      else if (cents < 0) credit[c] = centsToNumber(-cents);
+    }
+    if (!Object.keys(debit).length && !Object.keys(credit).length) continue;
+    const a = ACC(code);
+    rows.push({ code, name: a.name, class: a.class, debit, credit });
+  }
+
+  const surplus: AmountMap = {};
+  for (const [c, v] of Object.entries(inp.income.total)) add(surplus, c, v);
+  for (const [c, v] of Object.entries(inp.expenses.total)) add(surplus, c, -v);
+  return { rows, surplus: round2(surplus) };
 }
 
 export async function buildTrialBalance(orgId: string, params: { from: string; to: string; branchId?: string }): Promise<TrialBalanceResult> {
   const { from, to, branchId } = params;
-  const is = await buildIncomeStatement(orgId, { from, to, branchId });
+  const [is, cf] = await Promise.all([
+    buildIncomeStatement(orgId, { from, to, branchId }),
+    buildCashFlowStatement(orgId, { from, to, branchId }),
+  ]);
+  const { rows, surplus } = assembleTrialBalance({ income: is.income, expenses: is.expenses, cashFlow: cf });
 
-  const rows: TrialBalanceRow[] = [];
-  const cr = (code: string, m: AmountMap) => {
-    if (Object.keys(m).length === 0) return;
-    const a = ACC(code);
-    rows.push({ code, name: a.name, class: a.class, debit: {}, credit: round2(m) });
-  };
-  const dr = (code: string, m: AmountMap) => {
-    if (Object.keys(m).length === 0) return;
-    const a = ACC(code);
-    rows.push({ code, name: a.name, class: a.class, debit: round2(m), credit: {} });
-  };
-
-  // Income — credits
-  cr("4100", is.income.premiumIndividual);
-  cr("4200", is.income.premiumGroup);
-  cr("4300", is.income.cashServices);
-  cr("4400", is.income.legacyGroupIncome);
-
-  // Expenses — debits, by the source each income-statement line is tagged with.
-  const claimsPaid: AmountMap = {};
-  const commission: AmountMap = {};
-  const operating: AmountMap = {};
-  for (const line of is.expenses.lines) {
-    const target = line.source === "claims" ? claimsPaid : line.source === "commission" ? commission : operating;
-    for (const [c, v] of Object.entries(line.amounts)) add(target, c, v);
-  }
-  dr("5100", claimsPaid);
-  dr("5200", commission);
-  dr("5400", operating);
-
-  // Net cash movement — the balancing entry. Income increases cash (debit), expenses reduce it.
-  const netCash: AmountMap = {};
-  for (const [c, v] of Object.entries(is.income.total)) add(netCash, c, v);
-  for (const [c, v] of Object.entries(is.expenses.total)) add(netCash, c, -v);
-  // netCash > 0 → cash went up → debit 1100; < 0 → credit.
-  const cashDr: AmountMap = {}, cashCr: AmountMap = {};
-  for (const [c, v] of Object.entries(round2(netCash))) {
-    if (v > 0.004) cashDr[c] = v; else if (v < -0.004) cashCr[c] = -v;
-  }
-  if (Object.keys(cashDr).length) rows.push({ code: "1100", name: ACC("1100").name, class: "asset", debit: cashDr, credit: {} });
-  if (Object.keys(cashCr).length) rows.push({ code: "1100", name: ACC("1100").name, class: "asset", debit: {}, credit: cashCr });
-
-  // Surplus for the period closes P&L to equity: income - expenses - claims.
-  const surplus = round2(netCash);
-  const surDr: AmountMap = {}, surCr: AmountMap = {};
-  for (const [c, v] of Object.entries(surplus)) {
-    if (v > 0.004) surCr[c] = v; else if (v < -0.004) surDr[c] = -v;
-  }
-  // The surplus line and the cash line are mirror images — together they keep Dr = Cr while
-  // showing both "where the money went" (cash) and "what the owners earned" (equity).
-  if (Object.keys(surDr).length) rows.push({ code: "3900", name: ACC("3900").name, class: "equity", debit: surDr, credit: {} });
-  if (Object.keys(surCr).length) rows.push({ code: "3900", name: ACC("3900").name, class: "equity", debit: {}, credit: surCr });
-
-  const totalDebit: AmountMap = {}, totalCredit: AmountMap = {};
+  const debitCents: Record<string, number> = {}, creditCents: Record<string, number> = {};
   for (const r of rows) {
-    for (const [c, v] of Object.entries(r.debit)) add(totalDebit, c, v);
-    for (const [c, v] of Object.entries(r.credit)) add(totalCredit, c, v);
+    for (const [c, v] of Object.entries(r.debit)) debitCents[c] = (debitCents[c] ?? 0) + toCents(v);
+    for (const [c, v] of Object.entries(r.credit)) creditCents[c] = (creditCents[c] ?? 0) + toCents(v);
   }
-  const currencies = Array.from(new Set([...Object.keys(totalDebit), ...Object.keys(totalCredit)])).sort();
+  const currencies = Array.from(new Set([...Object.keys(debitCents), ...Object.keys(creditCents)])).sort();
   const balanced: Record<string, boolean> = {};
-  for (const c of currencies) balanced[c] = Math.abs((totalDebit[c] || 0) - (totalCredit[c] || 0)) < 0.01;
+  for (const c of currencies) balanced[c] = (debitCents[c] ?? 0) === (creditCents[c] ?? 0);
+  const toMap = (m: Record<string, number>) => Object.fromEntries(Object.entries(m).map(([c, v]) => [c, centsToNumber(v)]));
 
   return {
     from, to, currencies,
-    rows: rows.sort((a, b) => a.code.localeCompare(b.code)),
-    totals: { debit: round2(totalDebit), credit: round2(totalCredit) },
+    rows,
+    totals: { debit: toMap(debitCents), credit: toMap(creditCents) },
     balanced,
-    note: "Movements trial balance — the income statement expressed in debit/credit form and closed to equity. The cash and surplus lines are mirror images and keep total debits equal to total credits.",
+    surplus,
+    note: "Movements for the period. Income and expenses come from the income statement; cash and bank is the cash-flow statement's net cash movement; costs recognised but not yet paid (commission, POL263 fees, payroll, claims) sit in their payable accounts. The surplus for the period is shown underneath, not as a line.",
   };
 }
 

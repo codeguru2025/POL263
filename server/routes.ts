@@ -16420,6 +16420,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             for (const c of curs) rows.push([section, r.code, r.name, r.class, c, (r.debit[c] ?? 0).toFixed(2), (r.credit[c] ?? 0).toFixed(2)]);
           };
           for (const r of tb.rows) emit("Trial balance (period)", r);
+          for (const [c, v] of Object.entries(tb.surplus)) rows.push(["Trial balance (period)", "", `Memo: surplus / (deficit) for the period ${c} ${Number(v).toFixed(2)} (already in the lines above)`, "", c, "", ""]);
           rows.push(["", "", "", "", "", "", ""]);
           for (const r of pos.rows) emit(`Financial position (as of ${tbTo})`, r as any);
           break;
