@@ -4,12 +4,12 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../../server/tenant-db", () => ({ getDbForOrg: vi.fn() }));
 vi.mock("../../server/storage", () => ({ storage: {} }));
 
-import { CHART_OF_ACCOUNTS, accountForLedgerEntry, assembleTrialBalance, type TrialBalanceInputs } from "../../server/general-ledger";
+import { CHART_OF_ACCOUNTS, accountForLedgerEntry, assembleTrialBalance, postToGeneralLedger, type TrialBalanceInputs } from "../../server/general-ledger";
 import type { LedgerEntry } from "../../server/financial-statements";
 
 const entry = (over: Partial<LedgerEntry>): LedgerEntry => ({
   date: "2026-08-01", type: "income", source: "premium", description: "", reference: null,
-  person: null, department: null, amount: 10, currency: "USD", ...over,
+  person: null, department: null, amount: 10, currency: "USD", cash: true, ...over,
 });
 
 describe("chart of accounts", () => {
@@ -29,13 +29,52 @@ describe("chart of accounts", () => {
 });
 
 describe("accountForLedgerEntry", () => {
-  it("maps each subsidiary-ledger source to the right P&L account", () => {
+  it("maps each event to the income/expense account it lands in (or the liability a payment reduces)", () => {
     expect(accountForLedgerEntry(entry({ source: "premium" })).code).toBe("4100");
+    expect(accountForLedgerEntry(entry({ source: "premium_group" })).code).toBe("4200");
     expect(accountForLedgerEntry(entry({ source: "cash_service" })).code).toBe("4300");
     expect(accountForLedgerEntry(entry({ source: "legacy_group" })).code).toBe("4400");
-    expect(accountForLedgerEntry(entry({ source: "commission", type: "expense" })).code).toBe("5200");
+    expect(accountForLedgerEntry(entry({ source: "commission_earned", type: "expense" })).code).toBe("5200");
     expect(accountForLedgerEntry(entry({ source: "requisition", type: "expense" })).code).toBe("5400");
-    expect(accountForLedgerEntry(entry({ source: "expenditure", type: "expense" })).code).toBe("5400");
+    expect(accountForLedgerEntry(entry({ source: "claim", type: "expense" })).code).toBe("5100");
+    expect(accountForLedgerEntry(entry({ source: "commission_paid", type: "payment" })).code).toBe("2300");
+    expect(accountForLedgerEntry(entry({ source: "pol263_bill", type: "payment" })).code).toBe("2900");
+  });
+});
+
+describe("postToGeneralLedger — double entry", () => {
+  const events: LedgerEntry[] = [
+    entry({ source: "premium", amount: 100 }),
+    entry({ source: "legacy_group", amount: 60, currency: "ZAR" }),
+    entry({ source: "requisition", type: "expense", amount: 30 }),
+    entry({ source: "commission_earned", type: "expense", amount: 10, cash: false }),
+    entry({ source: "commission_earned", type: "expense", amount: -4, cash: false }), // a clawback
+    entry({ source: "commission_paid", type: "payment", amount: 5 }),
+    entry({ source: "platform_fee", type: "expense", amount: 2.5, cash: false }),
+  ];
+
+  it("posts every event as one debit line and one credit line, so debits equal credits per currency", () => {
+    const { lines } = postToGeneralLedger(events);
+    expect(lines).toHaveLength(events.length * 2);
+    const sum = (cur: string, side: "debit" | "credit") => Math.round(lines.filter((l) => l.currency === cur).reduce((s, l) => s + (l[side] ?? 0), 0) * 100) / 100;
+    expect(sum("USD", "debit")).toBe(sum("USD", "credit"));
+    expect(sum("ZAR", "debit")).toBe(sum("ZAR", "credit"));
+  });
+
+  it("totals each account like the trial balance: cash, commission owed after a clawback and a payment", () => {
+    const { accounts } = postToGeneralLedger(events);
+    const acc = (code: string) => accounts.find((a) => a.code === code)!;
+    expect(acc("1100").debit).toEqual({ USD: 100, ZAR: 60 });
+    expect(acc("1100").credit).toEqual({ USD: 35 }); // requisition 30 + commission paid 5
+    expect(acc("2300").credit).toEqual({ USD: 10 }); // earned
+    expect(acc("2300").debit).toEqual({ USD: 9 }); // clawback 4 + paid 5
+    expect(acc("2900").credit).toEqual({ USD: 2.5 });
+  });
+
+  it("shows only the chosen account's lines, with the other side named", () => {
+    const { lines } = postToGeneralLedger(events, "2300");
+    expect(lines.every((l) => l.account === "2300")).toBe(true);
+    expect(lines.find((l) => l.debit === 5)?.contraAccount).toBe("1100");
   });
 });
 

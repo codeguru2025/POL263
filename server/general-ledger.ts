@@ -17,7 +17,7 @@
  *  - General ledger (account detail): every subsidiary-ledger transaction for one account code,
  *    for a period.
  */
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, type LedgerEntry } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, LEDGER_MAX_ROWS, type LedgerEntry, type LedgerSource } from "./financial-statements";
 import { toCents, centsToNumber } from "@shared/money";
 import { getDbForOrg } from "./tenant-db";
 import { claims, policies } from "@shared/schema";
@@ -55,17 +55,31 @@ export const CHART_OF_ACCOUNTS: Account[] = [
 
 const ACC = (code: string) => CHART_OF_ACCOUNTS.find((a) => a.code === code)!;
 
-/** Which P&L account a transaction-ledger source posts to. */
+/** The double entry each transaction-ledger event makes: [debit account, credit account]. The
+ *  same rules as assembleTrialBalance, so the General Ledger's account totals equal it. */
+export const POSTINGS: Record<LedgerSource, [string, string]> = {
+  premium: ["1100", "4100"],
+  premium_group: ["1100", "4200"],
+  cash_service: ["1100", "4300"],
+  legacy_group: ["1100", "4400"],
+  requisition: ["5400", "1100"],
+  expenditure: ["5400", "1100"],
+  petty_cash: ["5400", "1100"],
+  commission_earned: ["5200", "2300"],
+  commission_paid: ["2300", "1100"],
+  platform_fee: ["5400", "2900"],
+  pol263_bill: ["2900", "1100"],
+  payroll: ["5400", "2400"],
+  payroll_paid: ["2400", "1100"],
+  claim: ["5100", "2100"],
+  claim_paid: ["2100", "1100"],
+};
+
+/** The income or expense account an event lands in — for a payment of something already owed,
+ *  the liability it reduces. */
 export function accountForLedgerEntry(e: LedgerEntry): Account {
-  switch (e.source) {
-    case "premium": return ACC("4100"); // individual/group split not carried on the ledger row; see trial balance for the split
-    case "cash_service": return ACC("4300");
-    case "legacy_group": return ACC("4400");
-    case "commission": return ACC("5200");
-    case "requisition":
-    case "expenditure": return ACC("5400");
-    default: return ACC("5400");
-  }
+  const [dr, cr] = POSTINGS[e.source];
+  return ACC(e.type === "income" ? cr : dr);
 }
 
 type AmountMap = Record<string, number>;
@@ -289,6 +303,8 @@ export interface GlLine {
   date: string;
   account: string;
   accountName: string;
+  /** The account on the other side of this entry. */
+  contraAccount: string;
   description: string;
   reference: string | null;
   debit: number | null;
@@ -296,51 +312,51 @@ export interface GlLine {
   currency: string;
 }
 
-/** General-ledger detail: every subsidiary-ledger transaction for one account code, in a period. */
-export async function buildGeneralLedger(orgId: string, params: { from: string; to: string; account?: string; branchId?: string }): Promise<{ from: string; to: string; account: string | null; lines: GlLine[] }> {
+export interface GlAccountTotal { code: string; name: string; debit: Record<string, number>; credit: Record<string, number> }
+
+/**
+ * General ledger: every money event in the period (buildTransactionLedger) posted in double entry
+ * (POSTINGS) — each event is a debit line on one account and a credit line on another, so debits
+ * equal credits and each account's totals equal its Trial Balance line.
+ */
+export async function buildGeneralLedger(orgId: string, params: { from: string; to: string; account?: string; branchId?: string }): Promise<{ from: string; to: string; account: string | null; truncated: boolean; lines: GlLine[]; accounts: GlAccountTotal[] }> {
   const { from, to, account, branchId } = params;
-  const led = await buildTransactionLedger(orgId, { from, to, branchId, limit: 2000 });
+  const led = await buildTransactionLedger(orgId, { from, to, branchId, limit: LEDGER_MAX_ROWS });
+  const { lines, accounts } = postToGeneralLedger(led.entries, account);
+  return { from, to, account: account ?? null, truncated: led.truncated, lines, accounts };
+}
+
+/** Pure — exported for tests. Posts ledger events in double entry, optionally for one account. */
+export function postToGeneralLedger(entries: LedgerEntry[], account?: string): { lines: GlLine[]; accounts: GlAccountTotal[] } {
   const lines: GlLine[] = [];
-  for (const e of led.entries) {
-    const a = accountForLedgerEntry(e);
-    if (account && a.code !== account) continue;
-    lines.push({
-      date: e.date,
-      account: a.code,
-      accountName: a.name,
-      description: e.description,
-      reference: e.reference,
-      debit: e.type === "expense" ? e.amount : null,
-      credit: e.type === "income" ? e.amount : null,
-      currency: e.currency,
-    });
-  }
-  // Claims (not in the transaction ledger) — only when the filter includes 5100 or is unset.
-  if (!account || account === "5100") {
-    const tdb = await getDbForOrg(orgId);
-    const rows = await tdb
-      .select({
-        createdAt: claims.createdAt, claimNumber: claims.claimNumber, currency: claims.currency,
-        amount: claims.cashInLieuAmount, deceased: claims.deceasedName, policyNumber: policies.policyNumber,
-      })
-      .from(claims).leftJoin(policies, eq(claims.policyId, policies.id))
-      .where(and(
-        eq(claims.organizationId, orgId),
-        inArray(claims.status, ["approved", "paid", "settled", "closed"]),
-        gte(claims.createdAt, new Date(from + "T00:00:00.000Z")),
-        lte(claims.createdAt, new Date(to + "T23:59:59.999Z")),
-      ));
-    for (const r of rows) {
-      const amt = parseFloat(String(r.amount ?? 0));
-      if (!(amt > 0)) continue;
-      lines.push({
-        date: new Date(r.createdAt).toISOString().slice(0, 10),
-        account: "5100", accountName: ACC("5100").name,
-        description: `Claim ${r.claimNumber}${r.deceased ? ` — ${r.deceased}` : ""}${r.policyNumber ? ` (${r.policyNumber})` : ""}`,
-        reference: r.claimNumber, debit: amt, credit: null, currency: r.currency || "USD",
-      });
+  const cents = new Map<string, { debit: Record<string, number>; credit: Record<string, number> }>();
+  const tally = (code: string, side: "debit" | "credit", currency: string, amount: number) => {
+    const t = cents.get(code) ?? { debit: {}, credit: {} };
+    t[side][currency] = (t[side][currency] ?? 0) + toCents(amount);
+    cents.set(code, t);
+  };
+  for (const e of entries) {
+    const [dr, cr] = POSTINGS[e.source];
+    const cur = (e.currency || "USD").toUpperCase();
+    // A negative amount (a commission clawback) reverses the entry's direction.
+    const [debitAcc, creditAcc, amt] = e.amount >= 0 ? [dr, cr, e.amount] : [cr, dr, -e.amount];
+    tally(debitAcc, "debit", cur, amt);
+    tally(creditAcc, "credit", cur, amt);
+    if (!account || account === debitAcc) {
+      lines.push({ date: e.date, account: debitAcc, accountName: ACC(debitAcc).name, contraAccount: creditAcc, description: e.description, reference: e.reference, debit: amt, credit: null, currency: cur });
+    }
+    if (!account || account === creditAcc) {
+      lines.push({ date: e.date, account: creditAcc, accountName: ACC(creditAcc).name, contraAccount: debitAcc, description: e.description, reference: e.reference, debit: null, credit: amt, currency: cur });
     }
   }
   lines.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.account.localeCompare(b.account)));
-  return { from, to, account: account ?? null, lines };
+  const accounts: GlAccountTotal[] = Array.from(cents.entries())
+    .filter(([code]) => !account || code === account)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, t]) => ({
+      code, name: ACC(code).name,
+      debit: Object.fromEntries(Object.entries(t.debit).map(([c, v]) => [c, centsToNumber(v)])),
+      credit: Object.fromEntries(Object.entries(t.credit).map(([c, v]) => [c, centsToNumber(v)])),
+    }));
+  return { lines, accounts };
 }

@@ -17,7 +17,7 @@
 import { and, eq, gte, lte, lt, sql, inArray, desc } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
-import { todayForOrg, dayRangeForOrg, getOrgTimezone } from "./date-utils";
+import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import { roundMoney, subMoney } from "@shared/money";
 import {
   paymentReceipts,
@@ -644,20 +644,32 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
 }
 
 // ─── Transaction Ledger ─────────────────────────────────────────────────────
-// Row-level detail behind the income statement / cash flow totals above —
-// every individual transaction in the period, with who recorded it and which
-// department / cost-centre it belongs to.
+// Row-level detail behind the income statement and cash-flow statement above: every money event
+// in the period, under exactly the same rules as those statements, each tagged with the two
+// accounts it posts to (server/general-ledger.ts POSTINGS) so the General Ledger can post it in
+// double entry and its account totals equal the Trial Balance.
+
+export type LedgerSource =
+  | "premium" | "premium_group" | "cash_service" | "legacy_group"
+  | "requisition" | "expenditure" | "petty_cash"
+  | "commission_earned" | "commission_paid"
+  | "platform_fee" | "pol263_bill"
+  | "payroll" | "payroll_paid"
+  | "claim" | "claim_paid";
 
 export interface LedgerEntry {
-  date: string;          // YYYY-MM-DD
-  type: "income" | "expense";
-  source: "premium" | "cash_service" | "legacy_group" | "requisition" | "expenditure" | "commission";
+  date: string;          // YYYY-MM-DD, tenant-local
+  /** income = money earned; expense = a cost; payment = paying off something already owed. */
+  type: "income" | "expense" | "payment";
+  source: LedgerSource;
   description: string;
   reference: string | null;
   person: string | null;
   department: string | null;
   amount: number;
   currency: string;
+  /** false when no cash moved (commission earned, POL263 fee charged, payroll or claim approved). */
+  cash: boolean;
 }
 
 export interface LedgerParams extends StatementParams {
@@ -665,38 +677,44 @@ export interface LedgerParams extends StatementParams {
   offset?: number;
 }
 
+/** Most rows a ledger request returns; more than this and the caller is told to narrow dates. */
+export const LEDGER_MAX_ROWS = 20000;
+
 function fullName(first: string | null | undefined, last: string | null | undefined): string | null {
   const n = [first, last].filter(Boolean).join(" ").trim();
   return n || null;
 }
 
-export async function buildTransactionLedger(orgId: string, params: LedgerParams): Promise<{ from: string; to: string; branchId: string | null; total: number; entries: LedgerEntry[] }> {
+export async function buildTransactionLedger(orgId: string, params: LedgerParams): Promise<{ from: string; to: string; branchId: string | null; total: number; truncated: boolean; entries: LedgerEntry[] }> {
   const tdb = await getDbForOrg(orgId);
   const { from, to, branchId } = params;
-  const limit = Math.min(params.limit ?? 500, 2000);
+  const limit = Math.min(params.limit ?? LEDGER_MAX_ROWS, LEDGER_MAX_ROWS);
   const offset = params.offset ?? 0;
+  const { start, end } = await periodBounds(orgId, from, to);
+  const tz = await getOrgTimezone(orgId);
+  const day = (d: Date | string) => dateInTimezone(d, tz);
+  const plainDate = (d: unknown) => String(d instanceof Date ? d.toISOString() : d).slice(0, 10);
+  const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
 
   const entries: LedgerEntry[] = [];
+  const push = (e: Omit<LedgerEntry, "cash"> & { cash?: boolean }) => {
+    if (!e.amount) return;
+    entries.push({ cash: true, ...e });
+  };
 
-  // ── Premium receipts (individual + group policies) ──
+  // ── Premium receipts (issued, and approved where approval applies) ──
   const prConds: any[] = [
-    eq(paymentReceipts.organizationId, orgId),
-    eq(paymentReceipts.status, "issued"),
-    gte(paymentReceipts.issuedAt, fromTs(from)),
-    lte(paymentReceipts.issuedAt, toTs(to)),
+    eq(paymentReceipts.organizationId, orgId), eq(paymentReceipts.status, "issued"), validPaymentReceipt,
+    gte(paymentReceipts.issuedAt, start), lt(paymentReceipts.issuedAt, end),
   ];
   if (branchId) prConds.push(eq(paymentReceipts.branchId, branchId));
   const premiumRows = await tdb
     .select({
-      issuedAt: paymentReceipts.issuedAt,
-      receiptNumber: paymentReceipts.receiptNumber,
-      amount: paymentReceipts.amount,
-      currency: paymentReceipts.currency,
-      policyNumber: policies.policyNumber,
-      clientFirstName: clients.firstName,
-      clientLastName: clients.lastName,
-      branchName: branches.name,
-      issuerFirstName: users.displayName,
+      issuedAt: paymentReceipts.issuedAt, receiptNumber: paymentReceipts.receiptNumber,
+      amount: paymentReceipts.amount, currency: paymentReceipts.currency,
+      policyNumber: policies.policyNumber, isGroup: sql<boolean>`${policies.groupId} IS NOT NULL`,
+      clientFirstName: clients.firstName, clientLastName: clients.lastName,
+      branchName: branches.name, issuerName: users.displayName,
     })
     .from(paymentReceipts)
     .innerJoin(policies, eq(paymentReceipts.policyId, policies.id))
@@ -705,171 +723,207 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
     .leftJoin(users, eq(paymentReceipts.issuedByUserId, users.id))
     .where(and(...prConds));
   for (const r of premiumRows) {
-    entries.push({
-      date: new Date(r.issuedAt).toISOString().slice(0, 10),
-      type: "income",
-      source: "premium",
-      description: `Premium — ${r.policyNumber}${r.clientFirstName ? ` (${fullName(r.clientFirstName, r.clientLastName)})` : ""}`,
-      reference: r.receiptNumber,
-      person: r.issuerFirstName ?? null,
-      department: r.branchName ?? null,
-      amount: parseFloat(r.amount),
-      currency: r.currency,
+    push({
+      date: day(r.issuedAt), type: "income", source: r.isGroup ? "premium_group" : "premium",
+      description: `Premium${r.isGroup ? " (society member)" : ""} — ${r.policyNumber}${r.clientFirstName ? ` (${fullName(r.clientFirstName, r.clientLastName)})` : ""}`,
+      reference: r.receiptNumber, person: r.issuerName ?? null, department: r.branchName ?? null,
+      amount: num(r.amount), currency: r.currency,
     });
   }
 
-  // ── Cash-service receipts (funeral cases) ──
+  // ── Funeral service receipts ──
   const srConds: any[] = [
-    eq(serviceReceipts.organizationId, orgId),
-    eq(serviceReceipts.status, "issued"),
-    gte(serviceReceipts.issuedAt, fromTs(from)),
-    lte(serviceReceipts.issuedAt, toTs(to)),
+    eq(serviceReceipts.organizationId, orgId), eq(serviceReceipts.status, "issued"),
+    gte(serviceReceipts.issuedAt, start), lt(serviceReceipts.issuedAt, end),
   ];
   if (branchId) srConds.push(eq(serviceReceipts.branchId, branchId));
   const serviceRows = await tdb
     .select({
-      issuedAt: serviceReceipts.issuedAt,
-      receiptNumber: serviceReceipts.receiptNumber,
-      amount: serviceReceipts.amount,
-      currency: serviceReceipts.currency,
-      deceasedName: funeralCases.deceasedName,
-      issuerName: users.displayName,
+      issuedAt: serviceReceipts.issuedAt, receiptNumber: serviceReceipts.receiptNumber,
+      amount: serviceReceipts.amount, currency: serviceReceipts.currency,
+      deceasedName: funeralCases.deceasedName, issuerName: users.displayName,
     })
     .from(serviceReceipts)
     .leftJoin(funeralCases, eq(serviceReceipts.funeralCaseId, funeralCases.id))
     .leftJoin(users, eq(serviceReceipts.issuedByUserId, users.id))
     .where(and(...srConds));
   for (const r of serviceRows) {
-    entries.push({
-      date: new Date(r.issuedAt).toISOString().slice(0, 10),
-      type: "income",
-      source: "cash_service",
-      description: `Cash service${r.deceasedName ? ` — ${r.deceasedName}` : ""}`,
-      reference: r.receiptNumber,
-      person: r.issuerName ?? null,
-      department: "Funeral Services",
-      amount: parseFloat(r.amount),
-      currency: r.currency,
+    push({
+      date: day(r.issuedAt), type: "income", source: "cash_service",
+      description: `Funeral service${r.deceasedName ? ` — ${r.deceasedName}` : ""}`,
+      reference: r.receiptNumber, person: r.issuerName ?? null, department: "Funeral Services",
+      amount: num(r.amount), currency: r.currency,
     });
   }
 
-  // ── Legacy group receipts (Falakhe-style tenants only — table may not exist elsewhere) ──
-  try {
-    const rows = await tdb.execute(sql`
-      SELECT receipt_number, amount, currency, group_name, payment_date
-      FROM legacy_group_receipts
-      WHERE organization_id = ${orgId}
-        AND payment_date >= ${from}::date
-        AND payment_date <= ${to}::date
-    `);
-    const legacyRows = (rows.rows ?? rows) as { receipt_number: string; amount: string; currency: string; group_name: string; payment_date: string }[];
-    for (const r of legacyRows) {
-      entries.push({
-        date: new Date(r.payment_date).toISOString().slice(0, 10),
-        type: "income",
-        source: "legacy_group",
-        description: `Legacy group receipt — ${r.group_name}`,
-        reference: r.receipt_number,
-        person: null,
-        department: r.group_name,
-        amount: parseFloat(r.amount),
-        currency: r.currency,
+  // ── Society lump sums (not kept per branch) ──
+  if (!branchId) {
+    const rows = rowsOf<{ receipt_number: string; amount: string; currency: string; group_name: string; payment_date: string }>(await tdb.execute(sql`
+      SELECT receipt_number, amount, currency, group_name, payment_date FROM legacy_group_receipts
+      WHERE organization_id = ${orgId} AND payment_date >= ${from}::date AND payment_date <= ${to}::date`));
+    for (const r of rows) {
+      push({
+        date: plainDate(r.payment_date), type: "income", source: "legacy_group",
+        description: `Society lump sum — ${r.group_name}`, reference: r.receipt_number, person: null,
+        department: r.group_name, amount: num(r.amount), currency: r.currency,
       });
     }
-  } catch { /* legacy_group_receipts table doesn't exist for this org — skip */ }
+  }
 
-  // ── Disbursements (requisitions + expenditures paid out) ──
+  // ── Requisitions and expenditures paid out ──
   const disbConds: any[] = [
     eq(paymentDisbursements.organizationId, orgId),
-    sql`${paymentDisbursements.paidDate} >= ${from}`,
-    sql`${paymentDisbursements.paidDate} <= ${to}`,
+    sql`${paymentDisbursements.paidDate} >= ${from}`, sql`${paymentDisbursements.paidDate} <= ${to}`,
   ];
   if (branchId) disbConds.push(eq(paymentDisbursements.branchId, branchId));
   const disbRows = await tdb
     .select({
-      paidDate: paymentDisbursements.paidDate,
-      voucherNumber: paymentDisbursements.voucherNumber,
-      entityType: paymentDisbursements.entityType,
-      entityId: paymentDisbursements.entityId,
-      amount: paymentDisbursements.amount,
-      currency: paymentDisbursements.currency,
-      paidByUserId: paymentDisbursements.paidByUserId,
+      paidDate: paymentDisbursements.paidDate, voucherNumber: paymentDisbursements.voucherNumber,
+      entityType: paymentDisbursements.entityType, entityId: paymentDisbursements.entityId,
+      amount: paymentDisbursements.amount, currency: paymentDisbursements.currency,
+      payerName: users.displayName,
     })
     .from(paymentDisbursements)
+    .leftJoin(users, eq(paymentDisbursements.paidByUserId, users.id))
     .where(and(...disbConds));
-
   const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
   const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
-  const reqMap: Record<string, { description: string; category: string; department: string | null }> = {};
+  const info: Record<string, { description: string | null; category: string | null; department: string | null; number: string | null }> = {};
   if (reqIds.length) {
-    const rows = await tdb.select({
-      id: requisitions.id, description: requisitions.description, category: requisitions.category, department: requisitions.department,
-    }).from(requisitions).where(inArray(requisitions.id, reqIds));
-    for (const r of rows) reqMap[r.id] = { description: r.description, category: r.category, department: r.department };
+    for (const r of await tdb.select({ id: requisitions.id, description: requisitions.description, category: requisitions.category, department: requisitions.department, number: requisitions.requisitionNumber })
+      .from(requisitions).where(inArray(requisitions.id, reqIds))) info[r.id] = r as any;
   }
-  const expMap: Record<string, { description: string; category: string }> = {};
   if (expIds.length) {
-    const rows = await tdb.select({
-      id: expenditures.id, description: expenditures.description, category: expenditures.category,
-    }).from(expenditures).where(inArray(expenditures.id, expIds));
-    for (const r of rows) expMap[r.id] = { description: r.description, category: r.category };
-  }
-  const payerIds = Array.from(new Set(disbRows.map((d: any) => d.paidByUserId).filter(Boolean))) as string[];
-  const payerMap: Record<string, string | null> = {};
-  if (payerIds.length) {
-    const rows = await tdb.select({ id: users.id, displayName: users.displayName }).from(users).where(inArray(users.id, payerIds));
-    for (const r of rows) payerMap[r.id] = r.displayName;
+    for (const r of await tdb.select({ id: expenditures.id, description: expenditures.description, category: expenditures.category })
+      .from(expenditures).where(inArray(expenditures.id, expIds))) info[r.id] = { ...r, department: null, number: null } as any;
   }
   for (const d of disbRows) {
     const isReq = d.entityType === "requisition";
-    const info = isReq ? reqMap[d.entityId] : expMap[d.entityId];
-    entries.push({
-      date: String(d.paidDate),
-      type: "expense",
-      source: isReq ? "requisition" : "expenditure",
-      description: info?.description || (isReq ? "Requisition" : "Expenditure"),
-      reference: d.voucherNumber ?? null,
-      person: d.paidByUserId ? (payerMap[d.paidByUserId] ?? null) : null,
-      department: (isReq ? (info as any)?.department : null) || info?.category || "Uncategorised",
-      amount: parseFloat(d.amount),
-      currency: d.currency,
+    const i = info[d.entityId];
+    const commissionPayout = isCommissionPayoutCategory(i?.category);
+    push({
+      date: plainDate(d.paidDate),
+      type: commissionPayout ? "payment" : "expense",
+      source: commissionPayout ? "commission_paid" : isReq ? "requisition" : "expenditure",
+      description: `${commissionPayout ? "Commission paid to agent — " : ""}${i?.description || i?.category || (isReq ? "Requisition" : "Expenditure")}${i?.number ? ` (${i.number})` : ""}`,
+      reference: d.voucherNumber ?? null, person: d.payerName ?? null,
+      department: i?.department || i?.category || "Uncategorised",
+      amount: num(d.amount), currency: d.currency,
     });
   }
 
-  // ── Paid agent commissions ──
-  const commRows = await tdb
-    .select({
-      createdAt: commissionLedgerEntries.createdAt,
-      amount: commissionLedgerEntries.amount,
-      currency: commissionLedgerEntries.currency,
-      description: commissionLedgerEntries.description,
-      agentName: users.displayName,
-    })
-    .from(commissionLedgerEntries)
-    .leftJoin(users, eq(commissionLedgerEntries.agentId, users.id))
-    .where(and(
-      eq(commissionLedgerEntries.organizationId, orgId),
-      eq(commissionLedgerEntries.status, "paid"),
-      gte(commissionLedgerEntries.createdAt, fromTs(from)),
-      lte(commissionLedgerEntries.createdAt, toTs(to)),
-    ));
-  for (const r of commRows) {
-    entries.push({
-      date: new Date(r.createdAt).toISOString().slice(0, 10),
-      type: "expense",
-      source: "commission",
-      description: r.description || "Agent commission",
-      reference: null,
-      person: r.agentName ?? null,
-      department: "Commissions",
-      amount: parseFloat(r.amount),
-      currency: r.currency,
+  // ── Petty cash spent ──
+  const pettyRows = rowsOf<{ transaction_date: string; amount: string; currency: string; category: string | null; description: string | null; receipt_ref: string | null; person: string | null }>(await tdb.execute(sql`
+    SELECT t.transaction_date, t.amount, f.currency, t.category, t.description, t.receipt_ref, u.display_name AS person
+    FROM petty_cash_transactions t JOIN petty_cash_floats f ON f.id = t.float_id
+    LEFT JOIN users u ON u.id = t.performed_by_user_id
+    WHERE t.organization_id = ${orgId} AND t.type = 'disbursement'
+      AND t.transaction_date >= ${from}::date AND t.transaction_date <= ${to}::date
+      ${branchId ? sql`AND f.branch_id = ${branchId}` : sql``}`));
+  for (const r of pettyRows) {
+    push({
+      date: plainDate(r.transaction_date), type: "expense", source: "petty_cash",
+      description: `Petty cash — ${r.description || r.category || "spending"}`, reference: r.receipt_ref,
+      person: r.person, department: r.category || "Petty cash", amount: num(r.amount), currency: r.currency,
     });
+  }
+
+  // ── Commission earned by agents (no cash yet; walk-in commission is company money, not a cost) ──
+  const earnedRows = rowsOf<{ created_at: string; amount: string; currency: string; description: string | null; agent: string | null; policy_number: string | null }>(await tdb.execute(sql`
+    SELECT e.created_at, e.amount, e.currency, e.description, u.display_name AS agent, p.policy_number
+    FROM commission_ledger_entries e
+    LEFT JOIN users u ON u.id = e.agent_id LEFT JOIN policies p ON p.id = e.policy_id
+    WHERE e.organization_id = ${orgId} AND e.agent_id IS NOT NULL
+      AND e.created_at >= ${start} AND e.created_at < ${end}
+      ${branchId ? sql`AND p.branch_id = ${branchId}` : sql``}`));
+  for (const r of earnedRows) {
+    push({
+      date: day(r.created_at), type: "expense", source: "commission_earned", cash: false,
+      description: `Commission earned${r.policy_number ? ` — ${r.policy_number}` : ""}${r.description ? ` (${r.description})` : ""}`,
+      reference: null, person: r.agent, department: "Commissions", amount: num(r.amount), currency: r.currency,
+    });
+  }
+  // Commission entries marked paid (cash) — nothing sets this today, but the cash-flow statement counts it.
+  const paidComm = await tdb
+    .select({ createdAt: commissionLedgerEntries.createdAt, amount: commissionLedgerEntries.amount, currency: commissionLedgerEntries.currency, description: commissionLedgerEntries.description, agentName: users.displayName })
+    .from(commissionLedgerEntries).leftJoin(users, eq(commissionLedgerEntries.agentId, users.id))
+    .where(and(eq(commissionLedgerEntries.organizationId, orgId), eq(commissionLedgerEntries.status, "paid"), gte(commissionLedgerEntries.createdAt, start), lt(commissionLedgerEntries.createdAt, end)));
+  for (const r of paidComm) {
+    push({
+      date: day(r.createdAt as Date), type: "payment", source: "commission_paid",
+      description: `Commission paid to agent${r.description ? ` — ${r.description}` : ""}`, reference: null,
+      person: r.agentName ?? null, department: "Commissions", amount: num(r.amount), currency: r.currency,
+    });
+  }
+
+  // ── POL263 fees charged (owed until the bill is paid) ──
+  const feeRows = rowsOf<{ created_at: string; amount: string; currency: string; description: string | null }>(await tdb.execute(sql`
+    SELECT f.created_at, f.amount, f.currency, f.description
+    FROM platform_receivables f
+    LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
+    LEFT JOIN policies p ON p.id = t.policy_id
+    LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
+    WHERE f.organization_id = ${orgId} AND f.created_at >= ${start} AND f.created_at < ${end}
+      ${branchId ? sql`AND COALESCE(p.branch_id, s.branch_id) = ${branchId}` : sql``}`));
+  for (const r of feeRows) {
+    push({
+      date: day(r.created_at), type: "expense", source: "platform_fee", cash: false,
+      description: `POL263 fee${r.description ? ` — ${r.description}` : ""}`, reference: null, person: null,
+      department: "POL263", amount: num(r.amount), currency: r.currency,
+    });
+  }
+
+  // ── POL263 bills paid (control plane; not kept per branch) ──
+  if (!branchId) {
+    try {
+      const [{ cpDb }, { tenantInvoices }] = await Promise.all([import("./control-plane-db"), import("@shared/control-plane-schema")]);
+      const bills = await cpDb.select({ paidAt: tenantInvoices.paidAt, amount: tenantInvoices.amount, currency: tenantInvoices.currency, id: tenantInvoices.id, kind: tenantInvoices.kind })
+        .from(tenantInvoices)
+        .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)));
+      for (const b of bills) {
+        push({
+          date: day(b.paidAt as Date), type: "payment", source: "pol263_bill",
+          description: `POL263 bill paid${b.kind ? ` (${String(b.kind).replace(/_/g, " ")})` : ""}`, reference: b.id.slice(0, 8),
+          person: null, department: "POL263", amount: num(b.amount), currency: b.currency || "USD",
+        });
+      }
+    } catch { /* control plane unreachable — same as the cash-flow statement */ }
+  }
+
+  // ── Payroll (not kept per branch): gross when approved, net when paid ──
+  if (!branchId) {
+    const runs = rowsOf<{ period_start: string; period_end: string; status: string; total_gross: string; total_net: string }>(await tdb.execute(sql`
+      SELECT period_start, period_end, status, total_gross, total_net FROM payroll_runs
+      WHERE organization_id = ${orgId} AND status IN ('approved', 'processed', 'paid')
+        AND period_end >= ${from}::date AND period_end <= ${to}::date`));
+    for (const r of runs) {
+      const period = `${plainDate(r.period_start)} – ${plainDate(r.period_end)}`;
+      push({ date: plainDate(r.period_end), type: "expense", source: "payroll", cash: false, description: `Salaries and wages ${period}`, reference: null, person: null, department: "Payroll", amount: num(r.total_gross), currency: "USD" });
+      if (r.status === "paid") push({ date: plainDate(r.period_end), type: "payment", source: "payroll_paid", description: `Salaries paid ${period}`, reference: null, person: null, department: "Payroll", amount: num(r.total_net), currency: "USD" });
+    }
+  }
+
+  // ── Cash-in-lieu claims: cost when decided, cash when paid ──
+  const claimRows = rowsOf<{ decided: string; status: string; amount: string; currency: string; claim_number: string; deceased_name: string | null; policy_number: string | null }>(await tdb.execute(sql`
+    SELECT COALESCE(c.decided_at, c.created_at) AS decided, c.status, c.cash_in_lieu_amount AS amount, c.currency,
+           c.claim_number, c.deceased_name, p.policy_number
+    FROM claims c LEFT JOIN policies p ON p.id = c.policy_id
+    WHERE c.organization_id = ${orgId}
+      AND c.status IN ('approved', 'payable', 'paid', 'settled', 'completed', 'closed')
+      AND COALESCE(c.decided_at, c.created_at) >= ${start} AND COALESCE(c.decided_at, c.created_at) < ${end}
+      AND COALESCE(c.cash_in_lieu_amount, 0) <> 0
+      ${branchId ? sql`AND COALESCE(c.branch_id, p.branch_id) = ${branchId}` : sql``}`));
+  for (const r of claimRows) {
+    const desc = `Claim ${r.claim_number}${r.deceased_name ? ` — ${r.deceased_name}` : ""}${r.policy_number ? ` (${r.policy_number})` : ""}`;
+    push({ date: day(r.decided), type: "expense", source: "claim", cash: false, description: desc, reference: r.claim_number, person: null, department: "Claims", amount: num(r.amount), currency: r.currency || "USD" });
+    if (r.status === "paid" || r.status === "closed") {
+      push({ date: day(r.decided), type: "payment", source: "claim_paid", description: `${desc} — paid`, reference: r.claim_number, person: null, department: "Claims", amount: num(r.amount), currency: r.currency || "USD" });
+    }
   }
 
   entries.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const total = entries.length;
-  return { from, to, branchId: branchId ?? null, total, entries: entries.slice(offset, offset + limit) };
+  return { from, to, branchId: branchId ?? null, total, truncated: total > offset + limit, entries: entries.slice(offset, offset + limit) };
 }
 
 // ─── Balance Sheet ─────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ import { withClaimAging } from "./claims-sla";
 import { withComplaintAging } from "./complaints-sla";
 import { withAdvisoryLock, tryXactLock, endXactLock } from "./advisory-lock";
 import { todayForOrg, localToUtcDate, getOrgTimezone, dateInTimezone } from "./date-utils";
-import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor } from "./financial-statements";
+import { buildIncomeStatement, buildCashFlowStatement, buildBalanceSheet, buildTransactionLedger, buildExecutiveSummary, defaultExecutiveSummaryRange, fxMapFor, LEDGER_MAX_ROWS } from "./financial-statements";
 import { buildInsuranceContractSummary } from "./insurance-revenue";
 import { buildDailyReport } from "./daily-report";
 import { buildExecutiveReport } from "./executive-report";
@@ -15023,7 +15023,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
-    const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
+    const limit = Math.min(parseInt(req.query.limit as string) || LEDGER_MAX_ROWS, LEDGER_MAX_ROWS);
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     return res.json(await buildTransactionLedger(user.organizationId, { from, to, branchId, limit, offset }));
   });
@@ -16432,8 +16432,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const account = typeof req.query.account === "string" && req.query.account ? req.query.account : undefined;
           const { buildGeneralLedger } = await import("./general-ledger");
           const gl = await buildGeneralLedger(user.organizationId, { from: glFrom, to: glTo, account, branchId: reportFilters.branchId });
-          headers = ["Date", "Account", "Account Name", "Description", "Reference", "Currency", "Debit", "Credit"];
-          rows = gl.lines.map((l) => [l.date, l.account, l.accountName, l.description, l.reference || "", l.currency, l.debit != null ? l.debit.toFixed(2) : "", l.credit != null ? l.credit.toFixed(2) : ""]);
+          headers = ["Date", "Account", "Account Name", "Other Side", "Description", "Reference", "Currency", "Debit", "Credit"];
+          rows = gl.lines.map((l) => [l.date, l.account, l.accountName, l.contraAccount, l.description, l.reference || "", l.currency, l.debit != null ? l.debit.toFixed(2) : "", l.credit != null ? l.credit.toFixed(2) : ""]);
           break;
         }
         case "collection-efficiency": {

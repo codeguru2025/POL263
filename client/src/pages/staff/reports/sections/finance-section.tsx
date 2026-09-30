@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, Calendar, Building, FileText, Shield, BookOpen, Scale } from "lucide-react";
 import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
+import { ledgerColumns } from "@/components/ledger-columns";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 interface FinanceSectionProps extends ReportSectionBaseProps {
@@ -27,30 +28,6 @@ const cashupReconciliationColumns: EdtColumn<any>[] = [
   { id: "discrepancy", header: "Discrepancy", align: "right", accessor: (cu2) => cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount) : "", cell: (cu2) => <span className="tabular-nums">{cu2.discrepancyAmount != null ? Number(cu2.discrepancyAmount).toFixed(2) : "—"}</span> },
 ];
 
-const ledgerColumns: EdtColumn<any>[] = [
-  { id: "date", header: "Date", accessor: (e) => e.date, cell: (e) => <span className="whitespace-nowrap">{e.date}</span> },
-  {
-    id: "type",
-    header: "Type",
-    accessor: (e) => e.type,
-    cell: (e) => <span className={e.type === "income" ? "text-emerald-600 font-medium" : "text-destructive font-medium"}>{e.type === "income" ? "Income" : "Expense"}</span>,
-  },
-  { id: "description", header: "Description", accessor: (e) => e.description, cell: (e) => <span className="max-w-[280px] truncate block" title={e.description}>{e.description}</span> },
-  { id: "reference", header: "Reference", accessor: (e) => e.reference || "", cell: (e) => <span className="whitespace-nowrap">{e.reference || "—"}</span> },
-  { id: "person", header: "Person", accessor: (e) => e.person || "", cell: (e) => <span className="whitespace-nowrap">{e.person || "—"}</span> },
-  { id: "department", header: "Department / Cost centre", accessor: (e) => e.department || "", cell: (e) => <span className="whitespace-nowrap">{e.department || "—"}</span> },
-  {
-    id: "amount",
-    header: "Amount",
-    align: "right",
-    accessor: (e) => e.type === "expense" ? -Number(e.amount || 0) : Number(e.amount || 0),
-    cell: (e) => (
-      <span className={`tabular-nums whitespace-nowrap ${e.type === "income" ? "text-emerald-600" : "text-destructive"}`}>
-        {e.type === "expense" ? "-" : ""}{e.currency} {Number(e.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-      </span>
-    ),
-  },
-];
 
 const financeReportColumns: EdtColumn<any>[] = [
   { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
@@ -230,7 +207,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
   const { data: ledger, isLoading: loadingLedger } = useQuery<any>({
     queryKey: ["reports", "ledger", runKey, ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/transaction-ledger?limit=1000" + qAppend, { credentials: "include" });
+      const res = await fetch(getApiBase() + "/api/reports/transaction-ledger" + q, { credentials: "include" });
       if (!res.ok) return null;
       return res.json();
     },
@@ -613,7 +590,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="general-ledger">
         <CardSection
           title="General Ledger"
-          description="Every subsidiary-ledger transaction for a chart-of-accounts account, in the selected period. Pick an account, or view all."
+          description="Every money event in the period posted in double entry — each one a debit on one account and a credit on another, so each account's totals match the Trial Balance. Pick an account, or view all."
           icon={BookOpen}
           headerRight={<ExportButton reportType="general-ledger" filters={filters} />}
           flush
@@ -633,16 +610,39 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
             ) : !generalLedger || generalLedger.lines.length === 0 ? (
               <EmptyState title="No transactions for the selected account and period" className="border-0 rounded-none bg-transparent py-8" />
             ) : (
+              <>
+              {generalLedger.truncated && (
+                <p className="mb-2 text-[11px] text-destructive">Too many transactions to show them all — narrow the dates.</p>
+              )}
+              {generalLedger.accounts?.length > 0 && (
+                <div className="mb-4 overflow-x-auto rounded-md border">
+                  <table className="w-full text-sm min-w-[520px]">
+                    <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                      <tr><th className="text-left px-3 py-2">Account</th><th className="text-right px-3 py-2">Total debits</th><th className="text-right px-3 py-2">Total credits</th></tr>
+                    </thead>
+                    <tbody>
+                      {generalLedger.accounts.map((a: any) => (
+                        <tr key={a.code} className="border-t">
+                          <td className="px-3 py-1.5 whitespace-nowrap"><span className="font-mono text-xs">{a.code}</span> {a.name}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{Object.entries(a.debit).map(([c, v]: [string, any]) => `${c} ${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") || "—"}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{Object.entries(a.credit).map(([c, v]: [string, any]) => `${c} ${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               <div className="overflow-x-auto rounded-md border">
                 <table className="w-full text-sm min-w-[720px]">
                   <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-                    <tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Debit</th><th className="text-right px-3 py-2">Credit</th></tr>
+                    <tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Other side</th><th className="text-left px-3 py-2">Description</th><th className="text-left px-3 py-2">Ref</th><th className="text-right px-3 py-2">Debit</th><th className="text-right px-3 py-2">Credit</th></tr>
                   </thead>
                   <tbody>
                     {generalLedger.lines.map((l: any, i: number) => (
                       <tr key={i} className="border-t">
                         <td className="px-3 py-1.5 whitespace-nowrap">{l.date}</td>
                         <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">{l.account} {l.accountName}</td>
+                        <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs text-muted-foreground">{l.contraAccount}</td>
                         <td className="px-3 py-1.5 max-w-[280px] truncate" title={l.description}>{l.description}</td>
                         <td className="px-3 py-1.5 font-mono text-xs">{l.reference || "—"}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{l.debit != null ? `${l.currency} ${Number(l.debit).toFixed(2)}` : ""}</td>
@@ -652,6 +652,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
         </CardSection>
@@ -770,7 +771,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="ledger">
         <CardSection
           title="Transaction Ledger"
-          description="Every income and expense transaction in the selected period, in the order they occurred, with who recorded it and which department / cost-centre it belongs to."
+          description="Every money event in the period — the detail behind the Income Statement and Cash Flow, under the same rules: money in, costs (including ones not yet paid, marked no cash moved) and payments of what was owed. With who recorded it and the department / cost centre."
           icon={DollarSign}
           flush
         >

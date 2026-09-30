@@ -10,6 +10,48 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-09-30 — General Ledger posted one side only; Transaction Ledger missed most costs
+
+**Symptom:** the General Ledger for Sep 2026 disagreed with the Trial Balance on every account:
+- no cash, no payables
+- group premiums lumped into individual premiums
+- USD 3,234.30 of "operating expenses" that included the commission requisitions
+- no commission expense and no POL263 fees
+
+Its own debits never equalled its credits. The Transaction Ledger also stopped silently at 2,000
+rows (the UI asked for 1,000).
+
+**Root cause:** `buildGeneralLedger` posted each Transaction Ledger event to a single account
+(`accountForLedgerEntry`): income credited, expenses debited, no other side. The Transaction
+Ledger itself still had the income statement's old gaps:
+- no commission earned, platform fees, petty cash, payroll or claims
+- commission counted only if `paid`
+- UTC dates
+- no approval check
+- lump sums included under a branch filter
+
+**Fix:**
+- `server/financial-statements.ts`: `buildTransactionLedger` was rewritten on the statements' exact
+  rules.
+  - New `LedgerSource` values: premium_group, petty_cash, commission_earned/paid, platform_fee,
+    pol263_bill, payroll/payroll_paid, claim/claim_paid.
+  - `type` gains "payment" (settling something owed), and there's a `cash` flag.
+  - Local dates; `LEDGER_MAX_ROWS` is 20,000 with a `truncated` flag.
+- `server/general-ledger.ts`: `POSTINGS` (source → [debit, credit]) and the pure
+  `postToGeneralLedger`. Each event produces a debit line and a credit line with the other account
+  named, plus per-account totals.
+- Shared `client/src/components/ledger-columns.tsx` (the daily report and Finance used two copies).
+  The GL tab shows account totals and an "Other side" column, and the export has "Other Side".
+
+**Verified:** real Falakhe data. The GL account totals equal the Trial Balance on every account for
+Sep, Aug, Mar–Sep (6,352 lines) and for a single branch. New tests assert Dr = Cr and the totals.
+
+**Lesson for next time:** a ledger that posts one side per transaction isn't a ledger. Check
+"debits = credits" on the ledger itself, and "ledger account totals = trial balance" across real
+periods, whenever either changes. The two used different sources until this fix.
+
+---
+
 ## 2026-09-30 — Trial Balance never balanced
 
 **Symptom:** Falakhe Sep 2026 showed Dr USD 13,947.00 against Cr USD 24,295.06, and ZAR was off the
