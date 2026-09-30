@@ -15908,18 +15908,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "issued-policies":
         case "new-joinings": {
-          // "new-joinings" is new business only (migrated/legacy captures are data entry, not
-          // sales — server/new-joinings.ts); "issued-policies" lists everything captured.
+          // Every policy captured, each flagged new or existing client (legacy) — the totals and the
+          // by-agent summary count only new business (server/new-joinings.ts).
           const captured = await storage.getNewJoiningsReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          const list = reportType === "new-joinings" ? captured.filter((r) => !r.isLegacy) : captured;
           const paidLabel = (r: NewJoiningReportRow) => (r.paid === "paid" ? "Yes" : r.paid === "group" ? "Through group" : "No");
           headers = [
             "Policy No.", "Member No.", "Client", "National ID", "Date of Birth", "Phone", "Address",
             "Product", "Premium", "Currency", "Pays", "Agent", "Group", "Branch",
-            "Captured On", "Start Date", "Status", "New or Existing Client", "Paid?", "First Payment Date", "First Payment",
+            "Captured On", "Start Date", "Status", "New / Legacy", "Paid?", "First Payment Date", "First Payment",
           ];
           currencyTotals = null;
-          rows = list.map((r) => [
+          rows = captured.map((r) => [
             r.policyNumber, r.memberNumber, r.clientName, r.nationalId, r.dateOfBirth, r.phone, r.address,
             r.productName, r.premium, r.currency, r.paymentSchedule, r.agentName, r.groupName, r.branchName,
             r.capturedOn, r.startDate, r.status, r.isLegacy ? "Existing client (legacy)" : "New", paidLabel(r),

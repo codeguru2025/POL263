@@ -35,10 +35,12 @@ convention" note in `CLAUDE.md`.
 - New pure `server/new-joinings.ts` `summarizeNewJoinings`: new business only, premium per
   currency in cents, one line per agent (walk-in on its own line).
 - `/api/reports/new-joinings` returns `{ rows, summary }` over the whole period.
-- The exports were rewritten on the typed rows: "new-joinings" is new business only, and
-  "issued-policies" lists everything with a new/existing column.
-- New UI `reports/sections/new-joinings-panel.tsx`: totals at the top, by-agent table, and a
-  separate "Existing clients captured (legacy)" table.
+- One list, at Augustus's call: every captured policy, each flagged "New" or "Existing client
+  (legacy)", with an All / New only / Legacy only filter. Only new business counts in the totals
+  and the by-agent summary. The "new-joinings" and "issued-policies" exports carry the same flag
+  column.
+- New UI `reports/sections/new-joinings-panel.tsx`: totals at the top, the flagged list, and a
+  by-agent table.
 
 **Verified:** real Falakhe data, read-only.
 - Sep: 172 captured = 36 new (29 paid, 7 unpaid) + 136 legacy.

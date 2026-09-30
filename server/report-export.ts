@@ -66,7 +66,7 @@ export function reportExportLabel(type: string): string {
     "overdue": "Overdue Policies (In Grace)",
     "pre-lapse": "Pre-Lapse Policies",
     "lapsed": "Lapsed Policies",
-    "new-joinings": "New Joinings (new business)",
+    "new-joinings": "New Joinings",
     "new-joinings-summary": "New Joinings by Agent",
     "finance": "Finance Report",
     "underwriter-payable": "Underwriter Payable",

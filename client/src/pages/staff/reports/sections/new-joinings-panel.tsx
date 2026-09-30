@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "@/lib/queryClient";
 import { CardSection, EnhancedDataTable, type EdtColumn } from "@/components/ds";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { FileText, Loader2 } from "lucide-react";
 import { ExportButton, buildQuery, type ReportFiltersState } from "../export-button";
 
@@ -63,6 +64,10 @@ const columns: EdtColumn<any>[] = [
   { id: "group", header: "Group", accessor: (p) => p.groupName, cell: (p) => <span className="text-sm whitespace-nowrap">{p.groupName || "—"}</span> },
   { id: "branch", header: "Branch", accessor: (p) => p.branchName, cell: (p) => <span className="text-sm whitespace-nowrap">{p.branchName || "—"}</span> },
   { id: "startDate", header: "Start date", accessor: (p) => p.startDate, cell: (p) => <span className="text-sm whitespace-nowrap">{fmtDate(p.startDate)}</span> },
+  {
+    id: "type", header: "New / Legacy", accessor: (p) => (p.isLegacy ? "Legacy" : "New"),
+    cell: (p) => (p.isLegacy ? <Badge variant="secondary" className="whitespace-nowrap">Existing client (legacy)</Badge> : <Badge variant="outline" className="bg-sky-500/10 text-sky-700 border-sky-200">New</Badge>),
+  },
   { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <span className="text-sm capitalize">{p.status}</span> },
   { id: "paid", header: "Paid?", accessor: (p) => (p.paid === "paid" ? 2 : p.paid === "group" ? 1 : 0), cell: paidCell },
 ];
@@ -87,10 +92,10 @@ export function NewJoiningsPanel({ filters, runKey, fk, enabled }: { filters: Re
     },
     enabled,
   });
+  const [show, setShow] = useState<"all" | "new" | "legacy">("all");
   const s = query.data?.summary;
   const rows = query.data?.rows ?? [];
-  const newRows = rows.filter((r) => !r.isLegacy);
-  const legacyRows = rows.filter((r) => r.isLegacy);
+  const shown = show === "all" ? rows : rows.filter((r) => (show === "legacy" ? r.isLegacy : !r.isLegacy));
 
   const body = (content: ReactNode) =>
     query.isLoading ? (
@@ -99,26 +104,35 @@ export function NewJoiningsPanel({ filters, runKey, fk, enabled }: { filters: Re
       <p className="text-sm text-destructive py-6 text-center">{(query.error as Error).message}. Try again.</p>
     ) : content;
 
+  const filterButton = (value: typeof show, label: string) => (
+    <Button key={value} size="sm" variant={show === value ? "default" : "outline"} className="h-7" onClick={() => setShow(value)} data-testid={`button-joinings-${value}`}>
+      {label}
+    </Button>
+  );
+
   return (
     <div className="space-y-4">
       <CardSection
         title="New joinings"
         icon={FileText}
-        description="New policies captured in the period — new business only. Existing clients entered as legacy policies are listed separately below and not counted here. From/to filter the day the policy was captured; branch, product and agent filters apply."
+        description="Every policy captured in the period. Each row says whether it is new business or an existing client entered as a legacy policy — only new business counts in the totals. From/to filter the day the policy was captured; branch, product and agent filters apply."
         headerRight={<ExportButton reportType="new-joinings" filters={rest} />}
         flush
       >
         {s && (
-          <div className="px-4 py-3 border-b text-sm space-y-1">
+          <div className="px-4 py-3 border-b text-sm space-y-2">
             <div>
               <span className="font-semibold tabular-nums">{s.newBusiness}</span> new {s.newBusiness === 1 ? "policy" : "policies"} ·{" "}
               <span className="font-semibold tabular-nums text-emerald-700">{s.paid}</span> paid
               {s.paidThroughGroup > 0 && <> · <span className="font-semibold tabular-nums">{s.paidThroughGroup}</span> paid through their group</>}
               {" "}· <span className="font-semibold tabular-nums text-amber-700">{s.unpaid}</span> not paid yet ·
               premium <span className="font-semibold tabular-nums">{byCurrency(s.premium)}</span>
+              <span className="text-muted-foreground"> · plus <span className="tabular-nums">{s.legacyCaptured}</span> existing {s.legacyCaptured === 1 ? "client" : "clients"} captured (legacy, not new business)</span>
             </div>
-            <div className="text-muted-foreground">
-              Also captured: <span className="tabular-nums">{s.legacyCaptured}</span> existing {s.legacyCaptured === 1 ? "client" : "clients"} (legacy) — not new business.
+            <div className="flex gap-1.5 flex-wrap">
+              {filterButton("all", `All (${s.newBusiness + s.legacyCaptured})`)}
+              {filterButton("new", `New only (${s.newBusiness})`)}
+              {filterButton("legacy", `Legacy only (${s.legacyCaptured})`)}
             </div>
             {query.data?.truncated && <div className="text-destructive">Too many policies to show them all — narrow the dates.</div>}
           </div>
@@ -126,16 +140,16 @@ export function NewJoiningsPanel({ filters, runKey, fk, enabled }: { filters: Re
         {body(
           <EnhancedDataTable
             columns={columns}
-            rows={newRows}
+            rows={shown}
             getRowKey={(p) => p.policyId}
             exportFilename="new-joinings"
-            storageKey="reports-new-joinings-v2"
-            emptyMessage="No new policies captured in this period."
+            storageKey="reports-new-joinings-v3"
+            emptyMessage="No policies captured in this period."
           />,
         )}
       </CardSection>
 
-      <CardSection title="New joinings by agent" icon={FileText} description="New business per agent. Walk-in = no agent on the policy." headerRight={<ExportButton reportType="new-joinings-summary" filters={rest} />} flush>
+      <CardSection title="New joinings by agent" icon={FileText} description="New business per agent (legacy captures not counted). Walk-in = no agent on the policy." headerRight={<ExportButton reportType="new-joinings-summary" filters={rest} />} flush>
         {body(
           <EnhancedDataTable
             columns={agentColumns}
@@ -144,19 +158,6 @@ export function NewJoiningsPanel({ filters, runKey, fk, enabled }: { filters: Re
             exportFilename="new-joinings-by-agent"
             storageKey="reports-new-joinings-agents"
             emptyMessage="No new policies in this period."
-          />,
-        )}
-      </CardSection>
-
-      <CardSection title="Existing clients captured (legacy)" icon={FileText} description="Existing clients entered into the system as legacy policies in this period — data capture, not new business." flush>
-        {body(
-          <EnhancedDataTable
-            columns={columns}
-            rows={legacyRows}
-            getRowKey={(p) => p.policyId}
-            exportFilename="legacy-policies-captured"
-            storageKey="reports-new-joinings-legacy"
-            emptyMessage="No legacy policies captured in this period."
           />,
         )}
       </CardSection>
