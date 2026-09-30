@@ -119,7 +119,8 @@ import {
 import { sql, eq, count, and, max, asc, desc, inArray } from "drizzle-orm";
 import { transitionClaim, ClaimWorkflowError, checkWaitingPeriodViolation, getLinkedQuotation, resolveLedgerDebit, resolveClaimGroupId, getGroupLedgerBalanceInTx, notifyClientOfClaim, UNDECIDED_CLAIM_STATUSES, findConflictingMemberClaim, isDeathClaimType } from "./claim-workflow";
 import { pool, db } from "./db";
-import { notifyClientPush, dispatchNotification, buildPolicyContext, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
+import { notifyClientPush, dispatchNotification, buildPolicyContext, receiptEventFor, MERGE_TAGS, EVENT_TYPES, DEFAULT_SMS_MESSAGES, broadcastNotification } from "./notifications";
+import { receiptablePolicies } from "./ledger-group-receipt";
 import { notifyUser, notifyUsersWithPermission } from "./user-notifications";
 import { pushToClient } from "./push";
 import { sseConnect, sseActiveCount } from "./sse";
@@ -6792,6 +6793,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await recordAgentCommissionForTransactions(user.organizationId, commissionItems);
       // Text each ticked member their receipt (the same "payment_receipt" SMS as a single payment).
       // Group receipts never texted anyone. dispatchNotification never throws.
+      const receiptEvent = await receiptEventFor(user.organizationId);
       for (const r of results) {
         const pol = await storage.getPolicy(r.policyId, user.organizationId);
         if (!pol?.clientId) continue;
@@ -6801,7 +6803,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           paymentMethod: "Cash",
           receiptId: r.id,
         });
-        await dispatchNotification(user.organizationId, "payment_receipt", pol.clientId, ctx);
+        await dispatchNotification(user.organizationId, receiptEvent, pol.clientId, ctx);
       }
       // Platform fee on each cleared group receipt (not on pending approvals). Awaited (not a
       // detached, unawaited .then()) so a crash here is at worst a synchronous failure logged
@@ -13711,12 +13713,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/groups/legacy-receipts", requireAuth, requireTenantScope, requirePermission("write:finance"), requireModule("legacy_records"), async (req, res) => {
     const user = req.user as any;
-    const { groupId, amount, currency, paymentDate, notes, memberBreakdown } = req.body;
+    const { groupId, amount, currency, paymentDate, notes, memberBreakdown, includedPolicyIds } = req.body;
     if (!groupId || !amount || !currency || !paymentDate) {
       return res.status(400).json({ message: "groupId, amount, currency and paymentDate are required" });
     }
     const group = await storage.getGroup(groupId, user.organizationId);
     if (!group) return res.status(404).json({ message: "Group not found" });
+    // A society brings whatever it has saved — not one premium per member — so the admin ticks
+    // which members this payment covers. Those members are texted, listed on the receipt, and
+    // their agents share the 10% commission. Not sent (older screens, imports) = every member.
+    const groupMembers = receiptablePolicies(await storage.getPoliciesByGroupId(user.organizationId, groupId));
+    let included = groupMembers;
+    if (includedPolicyIds !== undefined) {
+      if (!Array.isArray(includedPolicyIds)) return res.status(400).json({ message: "includedPolicyIds must be a list" });
+      const wanted = new Set(includedPolicyIds.map(String));
+      included = groupMembers.filter((p) => wanted.has(p.id));
+      if (included.length !== wanted.size) {
+        return res.status(400).json({ message: "Some of the ticked members are not (or no longer) in this group. Refresh and try again." });
+      }
+      if (groupMembers.length > 0 && included.length === 0) {
+        return res.status(400).json({ message: "Tick at least one member this payment covers." });
+      }
+    }
     // Optional — which members this lump sum covers (free text: a brand-new legacy group with
     // no policies yet has no formal client records to reference). Not required; shown on the
     // receipt when present so "receipts show all members who would have paid" works even before
@@ -13727,6 +13745,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .map((m: any) => ({ name: String(m?.name || "").trim(), amount: String(m?.amount ?? "").trim() }))
         .filter((m: { name: string; amount: string }) => m.name);
       if (cleaned.length > 0) memberBreakdownJson = JSON.stringify(cleaned);
+    }
+    // No free-text breakdown: list the ticked members so the receipt shows who it covers.
+    if (!memberBreakdownJson && included.length > 0) {
+      const rows = await Promise.all(included.map(async (p) => {
+        const c = p.clientId ? await storage.getClient(p.clientId, user.organizationId) : undefined;
+        const name = c ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() : "";
+        return { name: name ? `${name} (${p.policyNumber})` : String(p.policyNumber), amount: "", policyId: p.id };
+      }));
+      memberBreakdownJson = JSON.stringify(rows);
     }
     try {
       const tdb = await getDbForOrg(user.organizationId);
@@ -13791,7 +13818,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       // Ledger groups (legacy groups / burial societies) are receipted as a lump sum: text every
-      // member and pay each member policy's agent 10% of its share (server/ledger-group-receipt.ts).
+      // ticked member and pay their agents 10% of the payment (server/ledger-group-receipt.ts).
       // Queued on the outbox so it retries if it fails part-way.
       if (group.hasLedger || group.isLegacy) {
         await withOrgTransaction(user.organizationId, async (txDb) => {
@@ -13799,7 +13826,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             organizationId: user.organizationId,
             type: OUTBOX_TYPE_LEDGER_GROUP_RECEIPT_FOLLOWUP,
             dedupeKey: `ledger_group_receipt_followup:${created.id}`,
-            payload: { receiptId: created.id, receiptNumber, groupId, amount: String(amount), currency: String(currency).toUpperCase() },
+            payload: {
+              receiptId: created.id, receiptNumber, groupId, amount: String(amount), currency: String(currency).toUpperCase(),
+              includedPolicyIds: included.map((p) => p.id),
+            },
           });
         });
         requestOutboxDrain(user.organizationId);

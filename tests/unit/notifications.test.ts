@@ -40,7 +40,7 @@ vi.mock("../../server/sms-service", () => ({
 
 vi.mock("../../server/logger", () => ({ structuredLog: vi.fn() }));
 
-import { dispatchNotification, unfilledMergeTags, nextSmsRetryAt } from "../../server/notifications";
+import { dispatchNotification, unfilledMergeTags, nextSmsRetryAt, receiptEventFor } from "../../server/notifications";
 
 /**
  * Previously only "activation", "claim_status_change", and "kyc_status_change" emailed by
@@ -339,5 +339,19 @@ describe("dispatchNotification — claim updates always go out by SMS", () => {
     mockStorage.getActiveTemplatesByEvent.mockResolvedValue([]);
     await dispatchNotification("org1", "payment_received", "c1", { clientName: "Jane Doe", policyId: "p1" });
     expect(mockSendSms).not.toHaveBeenCalled();
+  });
+});
+
+describe("receiptEventFor — receipted payments text with the template the tenant has on", () => {
+  const byEvent = (active: string[]) => (_org: string, ev: string) => Promise.resolve(active.includes(ev) ? [{ id: ev }] : []);
+  it("payment_receipt when that template is on (or neither is)", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockImplementation(byEvent(["payment_receipt", "payment_received"]));
+    expect(await receiptEventFor("org1")).toBe("payment_receipt");
+    mockStorage.getActiveTemplatesByEvent.mockImplementation(byEvent([]));
+    expect(await receiptEventFor("org1")).toBe("payment_receipt");
+  });
+  it("keeps a tenant's existing payment_received texts going", async () => {
+    mockStorage.getActiveTemplatesByEvent.mockImplementation(byEvent(["payment_received"]));
+    expect(await receiptEventFor("org1")).toBe("payment_received");
   });
 });

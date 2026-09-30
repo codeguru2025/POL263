@@ -9,7 +9,7 @@ import { computePlatformFee } from "./platform-fee";
 import { recordAgentCommission } from "./route-helpers";
 import { notifyUser } from "./user-notifications";
 import { pushToClient } from "./push";
-import { dispatchNotification, buildPolicyContext } from "./notifications";
+import { dispatchNotification, buildPolicyContext, receiptEventFor } from "./notifications";
 import { hasModule } from "./module-gate";
 import type { OutboxMessage } from "@shared/schema";
 import {
@@ -104,7 +104,7 @@ async function runPaymentStaffFollowup(orgId: string, payload: StaffPayload): Pr
       // A payment that was receipted is a "payment_receipt" event — the one tenants keep switched
       // on for SMS. Sending "payment_received" here meant the main receipt screen never texted
       // anyone once a tenant turned that one off to save credits (Falakhe: 0 receipt SMS).
-      await dispatchNotification(orgId, payload.receiptId ? "payment_receipt" : "payment_received", txSnapshot.clientId, payCtx);
+      await dispatchNotification(orgId, payload.receiptId ? await receiptEventFor(orgId) : "payment_received", txSnapshot.clientId, payCtx);
       // Push to client device
       pushToClient(orgId, txSnapshot.clientId, {
         title: "Payment Received",

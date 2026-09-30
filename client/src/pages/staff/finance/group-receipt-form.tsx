@@ -223,8 +223,9 @@ export function GroupReceiptForm({ onSuccess }: { onSuccess: () => void }) {
         <LegacyGroupReceiptForm
           groupId={groupId}
           onSuccess={onSuccess}
+          members={groupPolicies}
           intro={groupPolicies.length > 0
-            ? `Enter what the society paid in total — no need to tick members. All ${groupPolicies.length} member policies are covered by this payment: each member gets an SMS, and each member's agent earns 10% of that member's share.`
+            ? "Enter what the society brought in. It's added to the society's balance. Then untick any member this payment doesn't cover."
             : "Enter what the society paid in total. It's credited to the society's balance and shows in financials immediately."}
         />
       ) : groupId && (

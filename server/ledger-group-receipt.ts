@@ -2,11 +2,14 @@
  * Follow-up for a lump-sum receipt on a ledger group (legacy group / burial society), run from
  * the outbox so it retries if the server dies half-way:
  *
- *  1. Commission — the legacy-group rule: each member policy's agent earns 10% of that policy's
- *     share of what the group paid. The lump sum is split across the member policies by premium
- *     (allocateProRata, so shares add back up exactly); walk-in policies (no agent) earn nothing.
- *  2. SMS — every member of the group is told the group has paid (one text per client, even if
- *     they hold several policies in the group).
+ * A society brings whatever it has saved (it keeps a running ledger with the tenant), not one
+ * premium per member, so the admin ticks which members a payment covers.
+ *
+ *  1. Commission — the legacy-group rule: 10% of what the group paid, split evenly across the
+ *     ticked member policies; each policy's agent gets its part. Walk-in policies (no agent) keep
+ *     their part of the split but earn nobody commission.
+ *  2. SMS — every ticked member is told the group has paid (one text per client, even if they
+ *     hold several policies in the group).
  *
  * Normal groups (not ledger groups) don't come through here: admins tick the members who paid,
  * and each ticked policy gets its own payment + commission through the normal payment path.
@@ -24,6 +27,8 @@ export interface LedgerGroupReceiptPayload {
   groupId: string;
   amount: string;
   currency: string;
+  /** Members this payment covers. Missing on jobs queued before ticking existed = everyone. */
+  includedPolicyIds?: string[];
 }
 
 /** Policies that belong to the group for receipting: not deleted, not cancelled. */
@@ -34,18 +39,17 @@ export function receiptablePolicies<T extends { deletedAt?: unknown; status?: st
 export interface CommissionShare { policyId: string; agentId: string; shareCents: Cents; commissionCents: Cents }
 
 /**
- * Splits `totalCents` across `policies` by premium and returns each agent-held policy's
- * commission (`ratePercent` of its share, rounded to the cent). Walk-in policies still take their
- * share of the split — they just earn nobody commission — so an agent never earns on money that
- * other members paid.
+ * Splits `totalCents` evenly across `policies` and returns each agent-held policy's commission
+ * (`ratePercent` of the whole payment, split the same way). Walk-in policies still take their
+ * part — they just earn nobody commission — so an agent never earns on another member's part.
  */
 export function ledgerGroupCommissionShares(
   totalCents: Cents,
-  policies: { id: string; agentId?: string | null; premiumAmount?: unknown }[],
+  policies: { id: string; agentId?: string | null }[],
   ratePercent: number,
 ): CommissionShare[] {
   if (totalCents <= 0 || policies.length === 0 || ratePercent <= 0) return [];
-  const weights = policies.map((p) => Number(toCents(p.premiumAmount ?? 0)));
+  const weights = policies.map(() => 1);
   const shares = allocateProRata(totalCents, weights);
   // 10% of the whole payment first, then split the same way — rounding each share's 10%
   // separately loses cents (USD 100 over 3 members → 3 × 3.33 = 9.99).
@@ -58,12 +62,17 @@ export function ledgerGroupCommissionShares(
   return out;
 }
 
-const commissionMarker = (receiptNumber: string) => `lump-sum group receipt ${receiptNumber}`;
+// Trailing space matters: the lookup is a "contains" match, and "…-100 " must not match "…-1000 (".
+const commissionMarker = (receiptNumber: string) => `lump-sum group receipt ${receiptNumber} `;
 
 export async function runLedgerGroupReceiptFollowup(orgId: string, payload: LedgerGroupReceiptPayload): Promise<void> {
   const group = await storage.getGroup(payload.groupId, orgId);
   if (!group) return;
-  const members = receiptablePolicies(await storage.getPoliciesByGroupId(orgId, payload.groupId));
+  let members = receiptablePolicies(await storage.getPoliciesByGroupId(orgId, payload.groupId));
+  if (payload.includedPolicyIds) {
+    const wanted = new Set(payload.includedPolicyIds);
+    members = members.filter((p) => wanted.has(p.id));
+  }
   if (members.length === 0) return;
 
   // 1. Commission — idempotent: an outbox retry skips policies already credited for this receipt.
@@ -83,7 +92,7 @@ export async function runLedgerGroupReceiptFollowup(orgId: string, payload: Ledg
         entryType: "recurring",
         amount: fromCents(s.commissionCents),
         currency: payload.currency,
-        description: `${rate}% commission on ${payload.currency} ${fromCents(s.shareCents)} — this policy's share of ${marker} (${group.name})`,
+        description: `${rate}% commission on ${payload.currency} ${fromCents(s.shareCents)} — this policy's share of ${marker}(${group.name})`,
         status: "earned",
       });
       byAgent.set(s.agentId, ((byAgent.get(s.agentId) ?? 0) + s.commissionCents) as Cents);

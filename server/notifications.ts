@@ -269,7 +269,7 @@ function renderTemplate(template: string, ctx: NotificationContext): string {
   const replacements: Record<string, string | undefined> = {
     "{client_name}": ctx.clientName,
     // Built-in SMS wording uses {first_name}; fall back to the first word of the full name.
-    "{first_name}": ctx.firstName ?? ctx.clientName?.trim().split(/\s+/)[0],
+    "{first_name}": ctx.firstName?.trim() || ctx.clientName?.trim().split(/\s+/)[0],
     "{last_name}": ctx.lastName,
     "{policy_number}": ctx.policyNumber,
     "{product_name}": ctx.productName,
@@ -388,6 +388,17 @@ async function sendDefaultClientSms(orgId: string, clientId: string, eventType: 
     structuredLog("error", "Failed to send default notification SMS", { error: (err as Error).message, orgId, clientId, eventType });
     await storage.updateNotificationLogStatus(orgId, log.id, "failed", (err as Error).message).catch(() => {});
   }
+}
+
+/**
+ * Which event a receipted payment fires. "payment_receipt" — unless the tenant only has an
+ * active "payment_received" template (set up before receipts fired "payment_receipt" on every
+ * path), so nobody silently stops getting the receipt texts they already get.
+ */
+export async function receiptEventFor(orgId: string): Promise<"payment_receipt" | "payment_received"> {
+  if ((await storage.getActiveTemplatesByEvent(orgId, "payment_receipt")).length > 0) return "payment_receipt";
+  if ((await storage.getActiveTemplatesByEvent(orgId, "payment_received")).length > 0) return "payment_received";
+  return "payment_receipt";
 }
 
 /**

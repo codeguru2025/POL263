@@ -26,22 +26,23 @@ describe("ledgerGroupCommissionShares — each agent earns 10% of their policies
     expect(s.reduce((n, x) => n + x.shareCents, 0)).toBe(10000);
   });
 
-  it("splits by premium; walk-in policies take their share but earn nobody commission", () => {
+  it("splits evenly (a society pays what it has, not per premium); walk-ins take a part but earn nobody commission", () => {
     const pols = [
-      { id: "p1", agentId: "a1", premiumAmount: "10.00" },
-      { id: "p2", agentId: null, premiumAmount: "10.00" },
-      { id: "p3", agentId: "a2", premiumAmount: "20.00" },
+      { id: "p1", agentId: "a1" },
+      { id: "p2", agentId: null },
+      { id: "p3", agentId: "a2" },
     ];
-    const s = ledgerGroupCommissionShares(4000, pols, 10); // USD 40.00
+    const s = ledgerGroupCommissionShares(3000, pols, 10); // USD 30.00
     expect(s).toEqual([
       { policyId: "p1", agentId: "a1", shareCents: 1000, commissionCents: 100 },
-      { policyId: "p3", agentId: "a2", shareCents: 2000, commissionCents: 200 },
+      { policyId: "p3", agentId: "a2", shareCents: 1000, commissionCents: 100 },
     ]);
   });
 
-  it("splits evenly when no premiums are on record", () => {
-    const pols = [{ id: "p1", agentId: "a1" }, { id: "p2", agentId: "a1" }];
-    expect(ledgerGroupCommissionShares(3000, pols, 10).map((x) => x.commissionCents)).toEqual([150, 150]);
+  it("a tiny payment never creates zero-cent commission rows", () => {
+    const pols = [1, 2, 3, 4].map((i) => ({ id: `p${i}`, agentId: "a1" }));
+    const s = ledgerGroupCommissionShares(20, pols, 10); // USD 0.20 → 2 cents of commission
+    expect(s.map((x) => x.commissionCents)).toEqual([1, 1]);
   });
 
   it("nothing for a zero payment or an empty group", () => {
@@ -78,6 +79,20 @@ describe("runLedgerGroupReceiptFollowup", () => {
     expect(entries[0].description).toContain("lump-sum group receipt LGR-20260930-261");
     expect(mockDispatch.mock.calls.map((c) => [c[1], c[2]])).toEqual([["group_receipt", "c1"], ["group_receipt", "c2"]]);
     expect(mockDispatch.mock.calls[0][3]).toMatchObject({ paymentAmount: "USD 30.00", groupName: "VUSANANI B/S" });
+  });
+
+  it("only ticked members are texted and share the commission", async () => {
+    await runLedgerGroupReceiptFollowup("org1", { ...payload, includedPolicyIds: ["p1", "p3"] });
+    const entries = mockStorage.createCommissionLedgerEntry.mock.calls.map((c) => c[0]);
+    expect(entries.map((e) => [e.policyId, e.amount])).toEqual([["p1", "1.50"]]); // 10% of 30 = 3.00 over 2; p3 is a walk-in
+    expect(mockDispatch.mock.calls.map((c) => c[2])).toEqual(["c1", "c2"]);
+  });
+
+  it("the retry marker for receipt …-100 doesn't match …-1000", async () => {
+    await runLedgerGroupReceiptFollowup("org1", { ...payload, receiptNumber: "LGR-20260930-100" });
+    const marker = mockStorage.getCommissionPolicyIdsByDescriptionMarker.mock.calls[0][1] as string;
+    const otherDescription = mockStorage.createCommissionLedgerEntry.mock.calls[0][0].description.replace("-100 ", "-1000 ");
+    expect(otherDescription.includes(marker)).toBe(false);
   });
 
   it("an outbox retry doesn't pay commission twice", async () => {
