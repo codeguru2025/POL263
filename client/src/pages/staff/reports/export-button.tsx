@@ -27,6 +27,8 @@ export type ReportFiltersState = {
   excludeUnpaidMigrated?: boolean;
   /** Finance report only — just the policies that paid in the period. */
   paidOnly?: boolean;
+  /** Receipts / Expenditure — which kind of entry (omit for all). */
+  type?: string;
   /** Awaiting payments due list — how many days ahead to include. */
   withinDays?: number;
   /** Overdue / grace — only policies lapsing within this many days (the old Pre-lapse view). */
@@ -44,6 +46,7 @@ export function buildQuery(f: ReportFiltersState) {
   if (f.status) p.set("status", f.status);
   if (f.excludeUnpaidMigrated) p.set("excludeUnpaidMigrated", "1");
   if (f.paidOnly) p.set("paidOnly", "1");
+  if (f.type) p.set("type", f.type);
   if (f.withinDays != null) p.set("withinDays", String(f.withinDays));
   if (f.lapseWithinDays != null) p.set("lapseWithinDays", String(f.lapseWithinDays));
   const q = p.toString();

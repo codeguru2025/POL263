@@ -13,6 +13,7 @@ import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
 import { ledgerColumns } from "@/components/ledger-columns";
 import { ReceiptsPanel } from "./receipts-panel";
+import { ExpenditurePanel } from "./expenditure-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 interface FinanceSectionProps extends ReportSectionBaseProps {
@@ -86,13 +87,6 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
 // Easipol-format column set; the screen view is for scanning, not spreadsheet work.
 
 
-const expendituresColumns: EdtColumn<any>[] = [
-  { id: "description", header: "Description", accessor: (e) => e.description },
-  { id: "category", header: "Category", accessor: (e) => e.category, cell: (e) => <Badge variant="outline">{e.category}</Badge> },
-  { id: "amount", header: "Amount", accessor: (e) => parseFloat(e.amount || 0), cell: (e) => <span className="font-semibold">{e.currency} {e.amount}</span> },
-  { id: "date", header: "Date", accessor: (e) => e.spentAt || (e.createdAt ? new Date(e.createdAt) : ""), cell: (e) => <span className="text-sm text-muted-foreground">{e.spentAt || (e.createdAt ? new Date(e.createdAt).toLocaleDateString() : "—")}</span> },
-  { id: "receiptRef", header: "Receipt ref", accessor: (e) => e.receiptRef || "" },
-];
 
 const cashupsColumns = (users: any[]): EdtColumn<any>[] => [
   { id: "cashupDate", header: "Cashup date", accessor: (c) => c.cashupDate, cell: (c) => <span className="font-mono text-sm">{c.cashupDate}</span> },
@@ -137,15 +131,6 @@ function BranchExclusionNote({ items }: { items?: string[] }) {
 }
 
 export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, users }: FinanceSectionProps) {
-  const { data: expenditures = [], isLoading: loadingExpenditures } = useQuery<any[]>({
-    queryKey: ["reports", "expenditures", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/expenditures?limit=200" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("expenditures"),
-  });
   const { data: platformReceivables = [], isLoading: loadingPlatform } = useQuery<any[]>({
     queryKey: ["reports", "platform", runKey, ...fk],
     queryFn: async () => {
@@ -910,21 +895,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       </TabsContent>
 
       <TabsContent value="expenditures">
-        <CardSection title="Expenditure Report" icon={DollarSign} headerRight={<ExportButton reportType="expenditures" filters={filters} />} flush>
-          {loadingExpenditures ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={expendituresColumns}
-              rows={expenditures}
-              getRowKey={(e) => e.id}
-              rowTestId={(e) => `row-expenditure-${e.id}`}
-              exportFilename="expenditure-report"
-              storageKey="reports-expenditures"
-              emptyMessage="No expenditures recorded."
-            />
-          )}
-        </CardSection>
+        <ExpenditurePanel filters={filters} runKey={runKey} fk={fk} enabled={need("expenditures")} />
       </TabsContent>
 
       <TabsContent value="cashups">

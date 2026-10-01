@@ -10,6 +10,35 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Expenditure report showed nothing for a tenant that spends through requisitions
+
+**Symptom:** Falakhe's Expenditure tab was empty. It listed only the `expenditures` table (0 rows),
+while all of Falakhe's spending is requisition payouts: 942 payouts, about 99k across USD and ZAR.
+It was also capped at 200 rows and used UTC dates.
+
+**Fix:**
+- New `server/expenditure-report.ts` (`buildExpenditureReport`, pure `summarizeSpend`): every
+  payout from `payment_disbursements` (requisitions + expenditures) plus petty cash spending.
+  - Commission requisitions are labelled "Commission paid to agents" (`isCommissionPayoutCategory`).
+  - Totals by currency, type and category.
+- New `/api/reports/expenditure` (the general `/api/expenditures` CRUD list is untouched); the
+  export was rewritten.
+- New `reports/sections/expenditure-panel.tsx` with type buttons.
+- Shared `ReportFiltersState.type` so the Receipts/Expenditure exports follow the buttons.
+- Also fixed: `ANY(${array}::type[])` doesn't bind an array under drizzle (it expands to a tuple).
+  Replaced with `IN (${sql.join(...)})` here and in `ifrs17-movement.ts`'s declined-claims check,
+  which would have thrown as soon as a claim left the open set.
+
+**Verified:** Sep: 51 payouts, USD 3,234.30, equal to Cash Flow money out (requisitions 3,078.30 +
+commission paid 156). New `tests/unit/expenditure-report.test.ts`. 944/944.
+
+**Lesson for next time:**
+- A report named after one table ("expenditures") silently reads zero when the tenant records the
+  same thing elsewhere (requisitions). Build spend reports from the payout ledger.
+- With drizzle `sql`, pass lists via `sql.join`, never `ANY(${arr}::t[])`.
+
+---
+
 ## 2026-10-01 — Receipts report counted pending receipts, missed funeral/society money, capped at 500
 
 **Symptom:**

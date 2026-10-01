@@ -95,7 +95,7 @@ export async function buildIfrs17Movement(orgId: string, params: Ifrs17MovementP
   const declinedIds = new Set<string>();
   if (leftIds.length) {
     const rows = rowsOf<{ id: string }>(await tdb.execute(sql`
-      SELECT c.id FROM claims c WHERE c.id = ANY(${leftIds}::uuid[]) AND ${claimStatusAsOf(to)} = 'rejected'`));
+      SELECT c.id FROM claims c WHERE c.id IN (${sql.join(leftIds.map((id) => sql`${id}::uuid`), sql`, `)}) AND ${claimStatusAsOf(to)} = 'rejected'`));
     for (const r of rows) declinedIds.add(r.id);
   }
   const claimsSettled: AmountMap = {};

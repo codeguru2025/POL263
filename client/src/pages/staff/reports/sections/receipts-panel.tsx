@@ -81,7 +81,7 @@ export function ReceiptsPanel({ filters, runKey, fk, enabled }: { filters: Repor
       title="Receipts"
       icon={Receipt}
       description="Every receipt in the period — policy premiums, funeral services and society lump sums. 'All' is everything received, the same as the Income Statement. Receipts waiting for approval are listed but not counted."
-      headerRight={<ExportButton reportType="receipts" filters={rest} />}
+      headerRight={<ExportButton reportType="receipts" filters={{ ...rest, ...(type === "all" ? {} : { type }) }} />}
       flush
     >
       <div className="px-4 py-3 border-b text-sm space-y-2">

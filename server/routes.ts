@@ -61,6 +61,7 @@ import { buildLapsedList } from "./lapsed-report";
 import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
 import { buildReceiptsReport } from "./receipts-report";
+import { buildExpenditureReport } from "./expenditure-report";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14941,6 +14942,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy }));
   });
 
+  app.get("/api/reports/expenditure", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const type = ["requisition", "expenditure", "petty_cash"].includes(String(req.query.type)) ? (String(req.query.type) as "requisition" | "expenditure" | "petty_cash") : "all";
+    return res.json(await buildExpenditureReport(user.organizationId, { ...filters, type }, REPORT_EXPORT_MAX_ROWS));
+  });
   app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
@@ -15588,14 +15595,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "expenditures": {
-          const exps = await storage.getExpenditures(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Description", "Category", "Amount", "Currency", ...currencyHeaders("Amount"), "Date", "Receipt Ref"];
+          const eType = ["requisition", "expenditure", "petty_cash"].includes(String(req.query.type)) ? (String(req.query.type) as "requisition" | "expenditure" | "petty_cash") : "all";
+          const sp = await buildExpenditureReport(user.organizationId, { ...reportFilters, type: eType }, REPORT_EXPORT_MAX_ROWS);
+          const spendLabel = { requisition: "Requisition", expenditure: "Expenditure", petty_cash: "Petty cash" } as const;
+          headers = ["Date", "Voucher / Receipt Ref", "Type", "Requisition No.", "Category", "Description", "Payee", "Currency", "Amount", ...currencyHeaders("Amount"), "Method", "Paid By", "Branch", "Department"];
           currencyTotals = { Amount: {} };
-          rows = exps.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.amount ?? 0)) || 0;
-            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
-            return [r.description, r.category, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.spentAt || r.createdAt, r.receiptRef || ""];
+          rows = sp.rows.map((x) => {
+            currencyTotals!.Amount[x.currency] = (currencyTotals!.Amount[x.currency] || 0) + Number(x.amount);
+            return [
+              x.date, x.voucher, spendLabel[x.kind], x.reference, x.commissionPayout ? `Commission paid to agents (${x.category})` : x.category,
+              x.description, x.payee, x.currency, x.amount, ...currencyAmounts(x.amount, x.currency), x.method, x.paidBy, x.branch, x.department,
+            ];
           });
           break;
         }
