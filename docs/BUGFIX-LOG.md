@@ -41,9 +41,28 @@ real ones:
 - UI: a plain empty state when nothing is classified; "Difference (should be 0)"; a declined-claims
   line; a note on derived periods. The export matches.
 
+**Follow-up (same day):** Augustus had Falakhe's 6 product versions classified PAA (audit rows).
+- Real data showed one more gap: a receipt paid late for cover already over (period ended before
+  the window) was counted as received but never fetched for revenue. Fixed: it is now fetched when
+  issued in the window.
+- The residual is computed from unrounded figures (`earnedExact`/`unearnedPremiumExact`).
+- Sep LRC: opening USD 1,673.64 + received 3,769.00 − revenue 2,943.34 = closing 2,499.30, with
+  a difference of 0.00. Aug, Jul–Sep and one branch also show 0.00.
+- LIC is empty: the only non-society claim is in-kind and products have no cash-in-lieu rate.
+
 **Verified:** `tests/unit/insurance-revenue.test.ts` (6) includes an LRC roll-forward identity test
 over advance, backdated, straddling and post-period receipts. 931/931. Real figures await PAA
 classification.
+
+**Follow-up (same day):** Augustus had Falakhe's 6 product versions classified PAA (audit rows).
+- Real data then showed one more gap: a receipt paid late for cover already over (its period ended
+  before the window) counted as received but was never fetched for revenue. It is now also fetched
+  by issue date.
+- The residual is computed from unrounded figures (`earnedExact`/`unearnedPremiumExact`), so
+  separately rounded lines don't show a stray cent.
+- Sep LRC: opening USD 1,673.64 + received 3,769.00 − revenue 2,943.34 = closing 2,499.30, a
+  difference of 0.00. Aug, Jul–Sep and one branch also show 0.00.
+- LIC is empty: the only non-society claim is in-kind, and the products have no cash-in-lieu rate.
 
 **Lesson for next time:** a roll-forward (opening + in − out = closing) must take its movements
 from the same population and rules as its balances, or a "residual" is guaranteed. Make the

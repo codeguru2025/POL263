@@ -118,7 +118,8 @@ export async function buildIfrs17Movement(orgId: string, params: Ifrs17MovementP
       revenueRecognised: round2(revenueRecognised),
       expectedClosing: expected(openingLrc, premiumsReceived, revenueRecognised),
       closing: round2(closingLrc),
-      residual: residualOf(openingLrc, premiumsReceived, revenueRecognised, closingLrc),
+      // From unrounded figures: separately-rounded lines can be a cent apart without anything being wrong.
+      residual: residualOf(openingSummary.liabilityForRemainingCoverage.unearnedPremiumExact, premiumsReceived, closingSummary.insuranceRevenue.earnedExact, closingSummary.liabilityForRemainingCoverage.unearnedPremiumExact),
       derivedPeriods: closingSummary.liabilityForRemainingCoverage.derivedPeriods,
       consolidatedUsd: {
         opening: usd(openingLrc), premiumsReceived: usd(premiumsReceived),

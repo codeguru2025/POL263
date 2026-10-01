@@ -178,6 +178,8 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
       AND (
         (r.period_from IS NOT NULL AND r.period_to IS NOT NULL AND r.period_to >= ${earliestNeeded})
         OR ((r.period_from IS NULL OR r.period_to IS NULL) AND r.issued_at >= (${earliestNeeded}::date - INTERVAL '13 months'))
+        -- paid late for cover already over: still earned, on the day it's received
+        OR r.issued_at >= (${earliestNeeded}::date - INTERVAL '1 day')
       )
       ${branchId ? sql`AND r.branch_id = ${branchId}` : sql``}`));
 
@@ -256,11 +258,14 @@ export async function buildInsuranceContractSummary(orgId: string, params: Insur
     from, to, asOf, branchId: branchId ?? null,
     insuranceRevenue: {
       earned: round2(earnedRevenue),
+      /** Unrounded, for roll-forwards that must add up to the cent. */
+      earnedExact: earnedRevenue,
       consolidatedUsd: cEarned.usd,
       unconvertible: cEarned.unconvertible,
     },
     liabilityForRemainingCoverage: {
       unearnedPremium: round2(unearnedPremium),
+      unearnedPremiumExact: unearnedPremium,
       consolidatedUsd: cUnearned.usd,
       unconvertible: cUnearned.unconvertible,
       basis: "paa_unexpired_fraction" as const,
