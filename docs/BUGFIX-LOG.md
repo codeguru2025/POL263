@@ -43,6 +43,17 @@ statements, from the first day of trading to the as-of date:
 **Verified:** balances, and so does the financial position, at 30 Jun, 31 Aug, 30 Sep and for a
 single branch. 919/919 tests.
 
+**Follow-up (same day): POL263 fees = what POL263 actually billed.**
+- Per-payment fees from March to 10 Aug (USD 702.07 + ZAR 3,002.63) were `is_settled`, but no
+  POL263 bill was ever paid. The only live bill is USD 367.60.
+- Augustus's call: Falakhe owes what POL263 billed. So the cost of POL263 is now non-void
+  `tenant_invoices` (by issue date, `queryPol263BillsIssued`) plus fees still `is_settled = false`
+  (not yet billed). This applies to the statement, the trend series and the ledger.
+- Settled fees that never reached a bill drop out, which is the write-off.
+- Fees owed at 30 Sep: USD 892.12 (367.60 + 524.52 unbilled) + ZAR 197.50. Retained earnings rise
+  by the write-off.
+- Still balances, and GL = TB on every account.
+
 **Lesson for next time:** a balance sheet has to come from the same books as the P&L. Cash taken
 from a different, unused source (cash-ups) silently drops the asset side. If a profit is in
 retained earnings, the cash or the payable behind it must be on the sheet too.

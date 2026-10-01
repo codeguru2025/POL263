@@ -189,7 +189,9 @@ async function queryCommissionsEarned(tdb: any, orgId: string, from: string, to:
     GROUP BY e.currency`));
 }
 
-/** POL263's per-payment platform fees charged in the period (settled or not — they're owed). */
+/** POL263 per-payment fees charged in the period and not yet billed. Once billed (is_settled) the
+ *  fee is represented by the POL263 bill instead — Falakhe owes what POL263 actually bills
+ *  (Augustus, 1 Oct 2026); fees marked settled that never reached a bill are written off. */
 async function queryPlatformFees(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
   const { start, end } = await periodBounds(orgId, from, to);
   return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
@@ -198,10 +200,24 @@ async function queryPlatformFees(tdb: any, orgId: string, from: string, to: stri
     LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
     LEFT JOIN policies p ON p.id = t.policy_id
     LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
-    WHERE f.organization_id = ${orgId}
+    WHERE f.organization_id = ${orgId} AND f.is_settled = false
       AND f.created_at >= ${start} AND f.created_at < ${end}
       ${branchId ? sql`AND COALESCE(p.branch_id, s.branch_id) = ${branchId}` : sql``}
     GROUP BY f.currency`));
+}
+
+/** POL263 bills issued to the tenant in the period (any status but void) — the cost of POL263,
+ *  owed until paid. Control plane; not kept per branch. */
+async function queryPol263BillsIssued(orgId: string, from: string, to: string): Promise<{ issuedAt: Date; amount: string; currency: string; id: string; kind: string | null; status: string }[]> {
+  const { start, end } = await periodBounds(orgId, from, to);
+  try {
+    const [{ cpDb }, { tenantInvoices }] = await Promise.all([import("./control-plane-db"), import("@shared/control-plane-schema")]);
+    return await cpDb.select({ issuedAt: tenantInvoices.issuedAt, amount: tenantInvoices.amount, currency: tenantInvoices.currency, id: tenantInvoices.id, kind: tenantInvoices.kind, status: tenantInvoices.status })
+      .from(tenantInvoices)
+      .where(and(eq(tenantInvoices.tenantId, orgId), sql`${tenantInvoices.status} <> 'void'`, gte(tenantInvoices.issuedAt, start), lt(tenantInvoices.issuedAt, end))) as any;
+  } catch {
+    return []; // control plane unreachable — leave the line out rather than fail the statement
+  }
 }
 
 /** Approved payroll whose pay period ends in the range (gross pay). Payroll isn't kept per branch
@@ -352,12 +368,13 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   const { from, to, branchId } = params;
   const [fx, fxRates] = await Promise.all([fxMapFor(orgId), storage.getFxRates(orgId)]);
 
-  const [{ premiumRows, serviceRows }, legacyRows, disbRows, commRows, feeRows, payrollRows, pettyRows, claimRows] = await Promise.all([
+  const [{ premiumRows, serviceRows }, legacyRows, disbRows, commRows, feeRows, billsIssued, payrollRows, pettyRows, claimRows] = await Promise.all([
     queryReceipts(tdb, orgId, from, to, branchId),
     queryLegacyGroupReceipts(tdb, orgId, from, to, branchId),
     queryDisbursements(tdb, orgId, from, to, branchId),
     queryCommissionsEarned(tdb, orgId, from, to, branchId),
     queryPlatformFees(tdb, orgId, from, to, branchId),
+    branchId ? Promise.resolve([]) : queryPol263BillsIssued(orgId, from, to),
     branchId ? Promise.resolve([] as { total: string }[]) : queryPayroll(tdb, orgId, from, to),
     queryPettyCash(tdb, orgId, from, to, branchId),
     queryClaimsPaid(tdb, orgId, from, to, branchId),
@@ -398,7 +415,8 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
   }
   for (const r of pettyRows) pushExpense(`Petty cash — ${r.category || "Uncategorised"}`, "petty_cash", r.currency, parseFloat(r.total));
   for (const r of commRows) pushExpense("Agent commissions (earned)", "commission", r.currency, parseFloat(r.total));
-  for (const r of feeRows) pushExpense("POL263 fees", "platform_fee", r.currency, parseFloat(r.total));
+  for (const r of feeRows) pushExpense("POL263 fees (not yet billed)", "platform_fee", r.currency, parseFloat(r.total));
+  for (const b of billsIssued) pushExpense("POL263 bills", "platform_fee", b.currency || "USD", parseFloat(String(b.amount)));
   for (const r of payrollRows) pushExpense("Salaries and wages (approved payroll)", "payroll", "USD", parseFloat(r.total));
   for (const r of claimRows) pushExpense("Claims paid (cash in lieu)", "claims", r.currency, parseFloat(r.total));
 
@@ -421,7 +439,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     /** When each rate was last set, so a stale rate is visible on the statement. */
     fxRatesSetOn: Object.fromEntries(fxRates.map((r: any) => [String(r.currency).toUpperCase(), r.updatedAt ? new Date(r.updatedAt).toISOString().slice(0, 10) : null])),
     /** A single-branch statement can't include what isn't kept per branch. */
-    excludedForBranch: branchId ? ["Society lump sums", "Payroll"] : [],
+    excludedForBranch: branchId ? ["Society lump sums", "Payroll", "POL263 bills"] : [],
     /** Raised but not yet paid — spending that is probably real but not in these figures yet. */
     unpaidRequisitions: await queryUnpaidRequisitions(tdb, orgId, branchId),
     income: {
@@ -489,7 +507,7 @@ export async function buildIncomeTimeSeries(
     q(sql`SELECT ${local(sql`f.created_at`)} AS bucket, f.currency, COALESCE(SUM(f.amount), 0) AS total
       FROM platform_receivables f LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
         LEFT JOIN policies p ON p.id = t.policy_id LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
-      WHERE f.organization_id = ${orgId} AND f.created_at >= ${start} AND f.created_at < ${end} ${br(sql`COALESCE(p.branch_id, s.branch_id)`)} GROUP BY 1, 2`),
+      WHERE f.organization_id = ${orgId} AND f.is_settled = false AND f.created_at >= ${start} AND f.created_at < ${end} ${br(sql`COALESCE(p.branch_id, s.branch_id)`)} GROUP BY 1, 2`),
     branchId ? Promise.resolve([]) : q(sql`SELECT ${onDate(sql`period_end`)} AS bucket, 'USD' AS currency, COALESCE(SUM(total_gross), 0) AS total FROM payroll_runs
       WHERE organization_id = ${orgId} AND status IN ('approved', 'processed', 'paid') AND period_end >= ${from}::date AND period_end <= ${to}::date GROUP BY 1, 2`),
     q(sql`SELECT ${onDate(sql`t.transaction_date`)} AS bucket, f.currency, COALESCE(SUM(t.amount), 0) AS total
@@ -510,6 +528,14 @@ export async function buildIncomeTimeSeries(
   };
   for (const r of [...premium, ...service, ...lump]) add(ensure(r.bucket).income, r.currency, parseFloat(r.total));
   for (const r of [...disb, ...comm, ...fees, ...payroll, ...petty, ...claimRows]) add(ensure(r.bucket).expenses, r.currency, parseFloat(r.total));
+  // POL263 bills issued, bucketed by tenant-local issue date.
+  if (!branchId) {
+    for (const b of await queryPol263BillsIssued(orgId, from, to)) {
+      const d = dateInTimezone(b.issuedAt, tz);
+      const key = bucket === "day" ? d : bucket === "month" ? `${d.slice(0, 7)}-01` : weekStart(d);
+      add(ensure(key).expenses, b.currency || "USD", parseFloat(String(b.amount)));
+    }
+  }
 
   const points: IncomeTimeSeriesPoint[] = Array.from(byBucket.entries())
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -526,6 +552,14 @@ export async function buildIncomeTimeSeries(
       };
     });
   return points;
+}
+
+/** Monday of the ISO week containing `date` (YYYY-MM-DD) — Postgres date_trunc('week') semantics. */
+function weekStart(date: string): string {
+  const d = new Date(date + "T00:00:00Z");
+  const dow = (d.getUTCDay() + 6) % 7; // Monday = 0
+  d.setUTCDate(d.getUTCDate() - dow);
+  return d.toISOString().slice(0, 10);
 }
 
 function daysBetweenInclusive(from: string, to: string): number {
@@ -863,14 +897,24 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
     LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
     LEFT JOIN policies p ON p.id = t.policy_id
     LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
-    WHERE f.organization_id = ${orgId} AND f.created_at >= ${start} AND f.created_at < ${end}
+    WHERE f.organization_id = ${orgId} AND f.is_settled = false AND f.created_at >= ${start} AND f.created_at < ${end}
       ${branchId ? sql`AND COALESCE(p.branch_id, s.branch_id) = ${branchId}` : sql``}`));
   for (const r of feeRows) {
     push({
       date: day(r.created_at), type: "expense", source: "platform_fee", cash: false,
-      description: `POL263 fee${r.description ? ` — ${r.description}` : ""}`, reference: null, person: null,
+      description: `POL263 fee, not yet billed${r.description ? ` — ${r.description}` : ""}`, reference: null, person: null,
       department: "POL263", amount: num(r.amount), currency: r.currency,
     });
+  }
+  // ── POL263 bills issued (the cost of POL263; owed until paid) ──
+  if (!branchId) {
+    for (const b of await queryPol263BillsIssued(orgId, from, to)) {
+      push({
+        date: day(b.issuedAt), type: "expense", source: "platform_fee", cash: false,
+        description: `POL263 bill${b.kind ? ` (${String(b.kind).replace(/_/g, " ")})` : ""}${b.status === "paid" ? "" : " — not yet paid"}`,
+        reference: b.id.slice(0, 8), person: null, department: "POL263", amount: num(b.amount), currency: b.currency || "USD",
+      });
+    }
   }
 
   // ── POL263 bills paid (control plane; not kept per branch) ──
