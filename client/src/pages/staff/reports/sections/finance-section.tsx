@@ -12,6 +12,7 @@ import { Loader2, DollarSign, Download, Truck, FolderOpen, TrendingUp, Receipt, 
 import { ExportButton } from "../export-button";
 import { BalanceSheetPanel } from "./balance-sheet-panel";
 import { ledgerColumns } from "@/components/ledger-columns";
+import { ReceiptsPanel } from "./receipts-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 interface FinanceSectionProps extends ReportSectionBaseProps {
@@ -83,22 +84,6 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
 
 // Curated default columns for the on-screen receipts table. The CSV export carries the fuller
 // Easipol-format column set; the screen view is for scanning, not spreadsheet work.
-const receiptsColumns: EdtColumn<any>[] = [
-  { id: "receiptNumber", header: "Receipt #", accessor: (r) => formatReceiptNumber(r.ReceiptNumber || r.receiptNumber), cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{formatReceiptNumber(r.ReceiptNumber || r.receiptNumber)}</span> },
-  { id: "datePaid", header: "Date Paid", accessor: (r) => r.DatePaid || r.datepaid || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.DatePaid || r.datepaid || "—"}</span> },
-  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policy_number || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.policy_number || "—"}</span> },
-  { id: "surname", header: "Member", accessor: (r) => r.surname || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.surname || "—"}</span> },
-  { id: "productName", header: "Product", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[140px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
-  { id: "currency", header: "Currency", accessor: (r) => r.Currency || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Currency || "—"}</span> },
-  { id: "amountCollected", header: "Amount Collected", align: "right", accessor: (r) => parseFloat(String(r.AmountCollected ?? r.amount ?? "0")), cell: (r) => <span className="text-xs font-semibold whitespace-nowrap tabular-nums">{parseFloat(String(r.AmountCollected ?? r.amount ?? "0")).toFixed(2)}</span> },
-  { id: "premiumDue", header: "Premium Due", align: "right", accessor: (r) => r.PremiumDue || "", cell: (r) => <span className="text-xs whitespace-nowrap tabular-nums">{r.PremiumDue || "—"}</span> },
-  { id: "monthsPaid", header: "Months Paid", align: "right", accessor: (r) => r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "", cell: (r) => <span className="text-xs tabular-nums">{r.MonthsPaid ?? r.MonthsPaidInAdvance ?? "—"}</span> },
-  { id: "paymentMethod", header: "Method", accessor: (r) => r.PaymentMethod || "", cell: (r) => <span className="text-xs whitespace-nowrap"><Badge variant="outline" className="text-[10px]">{r.PaymentMethod || "—"}</Badge></span> },
-  { id: "agentsName", header: "Agent", accessor: (r) => r.agentsName || "Walk-in", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.agentsName}>{r.agentsName || "Walk-in"}</span> },
-  { id: "capturedBy", header: "Captured By", accessor: (r) => r.CapturedBy || r.CollectedBy || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.CapturedBy || r.CollectedBy}>{r.CapturedBy || r.CollectedBy || "—"}</span> },
-  { id: "groupName", header: "Group", accessor: (r) => r.GroupName || "", cell: (r) => <span className="text-xs max-w-[120px] truncate block" title={r.GroupName}>{r.GroupName || "—"}</span> },
-  { id: "dtstamp", header: "Timestamp (UTC)", accessor: (r) => r.DTSTAMP || "", cell: (r) => <span className="text-xs font-mono whitespace-nowrap" title={r.DTSTAMP}>{r.DTSTAMP || "—"}</span> },
-];
 
 const paymentsColumns: EdtColumn<any>[] = [
   { id: "reference", header: "Reference", accessor: (p) => p.reference || "", cell: (p) => <span className="font-mono text-sm">{p.reference || "—"}</span> },
@@ -358,15 +343,6 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       return res.json();
     },
     enabled: need("cashups"),
-  });
-  const { data: receiptReport = [], isLoading: loadingReceipts } = useQuery<any[]>({
-    queryKey: ["reports", "receipts", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/receipts?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("receiptReport"),
   });
 
   return (
@@ -951,20 +927,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       </TabsContent>
 
       <TabsContent value="receipts">
-        <CardSection title="Daily receipts report" icon={Receipt} description={<>{receiptReport.length} receipts{filters.fromDate ? ` from ${filters.fromDate}` : ""}{filters.toDate ? ` to ${filters.toDate}` : ""}. Includes UTC <span className="font-mono">DTSTAMP</span> (YYYYMMDDTHHmmssZ) per receipt and policy-receipt detail columns for export.</>} headerRight={<ExportButton reportType="receipts" filters={filters} />} flush>
-          {loadingReceipts ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={receiptsColumns}
-              rows={receiptReport.map((r: any, idx: number) => ({ ...r, _rowKey: r.receiptId || idx }))}
-              getRowKey={(row: any) => String(row._rowKey)}
-              exportFilename="daily-receipts"
-              storageKey="reports-receipts"
-              emptyMessage="No receipts found. Use the date filters above to select a reporting period."
-            />
-          )}
-        </CardSection>
+        <ReceiptsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("receiptReport")} />
       </TabsContent>
 
       <TabsContent value="payments">

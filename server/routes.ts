@@ -60,6 +60,7 @@ import { buildDueList, buildGraceList, summarizeGroups } from "./premium-due-lis
 import { buildLapsedList } from "./lapsed-report";
 import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
+import { buildReceiptsReport } from "./receipts-report";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14943,9 +14944,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    const offset = parseInt(String(req.query.offset)) || 0;
-    return res.json(await storage.getReceiptReportByOrg(user.organizationId, limit, offset, filters));
+    const type = ["premium", "service", "society"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society") : "all";
+    return res.json(await buildReceiptsReport(user.organizationId, { ...filters, type }, REPORT_EXPORT_MAX_ROWS));
   });
   app.get("/api/reports/commissions-summary", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
     const user = req.user as any;
@@ -15967,55 +15967,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "receipts": {
-          const receiptRows = await storage.getReceiptReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const rType = ["premium", "service", "society"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society") : "all";
+          const rr = await buildReceiptsReport(user.organizationId, { ...reportFilters, type: rType }, REPORT_EXPORT_MAX_ROWS);
+          const kindLabel = { premium: "Premium", service: "Funeral service", society: "Society lump sum" } as const;
           headers = [
-            "ReceiptNumber",
-            "datepaid",
-            "DTSTAMP",
-            "PaymentMethod",
-            "Total",
-            "PremiumDue",
-            "AmountCollected",
-            "Remarks",
-            "agentsName",
-            "MonthsPaidInAdvance",
-            "policy_number",
-            "surname",
-            "InternalReferenceNumber",
-            "Product_Name",
-            "Inception_Date",
-            "MonthNumber",
-            "YearNumber",
-            "ReceiptCount",
-            "fdate",
-            "tdate",
+            "Date Paid", "Receipt No.", "Type", "Policy No.", "Member No.", "Paid By", "Product / Description",
+            "Currency", "Amount", ...currencyHeaders("Amount"), "Premium Due", "Months Paid", "Method",
+            "Agent", "Captured By", "Group", "Branch", "Waiting For Approval", "Notes",
           ];
-          currencyTotals = null;
-          rows = receiptRows.map((r: any) => [
-            r.ReceiptNumber ?? "",
-            r.DatePaid ?? "",
-            r.DTSTAMP ?? "",
-            r.PaymentMethod ?? "",
-            r.Total ?? "",
-            r.PremiumDue ?? "",
-            r.AmountCollected ?? "",
-            r.Remarks ?? "",
-            r.agentsName ?? "",
-            r.MonthsPaidInAdvance ?? "",
-            r.policy_number ?? "",
-            r.surname ?? "",
-            r.InternalReferenceNumber ?? "",
-            r.Product_Name ?? "",
-            r.Inception_Date ?? "",
-            r.MonthNumber ?? "",
-            r.YearNumber ?? "",
-            r.ReceiptCount ?? "",
-            r.fdate ?? "",
-            r.tdate ?? "",
-          ]);
+          currencyTotals = { Amount: {} };
+          rows = rr.rows.map((x) => {
+            if (!x.pending) currencyTotals!.Amount[x.currency] = (currencyTotals!.Amount[x.currency] || 0) + Number(x.amount);
+            return [
+              x.datePaid, x.receiptNumber, kindLabel[x.kind], x.policyNumber, x.memberNumber, x.payer, x.description,
+              x.currency, x.amount, ...currencyAmounts(x.amount, x.currency), x.premiumDue, x.monthsPaid ?? "", x.method || "not recorded",
+              x.agent, x.capturedBy, x.groupName, x.branch, x.pending ? "Yes — not counted" : "", x.notes,
+            ];
+          });
           break;
         }
-        // ─── Employee Report types ────────────────────────────────
         case "policies-per-agent": {
           const ppaRaw = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
           ppaRaw.sort((a: any, b: any) => {

@@ -10,6 +10,38 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Receipts report counted pending receipts, missed funeral/society money, capped at 500
+
+**Symptom:**
+- Receipts waiting for approval (1 now, USD 20) counted as collected.
+- Months paid was floor(amount ÷ premium), disagreeing with the Finance report.
+- Dates, month and year were UTC.
+- 500-row cap (Falakhe has 679 receipts).
+- Funeral-service receipts and society lump sums weren't included, so its total never matched
+  money received.
+- Many cryptic duplicate columns (DTSTAMP, Easipol-style names).
+
+**Fix:**
+- New `server/receipts-report.ts` (`buildReceiptsReport`, pure `summarizeReceipts`), one row
+  shape across premium / service / society.
+  - Pending premium receipts are listed and flagged, never totalled; rejected ones aren't listed.
+  - Months paid via `periodsPaidByReceipt`.
+  - Local dates, money per currency.
+  - Lump sums are left out under a branch/agent filter, and the report says so.
+- `/api/reports/receipts` takes `?type=` and returns `{ rows, summary }`.
+- The export was rewritten with plain columns.
+- New `reports/sections/receipts-panel.tsx` with type buttons and totals by currency, type and
+  method.
+- The old `storage.getReceiptReportByOrg` was removed.
+
+**Verified:** Sep "All" = USD 13,947 + ZAR 22,615, identical to the Income Statement's income;
+receipt #801 (USD 24 on USD 12) = 2 months. New `tests/unit/receipts-report.test.ts`. 941/941.
+
+**Lesson for next time:** a "receipts" report that only covers one of several ways money comes in
+can never reconcile with the books. List every receipt source, or say plainly what's excluded.
+
+---
+
 ## 2026-10-01 — Underwriter payable counted the wrong policies
 
 **Symptom:** found reviewing the report (Falakhe has no underwriter, so every amount is 0 and the
