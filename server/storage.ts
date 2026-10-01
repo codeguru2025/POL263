@@ -5628,10 +5628,11 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await tdb.update(cashups).set(stripImmutableKeys(data)).where(and(eq(cashups.id, id), eq(cashups.organizationId, orgId))).returning();
     return updated;
   }
-  async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number; currency: string }> {
+  /** One staff member's receipts for one tenant-local day in ONE currency (a cash-up is per
+   *  currency — USD and ZAR are never added together). Approved receipts only. */
+  async getReceiptTotalsByUserDate(orgId: string, userId: string, date: string, currency?: string): Promise<{ amountsByMethod: Record<string, string>; transactionCount: number; currency: string; currencies: string[] }> {
     const tdb = await getDbForOrg(orgId);
-    const dayStart = new Date(date + "T00:00:00.000Z");
-    const dayEnd = new Date(date + "T23:59:59.999Z");
+    const { start, endExclusive } = await dayRangeForOrg(orgId, date, date);
     const [policyRows, serviceRows] = await Promise.all([
       tdb
         .select({ paymentChannel: paymentReceipts.paymentChannel, amount: paymentReceipts.amount, currency: paymentReceipts.currency })
@@ -5640,8 +5641,9 @@ export class DatabaseStorage implements IStorage {
           eq(paymentReceipts.organizationId, orgId),
           eq(paymentReceipts.issuedByUserId, userId),
           eq(paymentReceipts.status, "issued"),
-          gte(paymentReceipts.issuedAt, dayStart),
-          lte(paymentReceipts.issuedAt, dayEnd),
+          or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
+          gte(paymentReceipts.issuedAt, start!),
+          lt(paymentReceipts.issuedAt, endExclusive!),
         )),
       tdb
         .select({ paymentChannel: serviceReceipts.paymentChannel, amount: serviceReceipts.amount, currency: serviceReceipts.currency })
@@ -5650,22 +5652,23 @@ export class DatabaseStorage implements IStorage {
           eq(serviceReceipts.organizationId, orgId),
           eq(serviceReceipts.issuedByUserId, userId),
           eq(serviceReceipts.status, "issued"),
-          gte(serviceReceipts.issuedAt, dayStart),
-          lte(serviceReceipts.issuedAt, dayEnd),
+          gte(serviceReceipts.issuedAt, start!),
+          lt(serviceReceipts.issuedAt, endExclusive!),
         )),
     ]);
     const allRows = [...policyRows, ...serviceRows];
+    const currencies = Array.from(new Set(allRows.map((r) => (r.currency || "USD").toUpperCase()))).sort();
+    const cur = (currency || currencies[0] || "USD").toUpperCase();
     const amountsByMethod: Record<string, string> = { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" };
-    const currencyCounts: Record<string, number> = {};
+    let transactionCount = 0;
     for (const r of allRows) {
+      if ((r.currency || "USD").toUpperCase() !== cur) continue;
       const ch = (r.paymentChannel || "other").toLowerCase();
       const key = ch === "cash" ? "cash" : ch === "paynow_ecocash" ? "paynow_ecocash" : ch === "paynow_card" ? "paynow_card" : "other";
       amountsByMethod[key] = fromCents(toCents(amountsByMethod[key]) + toCents(r.amount));
-      const cur = r.currency || "USD";
-      currencyCounts[cur] = (currencyCounts[cur] || 0) + 1;
+      transactionCount++;
     }
-    const currency = Object.entries(currencyCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "USD";
-    return { amountsByMethod, transactionCount: allRows.length, currency };
+    return { amountsByMethod, transactionCount, currency: cur, currencies };
   }
 
   // ─── Security Questions ────────────────────────────────────

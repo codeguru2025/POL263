@@ -241,12 +241,12 @@ export function CashupsTab({ authUser, canWriteFinance }: CashupsTabProps) {
               <div className="flex items-center justify-between">
                 <Label>Amounts by method</Label>
                 <Button type="button" variant="ghost" size="sm" onClick={async () => {
-                  const res = await fetch(getApiBase() + `/api/cashups/my-receipt-totals?date=${encodeURIComponent(createCashupDate)}`, { credentials: "include" });
+                  const res = await fetch(getApiBase() + `/api/cashups/my-receipt-totals?date=${encodeURIComponent(createCashupDate)}&currency=${encodeURIComponent(createCashupCurrency || "USD")}`, { credentials: "include" });
                   if (!res.ok) return;
                   const data = await res.json();
                   setCreateCashupAmounts(data.amountsByMethod || { cash: "0", paynow_ecocash: "0", paynow_card: "0", other: "0" });
                   setCreateCashupTransactionCount(String(data.transactionCount ?? 0));
-                  if (data.currency) setCreateCashupCurrency(data.currency);
+                  if ((data.currencies ?? []).length > 1) toast({ title: `You also took ${(data.currencies as string[]).filter((x) => x !== data.currency).join(", ")} that day`, description: "Do a separate cash-up for each currency." });
                 }} data-testid="button-load-from-receipts">Load from my receipts</Button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

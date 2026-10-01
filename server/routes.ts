@@ -7523,7 +7523,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
     if (!date) return res.status(400).json({ message: "Query 'date' (YYYY-MM-DD) is required" });
-    const result = await storage.getReceiptTotalsByUserDate(user.organizationId, await resolveOrSyncTenantUserId(user.organizationId, user.id), date);
+    const currency = typeof req.query.currency === "string" && /^[A-Z]{3}$/i.test(req.query.currency) ? req.query.currency.toUpperCase() : undefined;
+    const result = await storage.getReceiptTotalsByUserDate(user.organizationId, await resolveOrSyncTenantUserId(user.organizationId, user.id), date, currency);
     return res.json(result);
   });
 
