@@ -16518,11 +16518,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const brFrom = reportFilters.fromDate || `${orgTodayBr.slice(0, 7)}-01`;
           const brTo = reportFilters.toDate || orgTodayBr;
           const br = await storage.getBankReconciliation(user.organizationId, brFrom, brTo);
-          headers = ["Account", "Bank", "Currency", "Opening Balance", "Opening Date", "Closing Balance", "Closing Date", "Statement Movement", "Deposits Recorded", "Deposit Count", "Unreconciled Movement"];
-          rows = br.accounts.map((a) => [a.accountName, a.bankName, a.currency, a.openingBalance ?? "", a.openingDate ?? "", a.closingBalance ?? "", a.closingDate ?? "", a.statementMovement ?? "", a.depositsRecorded.toFixed(2), a.depositCount, a.unreconciledMovement ?? ""]);
-          rows.push(["", "", "", "", "", "", "", "", "", "", ""]);
-          for (const [c, v] of Object.entries(br.bankPaymentsRecorded)) {
-            rows.push([`Bank-method payments recorded (${c})`, "", c, "", "", "", "", "", v.total.toFixed(2), v.count, ""]);
+          const statusText: Record<string, string> = {
+            agrees: "Agrees", difference: "Difference to explain",
+            no_opening: "No statement before the period", no_closing: "No statement in the period",
+          };
+          headers = ["Account", "Bank", "Currency", "Opening Balance", "Opening Date", "Deposits", "Received Through Bank", "Paid Through Bank", "Bank Should Show", "Closing Statement", "Closing Date", "Difference", "Status"];
+          rows = br.accounts.map((a) => [
+            a.accountName, a.bankName ?? "", a.currency, a.openingBalance ?? "", a.openingDate ?? "",
+            a.deposits, a.receivedThroughBank, a.paidThroughBank, a.expectedClosing ?? "",
+            a.closingBalance ?? "", a.closingDate ?? "", a.difference ?? "", statusText[a.status] ?? a.status,
+          ]);
+          for (const [c, v] of Object.entries(br.unlinked)) {
+            rows.push([`Not linked to an account (${c} — several ${c} accounts)`, "", c, "", "", "", v.received, v.paid, "", "", "", "", ""]);
           }
           break;
         }

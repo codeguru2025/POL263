@@ -10,6 +10,32 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Bank Reconciliation invented opening balances and ignored bank-paid money
+
+**Symptom:** found reviewing the report; Falakhe has no bank accounts set up yet, so nobody saw it.
+- With no statement before the period, the "opening" balance fell back to the *oldest* statement,
+  even one inside the period, so the movement was made up.
+- Only deposits were compared with the statement. Money received straight into the bank
+  (EcoCash/PayNow/card/transfer) and bank-method payouts weren't part of the sum, so
+  "unreconciled movement" lumped everything together.
+
+**Fix:**
+- New pure `server/bank-reconciliation.ts` (`reconcileBankAccounts`, `goesThroughBank`): expected
+  closing = opening statement (strictly before the period) + deposits + non-cash receipts −
+  non-cash payouts, compared with the closing statement (inside the period).
+- Explicit statuses: agrees, difference, no_opening, no_closing.
+- With several accounts in one currency, unlinked flows are reported per currency, not guessed.
+- `storage.getBankReconciliation` was rewritten on it (local dates, approved receipts only), with
+  a new UI table and export, and a plain-words empty state pointing to Finance → Banking & Cash.
+
+**Verified:** new `tests/unit/bank-reconciliation.test.ts` (6). Falakhe returns no accounts, so it
+shows the setup message.
+
+**Lesson for next time:** a reconciliation must never fall back to a "nearest" figure for its
+starting point. A missing opening balance is a finding to show, not a gap to fill.
+
+---
+
 ## 2026-10-01 — Clients never got a receipt SMS when their payment needed approval
 
 **Symptom:** FLK00332 (Lister Mdluli) paid USD 12 at 09:38 on 1 Oct (receipt #813) and got no SMS.

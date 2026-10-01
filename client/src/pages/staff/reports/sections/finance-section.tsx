@@ -661,7 +661,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="bank-reconciliation">
         <CardSection
           title="Bank Reconciliation"
-          description="Each bank account's statement movement over the period vs deposits recorded in the system. The system stores periodic statement closing balances (not individual lines) and disbursements aren't linked to an account, so the 'unreconciled movement' is the amount for finance to explain from bank-method payments, charges and interest."
+          description="For each bank account: the opening statement balance, plus cash deposited and money received through the bank, less money paid out through the bank, is what the bank should show. Compared with the closing statement, the difference is what to explain."
           icon={Building}
           headerRight={<ExportButton reportType="bank-reconciliation" filters={filters} />}
           flush
@@ -669,40 +669,56 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
           {loadingBankRec ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : !bankRec || bankRec.accounts.length === 0 ? (
-            <EmptyState title="No active bank accounts" description="Add bank accounts and statement balances under Finance to use this reconciliation." className="border-0 rounded-none bg-transparent py-8" />
-          ) : (
-            <div className="p-4 space-y-4">
-              <div className="overflow-x-auto rounded-md border">
-                <table className="w-full text-sm min-w-[820px]">
-                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-                    <tr>{["Account", "Currency", "Opening", "Closing", "Statement movement", "Deposits recorded", "Unreconciled"].map((h) => <th key={h} className="text-left px-3 py-2 whitespace-nowrap">{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {bankRec.accounts.map((a: any, i: number) => (
-                      <tr key={i} className="border-t">
-                        <td className="px-3 py-1.5 whitespace-nowrap">{a.accountName} <span className="text-xs text-muted-foreground">{a.bankName}</span></td>
-                        <td className="px-3 py-1.5">{a.currency}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.openingBalance != null ? a.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.openingDate || ""}</div></td>
-                        <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{a.closingBalance != null ? a.closingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}<div className="text-[10px] text-muted-foreground">{a.closingDate || ""}</div></td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{a.statementMovement != null ? a.statementMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{a.depositsRecorded.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-[10px] text-muted-foreground">({a.depositCount})</span></td>
-                        <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${a.unreconciledMovement && Math.abs(a.unreconciledMovement) > 0.01 ? "text-amber-600" : ""}`}>{a.unreconciledMovement != null ? a.unreconciledMovement.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}</td>
-                      </tr>
+            <EmptyState
+              title="No bank accounts set up"
+              description="Add your bank accounts and each month-end statement balance under Finance → Banking & Cash, and this report will check them against what the system recorded."
+              className="border-0 rounded-none bg-transparent py-8"
+            />
+          ) : (() => {
+            const m = (v: string | null | undefined) => (v == null ? "—" : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+            const statusBadge: Record<string, { text: string; cls: string }> = {
+              agrees: { text: "Agrees", cls: "text-emerald-700" },
+              difference: { text: "Difference to explain", cls: "text-amber-700" },
+              no_opening: { text: "No statement before this period — enter last month's closing balance", cls: "text-muted-foreground" },
+              no_closing: { text: "No statement in this period — enter this month's closing balance", cls: "text-muted-foreground" },
+            };
+            return (
+              <div className="p-4 space-y-4">
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="w-full text-sm min-w-[980px]">
+                    <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                      <tr>{["Account", "Opening", "+ Deposited", "+ Received via bank", "− Paid via bank", "= Should show", "Statement closing", "Difference", ""].map((h) => <th key={h} className="text-right first:text-left px-3 py-2 whitespace-nowrap">{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {bankRec.accounts.map((a: any, i: number) => (
+                        <tr key={i} className="border-t align-top">
+                          <td className="px-3 py-1.5 whitespace-nowrap">{a.accountName} <span className="text-xs text-muted-foreground">{a.bankName} · {a.currency}</span></td>
+                          <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{m(a.openingBalance)}<div className="text-[10px] text-muted-foreground">{a.openingDate || ""}</div></td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{m(a.deposits)} <span className="text-[10px] text-muted-foreground">({a.depositCount})</span></td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{m(a.receivedThroughBank)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{m(a.paidThroughBank)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-medium">{m(a.expectedClosing)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{m(a.closingBalance)}<div className="text-[10px] text-muted-foreground">{a.closingDate || ""}</div></td>
+                          <td className={`px-3 py-1.5 text-right tabular-nums font-semibold ${a.status === "difference" ? "text-amber-700" : ""}`}>{m(a.difference)}</td>
+                          <td className={`px-3 py-1.5 text-xs max-w-[200px] ${statusBadge[a.status]?.cls ?? ""}`}>{statusBadge[a.status]?.text ?? a.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {Object.keys(bankRec.unlinked ?? {}).length > 0 && (
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <p className="font-semibold mb-1">Not linked to a specific account</p>
+                    <p className="text-xs text-muted-foreground mb-1">There's more than one account in these currencies, and receipts and payouts don't say which account they went through — split these between them when reconciling.</p>
+                    {Object.entries(bankRec.unlinked).map(([c, v]: [string, any]) => (
+                      <p key={c} className="text-xs tabular-nums">{c}: received {m(v.received)} ({v.receivedCount}) · paid out {m(v.paid)} ({v.paidCount})</p>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                <p className="font-semibold mb-1">Bank-method payments recorded in the period</p>
-                {Object.keys(bankRec.bankPaymentsRecorded).length === 0 ? (
-                  <p className="text-muted-foreground text-xs">None.</p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">{Object.entries(bankRec.bankPaymentsRecorded).map(([c, v]: any) => `${c} ${v.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${v.count})`).join("  ·  ")}</p>
+                  </div>
                 )}
+                <p className="text-[11px] text-muted-foreground">{bankRec.note}</p>
               </div>
-              <p className="text-[11px] text-muted-foreground">{bankRec.note}</p>
-            </div>
-          )}
+            );
+          })()}
         </CardSection>
       </TabsContent>
 

@@ -14,6 +14,7 @@ import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import type { NewJoiningReportRow } from "./new-joinings";
+import { reconcileBankAccounts, goesThroughBank, type AccountInput, type AccountReconciliation, type CurrencyFlows } from "./bank-reconciliation";
 import { classifyActivation, type ActivationType, type ActivationReportRow } from "./activations-report";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { WALK_IN_COMMISSION_NAME } from "./commission-calc";
@@ -455,8 +456,8 @@ export interface IStorage {
   getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]>;
   /** Bank reconciliation for a period — statement balances vs system-recorded deposits, per account. */
   getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
-    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
-    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    accounts: AccountReconciliation[];
+    unlinked: Record<string, CurrencyFlows>;
     note: string;
   }>;
   /** Policies captured in date range (all statuses / paid or unpaid) with spreadsheet-style columns for new joinings. */
@@ -2782,58 +2783,63 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getBankReconciliation(organizationId: string, from: string, to: string): Promise<{
-    accounts: { accountName: string; bankName: string; currency: string; openingBalance: number | null; openingDate: string | null; closingBalance: number | null; closingDate: string | null; statementMovement: number | null; depositsRecorded: number; depositCount: number; unreconciledMovement: number | null }[];
-    bankPaymentsRecorded: Record<string, { total: number; count: number }>;
+    accounts: AccountReconciliation[];
+    unlinked: Record<string, CurrencyFlows>;
     note: string;
   }> {
     const tdb = await getDbForOrg(organizationId);
     const rowsOf = (r: any): any[] => r.rows ?? r;
+    const { start, endExclusive } = await dayRangeForOrg(organizationId, from, to);
     const accts = (await this.getBankAccounts(organizationId)).filter((a) => a.isActive);
-    const accountResults: any[] = [];
+
+    const inputs: AccountInput[] = [];
     for (const a of accts) {
-      const balances = await this.getBankStatementBalances(organizationId, a.id); // desc by date
-      const opening = balances.find((b) => String(b.statementDate) < from) ?? balances[balances.length - 1];
-      const closing = balances.find((b) => String(b.statementDate) <= to);
-      const dep = await tdb.execute(sql`
-        SELECT COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
+      const balances = await this.getBankStatementBalances(organizationId, a.id);
+      const dep = rowsOf(await tdb.execute(sql`
+        SELECT COALESCE(SUM(amount), 0)::text AS total, COUNT(*)::int AS n
         FROM bank_deposits
         WHERE organization_id = ${organizationId} AND bank_account_id = ${a.id}
-          AND deposit_date >= ${from} AND deposit_date <= ${to}`);
-      const depRow = rowsOf(dep)[0] || {};
-      const depositsRecorded = parseFloat(depRow.total ?? "0");
-      const openingBalance = opening ? parseFloat(String(opening.closingBalance)) : null;
-      const closingBalance = closing ? parseFloat(String(closing.closingBalance)) : null;
-      const statementMovement = openingBalance != null && closingBalance != null ? Number((closingBalance - openingBalance).toFixed(2)) : null;
-      // What the statement moved that is NOT explained by recorded deposits — i.e. payments out,
-      // bank charges, interest, and any unrecorded transaction. This is the amount to reconcile.
-      const unreconciledMovement = statementMovement != null ? Number((statementMovement - depositsRecorded).toFixed(2)) : null;
-      accountResults.push({
-        accountName: a.accountName, bankName: a.bankName, currency: a.currency,
-        openingBalance, openingDate: opening ? String(opening.statementDate) : null,
-        closingBalance, closingDate: closing ? String(closing.statementDate) : null,
-        statementMovement, depositsRecorded: Number(depositsRecorded.toFixed(2)), depositCount: parseInt(depRow.n ?? "0"),
-        unreconciledMovement,
+          AND deposit_date >= ${from} AND deposit_date <= ${to}`))[0] || {};
+      inputs.push({
+        accountName: a.accountName, bankName: a.bankName ?? null, currency: a.currency,
+        statements: balances.map((b) => ({ date: String(b.statementDate), balance: String(b.closingBalance) })),
+        deposits: dep.total ?? "0", depositCount: Number(dep.n ?? 0),
       });
     }
 
-    // Bank-method payments recorded in the system in the period — not linked to a specific
-    // account, so reported once for the finance team to match against the accounts above.
-    const payRows = await tdb.execute(sql`
-      SELECT currency, COALESCE(SUM(amount::numeric), 0) AS total, COUNT(*) AS n
-      FROM payment_disbursements
-      WHERE organization_id = ${organizationId}
-        AND payment_method IN ('bank_transfer', 'cheque', 'eft')
-        AND paid_date >= ${from} AND paid_date <= ${to}
-      GROUP BY currency`);
-    const bankPaymentsRecorded: Record<string, { total: number; count: number }> = {};
-    for (const r of rowsOf(payRows)) {
-      bankPaymentsRecorded[(r.currency || "USD").toUpperCase()] = { total: Number(parseFloat(r.total).toFixed(2)), count: parseInt(r.n) };
+    // Money that went through the bank: every non-cash receipt in, every non-cash payout out.
+    const flows: Record<string, CurrencyFlows> = {};
+    const flow = (c: string) => (flows[(c || "USD").toUpperCase()] ??= { received: "0", paid: "0", receivedCount: 0, paidCount: 0 });
+    const inRows = rowsOf(await tdb.execute(sql`
+      SELECT currency, payment_channel AS method, amount FROM payment_receipts
+      WHERE organization_id = ${organizationId} AND status = 'issued'
+        AND (approval_status IS NULL OR approval_status = 'approved')
+        AND issued_at >= ${start} AND issued_at < ${endExclusive}
+      UNION ALL
+      SELECT currency, payment_channel AS method, amount FROM service_receipts
+      WHERE organization_id = ${organizationId} AND status = 'issued'
+        AND issued_at >= ${start} AND issued_at < ${endExclusive}`));
+    for (const r of inRows) {
+      if (!goesThroughBank(r.method)) continue;
+      const f = flow(r.currency);
+      f.received = fromCents(toCents(f.received) + toCents(r.amount));
+      f.receivedCount++;
+    }
+    const outRows = rowsOf(await tdb.execute(sql`
+      SELECT currency, payment_method AS method, amount FROM payment_disbursements
+      WHERE organization_id = ${organizationId} AND paid_date >= ${from} AND paid_date <= ${to}`));
+    for (const r of outRows) {
+      if (!goesThroughBank(r.method)) continue;
+      const f = flow(r.currency);
+      f.paid = fromCents(toCents(f.paid) + toCents(r.amount));
+      f.paidCount++;
     }
 
+    const { accounts, unlinked } = reconcileBankAccounts(inputs, flows, from, to);
     return {
-      accounts: accountResults,
-      bankPaymentsRecorded,
-      note: "The system stores periodic bank-statement closing balances, not individual statement lines, and disbursements are not linked to a specific bank account. This reconciliation compares each account's statement movement against recorded deposits; the 'unreconciled movement' is the amount to explain from bank-method payments (shown below), bank charges, interest and any unrecorded items.",
+      accounts,
+      unlinked,
+      note: "What the bank should show = opening statement balance + cash deposited + money received through the bank (EcoCash, OneMoney, InnBucks, PayNow, card, bank transfer) − money paid out other than in cash. The difference from the closing statement is what to explain: bank charges, interest, or something not recorded. Society lump sums don't record how they were paid, so they aren't included.",
     };
   }
 
