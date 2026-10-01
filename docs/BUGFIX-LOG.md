@@ -28,6 +28,14 @@ screen just showed zeros).
 **Verified:** Falakhe: 575 in-force policies (540 active + 35 grace); `noRatesConfigured` is true.
 939/939.
 
+**Same day — Reinsurance bordereaux:**
+- The claims bordereau listed *every* claim as if it were reinsured. It now takes only claims on
+  products with underwriter amounts, on local dates.
+- The premium bordereau guessed lives as "principal adult + everyone else at the child rate", which
+  disagreed with Underwriter payable's age split. It now takes adults, children and the ceded
+  amount from `getUnderwriterPayableReport`, so the two always agree.
+- Plain empty states ("Nothing underwritten"). For Falakhe: 0 premium rows, 0 claims rows.
+
 **Lesson for next time:** a payable owed on the book (underwriter, reinsurer) is a function of what
 is in force, not of when the policies were captured. Don't reuse a capture-date filter for it.
 

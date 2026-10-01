@@ -1105,7 +1105,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
           {loadingPremBd ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (premiumBordereau as any[]).length === 0 ? (
-            <EmptyState title="No policies with an underwriter cession" description="No active/grace policies on products that carry a configured underwriter amount." className="border-0 rounded-none bg-transparent py-8" />
+            <EmptyState title="Nothing underwritten" description="No product has an underwriter amount, so there is nothing to pass to an underwriter or reinsurer. If your policies are underwritten, add the per-adult and per-child underwriter amounts on each product version under Products." className="border-0 rounded-none bg-transparent py-8" />
           ) : (
             <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-xs min-w-[900px]">
@@ -1134,7 +1134,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
 
         <CardSection
           title="Reinsurance claims bordereau"
-          description="Per-claim detail for the period for the reinsurer to apply the treaty cession. Reports the gross claim; the recoverable share depends on the treaty and is applied by the reinsurer."
+          description="Claims reported in the period on underwritten products, for the reinsurer to apply the treaty. Shows the gross claim; the share recovered depends on the treaty."
           icon={Shield}
           headerRight={<ExportButton reportType="claims-bordereau" filters={filters} />}
           flush
@@ -1142,7 +1142,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
           {loadingClaimsBd ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (claimsBordereau as any[]).length === 0 ? (
-            <EmptyState title="No claims in the selected period" className="border-0 rounded-none bg-transparent py-8" />
+            <EmptyState title="No claims on underwritten products in this period" description="Only claims on products with an underwriter amount are listed here — the rest are carried by the business itself." className="border-0 rounded-none bg-transparent py-8" />
           ) : (
             <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-xs min-w-[820px]">

@@ -2712,9 +2712,13 @@ export class DatabaseStorage implements IStorage {
    */
   async getPremiumBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);
+    // Lives and the ceded amount come from Underwriter payable (its per-member adult/child split by
+    // age), so the bordereau and the payable always agree.
+    const payable = await this.getUnderwriterPayableReport(organizationId, 1_000_000, 0, {} as ReportFilters);
+    const byPolicy = new Map(payable.rows.map((p) => [p.policyId, p]));
     const rowsOf = (r: any): any[] => r.rows ?? r;
     const res = await tdb.execute(sql`
-      SELECT p.policy_number, p.currency, p.premium_amount, p.inception_date, p.status,
+      SELECT p.id AS policy_id, p.policy_number, p.currency, p.premium_amount, p.inception_date, p.status,
              c.first_name, c.last_name, c.national_id,
              prod.name AS product, prod.cover_amount, prod.cover_currency,
              b.name AS branch,
@@ -2729,15 +2733,14 @@ export class DatabaseStorage implements IStorage {
         AND p.status IN ('active','grace')
         AND (pv.underwriter_amount_adult IS NOT NULL OR pv.underwriter_amount_child IS NOT NULL)
       ORDER BY p.policy_number`);
-    return rowsOf(res).map((r: any) => {
-      const lives = parseInt(r.lives) || 1;
-      const adultAmt = parseFloat(r.underwriter_amount_adult ?? "0") || 0;
-      const childAmt = parseFloat(r.underwriter_amount_child ?? r.underwriter_amount_adult ?? "0") || 0;
-      // Without a per-member adult/child split here, approximate cession as principal (adult) +
-      // (lives-1) at the child rate — matches the underwriter-payable report's fallback.
-      const cededMonthly = adultAmt + Math.max(0, lives - 1) * childAmt;
+    return rowsOf(res).filter((r: any) => byPolicy.has(r.policy_id)).map((r: any) => {
+      const p = byPolicy.get(r.policy_id)!;
+      const lives = p.adults + p.children;
+      const cededMonthly = p.monthlyPayable;
       const grossPremium = parseFloat(r.premium_amount ?? "0") || 0;
       return {
+        adults: p.adults,
+        children: p.children,
         policyNumber: r.policy_number,
         insured: [r.first_name, r.last_name].filter(Boolean).join(" ") || "—",
         nationalId: r.national_id || "",
@@ -2764,6 +2767,8 @@ export class DatabaseStorage implements IStorage {
    */
   async getClaimsBordereau(organizationId: string, from: string, to: string): Promise<any[]> {
     const tdb = await getDbForOrg(organizationId);
+    // Only claims on underwritten products go to a reinsurer; tenant-local day boundaries.
+    const range = await dayRangeForOrg(organizationId, from, to);
     const rowsOf = (r: any): any[] => r.rows ?? r;
     const res = await tdb.execute(sql`
       SELECT cl.claim_number, cl.claim_type, cl.status, cl.currency, cl.deceased_name,
@@ -2777,7 +2782,8 @@ export class DatabaseStorage implements IStorage {
       JOIN products prod ON prod.id = pv.product_id
       JOIN clients c ON c.id = cl.client_id
       WHERE cl.organization_id = ${organizationId}
-        AND cl.created_at >= ${new Date(from + "T00:00:00.000Z")} AND cl.created_at <= ${new Date(to + "T23:59:59.999Z")}
+        AND (pv.underwriter_amount_adult IS NOT NULL OR pv.underwriter_amount_child IS NOT NULL)
+        AND cl.created_at >= ${range.start!} AND cl.created_at < ${range.endExclusive!}
       ORDER BY cl.created_at DESC`);
     return rowsOf(res).map((r: any) => ({
       claimNumber: r.claim_number,
