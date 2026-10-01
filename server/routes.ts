@@ -14798,9 +14798,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/finance", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const limit = Math.min(parseInt(String(req.query.limit)) || REPORT_EXPORT_MAX_ROWS, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
-    const rows = await storage.getFinanceReportByOrg(user.organizationId, limit, offset, filters);
+    const rows = await storage.getFinanceReportByOrg(user.organizationId, limit, offset, { ...filters, paidOnly: req.query.paidOnly === "1" });
     return res.json(rows);
   });
 
@@ -15499,26 +15499,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "finance": {
-          const reportRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
+          const reportRows = await storage.getFinanceReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, { ...reportFilters, paidOnly: req.query.paidOnly === "1" });
           headers = [
             "Policy Number", "Status", "Currency", "Premium", ...currencyHeaders("Premium"),
-            "Capture Date", "Inception Date", "Cover Date", "Due Date", "Date Paid", "Receipt Count", "Months Paid", "Grace Days Used", "Grace Days Remaining",
-            "Outstanding Premium", ...currencyHeaders("Outstanding"),
-            "Advance Premium",
+            "Capture Date", "Inception Date", "Paid Up To", "Last Paid", "Receipts", "Months Paid", "Amount Received",
+            "Grace Days Used", "Grace Days Remaining",
+            "Months Owed", "Owed", ...currencyHeaders("Owed"),
+            "Months Paid Ahead", "Paid Ahead",
+            "Paid Through Group", "Last Group Receipt",
             "Client Name", "Product", "Product Code", "Branch", "Group", "Agent",
           ];
-          currencyTotals = { Premium: {}, Outstanding: {} };
-          rows = reportRows.map((r: any) => {
+          currencyTotals = { Premium: {}, Owed: {} };
+          rows = reportRows.map((r) => {
             const c = (r.currency || "USD").toUpperCase();
             const prem = parseFloat(String(r.premiumAmount ?? 0)) || 0;
-            const outstanding = parseFloat(String(r.outstandingPremium ?? 0)) || 0;
+            const owed = parseFloat(String(r.outstandingPremium ?? 0)) || 0;
             currencyTotals!.Premium[c] = (currencyTotals!.Premium[c] || 0) + prem;
-            if (outstanding > 0) currencyTotals!.Outstanding[c] = (currencyTotals!.Outstanding[c] || 0) + outstanding;
+            if (owed > 0) currencyTotals!.Owed[c] = (currencyTotals!.Owed[c] || 0) + owed;
             return [
               r.policyNumber, r.status, r.currency, r.premiumAmount, ...currencyAmounts(r.premiumAmount, r.currency),
-              r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.waitingPeriodEndDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, r.graceDaysUsed, r.graceDaysRemaining ?? "",
-              r.outstandingPremium, ...currencyAmounts(r.outstandingPremium, r.currency),
-              r.advancePremium,
+              r.policyCreatedAt ?? "", r.inceptionDate ?? "", r.dueDate ?? "", r.datePaid ?? "", r.receiptCount, r.monthsPaid, Object.entries(r.receivedByCurrency).map(([cur, v]) => `${cur} ${v}`).join(" + "),
+              r.graceDaysUsed, r.graceDaysRemaining ?? "",
+              r.periodsOwed, r.outstandingPremium, ...currencyAmounts(r.outstandingPremium, r.currency),
+              r.periodsAhead, r.advancePremium,
+              r.paidThroughGroup ? "Yes" : "No", r.lastGroupReceipt ?? "",
               [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), r.productName ?? "", r.productCode ?? "", r.branchName ?? "", r.groupName ?? "", r.agentDisplayName ?? r.agentEmail ?? "",
             ];
           });

@@ -14,6 +14,7 @@ import { normalizeNationalId } from "../shared/validation";
 import { buildLegacyAuditLogRow, resolveExternalRef, getOrCreateLegacyProductVersion, checkRollbackBlockers, AUDIT_ENTITY_TYPE_LABEL } from "./legacy-import";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import type { NewJoiningReportRow } from "./new-joinings";
+import { paymentPosition, periodsPaidByReceipt } from "./payment-position";
 import { reconcileBankAccounts, goesThroughBank, type AccountInput, type AccountReconciliation, type CurrencyFlows } from "./bank-reconciliation";
 import { classifyActivation, type ActivationType, type ActivationReportRow } from "./activations-report";
 import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
@@ -229,6 +230,7 @@ export interface PolicyReportRow {
   branchName: string | null;
   /** Group or company name when policy belongs to a group. */
   groupName: string | null;
+  groupId: string | null;
   agentEmail: string | null;
   agentDisplayName: string | null;
   /** From product version; used for finance report. */
@@ -255,22 +257,32 @@ export interface PolicyReportDependent {
 }
 
 export interface FinanceReportRow extends PolicyReportRow {
-  /** Last payment (receipt) date. */
+  /** Last payment (receipt) date in the period, tenant-local YYYY-MM-DD. */
   datePaid: string | null;
-  /** Current cycle end = next due date. */
+  /** Paid up to (end of the last period paid for); the next premium is due the day after. */
   dueDate: string | null;
-  /** Number of receipts (payments) for this policy. */
+  /** Receipts in the period. */
   receiptCount: number;
-  /** Months paid (same as receipt count when one receipt per period). */
+  /** Premium periods those receipts actually cover (a USD 40 receipt on a USD 10 premium = 4). */
   monthsPaid: number;
+  /** Received in the period in the policy's own currency. */
+  amountReceived: string;
+  /** Received in the period per currency paid in (a USD receipt on a ZAR policy shows here as USD). */
+  receivedByCurrency: Record<string, string>;
   /** Grace period days used (e.g. days into grace). */
   graceDaysUsed: number;
   /** Grace period days remaining until lapse. */
   graceDaysRemaining: number | null;
-  /** Estimated outstanding premium (one period if due date passed). */
+  /** Premiums due and unpaid as of today (periodsOwed × premium). Society members: 0 — the group pays. */
   outstandingPremium: string;
-  /** Advance (overpayment) amount. */
+  periodsOwed: number;
+  /** Whole premium periods paid beyond the current one (periodsAhead × premium). */
   advancePremium: string;
+  periodsAhead: number;
+  /** Society member — paid through the group's lump sum, not receipts of their own. */
+  paidThroughGroup: boolean;
+  /** The group's latest lump-sum receipt date (society members only). */
+  lastGroupReceipt: string | null;
 }
 
 export interface UnderwriterPayableRow {
@@ -467,7 +479,7 @@ export interface IStorage {
    * Requires fromDate and toDate on filters; otherwise returns an empty list.
    */
   getAgentProductivityReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<any[]>;
-  getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]>;
+  getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters & { paidOnly?: boolean }): Promise<FinanceReportRow[]>;
   getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult>;
   getPoliciesByClient(clientId: string, orgId: string): Promise<Policy[]>;
   getPoliciesByAgent(agentId: string, orgId: string): Promise<Policy[]>;
@@ -2037,6 +2049,7 @@ export class DatabaseStorage implements IStorage {
         coverCurrency: products.coverCurrency,
         branchName: branches.name,
         groupName: groups.name,
+        groupId: policies.groupId,
         agentEmail: users.email,
         agentDisplayName: users.displayName,
         gracePeriodDays: productVersions.gracePeriodDays,
@@ -2087,6 +2100,7 @@ export class DatabaseStorage implements IStorage {
       policyCreatedAt: r.policyCreatedAt ? new Date(r.policyCreatedAt).toISOString() : "",
       clientDateOfBirth: r.clientDateOfBirth ? String(r.clientDateOfBirth) : null,
       groupName: r.groupName ?? null,
+      groupId: r.groupId ?? null,
       gracePeriodDays: r.gracePeriodDays != null ? Number(r.gracePeriodDays) : null,
       coverAmount: holderCover[r.policyId] ?? (r.coverAmount ? String(r.coverAmount) : null),
       coverCurrency: r.coverCurrency ?? null,
@@ -3121,51 +3135,94 @@ export class DatabaseStorage implements IStorage {
     return map;
   }
 
-  async getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<FinanceReportRow[]> {
-    const rows = await this.getPolicyReportByOrg(organizationId, limit, offset, filters);
+  /**
+   * Reports → Finance → Finance report: every policy (the date range filters the MONEY, not which
+   * policies are listed — use `paidOnly` for just the ones that paid in it) with its payment
+   * position from server/payment-position.ts.
+   */
+  async getFinanceReportByOrg(organizationId: string, limit: number, offset: number, filters?: ReportFilters & { paidOnly?: boolean }): Promise<FinanceReportRow[]> {
+    const { fromDate, toDate, paidOnly, ...policyFilters } = (filters ?? {}) as ReportFilters & { paidOnly?: boolean };
+    const rows = await this.getPolicyReportByOrg(organizationId, limit, offset, policyFilters as ReportFilters);
     const policyIds = rows.map((r) => r.policyId);
-    const receiptOpts =
-      filters?.fromDate || filters?.toDate
-        ? {
-            ...(filters.fromDate ? { issuedFrom: new Date(filters.fromDate + "T00:00:00.000Z") } : {}),
-            ...(filters.toDate ? { issuedTo: new Date(filters.toDate + "T23:59:59.999Z") } : {}),
-          }
-        : undefined;
-    const aggregates = await this.getReceiptAggregatesByPolicyIds(organizationId, policyIds, receiptOpts);
+    const tdb = await getDbForOrg(organizationId);
+    const tz = await getOrgTimezone(organizationId);
     const today = await todayForOrg(organizationId);
-    return rows.map((r) => {
-      const agg = aggregates.get(r.policyId) ?? { lastPaymentAt: "", receiptCount: 0, totalAmount: "0" };
-      const dueDate = r.currentCycleEnd ?? null;
-      const premiumCents = toCents(r.premiumAmount);
-      const receivedCents = toCents(agg.totalAmount);
-      const monthsPaid = agg.receiptCount;
+    const { start, endExclusive } = await dayRangeForOrg(organizationId, fromDate, toDate);
+
+    // Receipts in the period (valid ones only), with what each one covers.
+    const receipts = policyIds.length
+      ? await tdb.select({
+          policyId: paymentReceipts.policyId, amount: paymentReceipts.amount, currency: paymentReceipts.currency, issuedAt: paymentReceipts.issuedAt,
+          periodFrom: paymentReceipts.periodFrom, periodTo: paymentReceipts.periodTo,
+        })
+        .from(paymentReceipts)
+        .where(and(
+          inArray(paymentReceipts.policyId, policyIds),
+          eq(paymentReceipts.status, "issued"),
+          or(isNull(paymentReceipts.approvalStatus), eq(paymentReceipts.approvalStatus, "approved")),
+          ...(start ? [gte(paymentReceipts.issuedAt, start)] : []),
+          ...(endExclusive ? [lt(paymentReceipts.issuedAt, endExclusive)] : []),
+        ))
+      : [];
+    const premiumOf = new Map(rows.map((r) => [r.policyId, { premium: r.premiumAmount, schedule: r.paymentSchedule }]));
+    const agg = new Map<string, { count: number; months: number; cents: Record<string, number>; last: string }>();
+    for (const r of receipts) {
+      if (!r.policyId) continue;
+      const p = premiumOf.get(r.policyId);
+      const a = agg.get(r.policyId) ?? { count: 0, months: 0, cents: {}, last: "" };
+      a.count++;
+      // Kept in the currency it was paid in (a USD receipt on a ZAR policy stays USD).
+      const cur = (r.currency || "USD").toUpperCase();
+      a.cents[cur] = (a.cents[cur] ?? 0) + toCents(r.amount);
+      a.months += periodsPaidByReceipt({
+        periodFrom: r.periodFrom ? String(r.periodFrom).slice(0, 10) : null,
+        periodTo: r.periodTo ? String(r.periodTo).slice(0, 10) : null,
+        amount: r.amount, premium: p?.premium ?? null, schedule: p?.schedule ?? null,
+      });
+      const d = dateInTimezone(r.issuedAt as Date, tz);
+      if (d > a.last) a.last = d;
+      agg.set(r.policyId, a);
+    }
+
+    const groupIds = Array.from(new Set(rows.map((r) => r.groupId).filter((g): g is string => !!g)));
+    const groupReceipts = await this.getLatestGroupReceipts(organizationId, groupIds);
+    const inPeriod = (d: string | null | undefined) => !!d && (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+
+    const out = rows.map((r) => {
+      const a = agg.get(r.policyId) ?? { count: 0, months: 0, cents: {}, last: "" };
+      const paidThroughGroup = !!r.groupId;
+      const lastGroupReceipt = r.groupId ? groupReceipts.get(r.groupId)?.date ?? null : null;
       let graceDaysUsed = 0;
       let graceDaysRemaining: number | null = null;
       const graceDays = r.gracePeriodDays ?? 0;
       if (r.status === "grace" && r.graceEndDate && graceDays > 0) {
-        const graceEnd = new Date(r.graceEndDate);
-        const now = new Date();
-        graceDaysRemaining = Math.max(0, Math.ceil((graceEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)));
+        graceDaysRemaining = Math.max(0, Math.round((Date.parse(String(r.graceEndDate).slice(0, 10) + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86_400_000));
         graceDaysUsed = Math.max(0, Math.min(graceDays, graceDays - graceDaysRemaining));
       }
-      let outstandingPremium = "0";
-      if (dueDate && dueDate < today && premiumCents > 0) {
-        outstandingPremium = r.premiumAmount;
-      }
-      const expectedCents = monthsPaid * premiumCents;
-      const advancePremium = receivedCents > expectedCents ? fromCents(receivedCents - expectedCents) : "0";
+      // Owed / paid ahead only for policies in force; a society member's premium is the group's.
+      const inForce = r.status === "active" || r.status === "grace";
+      const pos = inForce && !paidThroughGroup
+        ? paymentPosition(r.currentCycleEnd, today, r.premiumAmount, r.paymentSchedule)
+        : { periodsOwed: 0, owed: "0.00", periodsAhead: 0, ahead: "0.00" };
       return {
         ...r,
-        datePaid: agg.lastPaymentAt || null,
-        dueDate,
-        receiptCount: monthsPaid,
-        monthsPaid,
+        datePaid: a.last || null,
+        dueDate: r.currentCycleEnd ?? null,
+        receiptCount: a.count,
+        monthsPaid: a.months,
+        amountReceived: fromCents(a.cents[(r.currency || "USD").toUpperCase()] ?? 0),
+        receivedByCurrency: Object.fromEntries(Object.entries(a.cents).map(([c, v]) => [c, fromCents(v)])),
         graceDaysUsed,
         graceDaysRemaining,
-        outstandingPremium,
-        advancePremium,
+        outstandingPremium: pos.owed,
+        periodsOwed: pos.periodsOwed,
+        advancePremium: pos.ahead,
+        periodsAhead: pos.periodsAhead,
+        paidThroughGroup,
+        lastGroupReceipt,
       } as FinanceReportRow;
     });
+    return paidOnly ? out.filter((r) => r.receiptCount > 0 || (r.paidThroughGroup && inPeriod(r.lastGroupReceipt))) : out;
   }
 
   async getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult> {

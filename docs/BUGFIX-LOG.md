@@ -10,6 +10,46 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Finance report: months paid = receipt count, owed capped at one premium, 316 policies missing
+
+**Symptom (Falakhe, 1 Oct):**
+- Setting Sep listed only the 172 policies *captured* in September.
+- FLK00960 paid USD 40 on a USD 10 premium and showed "months paid 1".
+- Policies months behind showed one premium owed.
+- 86 society members looked unpaid.
+- The UI asked for 500 rows of 816.
+- Receipt #778 (USD 25 on rand policy FLK00577) was added up as ZAR 25.
+
+**Root cause:** `getFinanceReportByOrg` reused the policy report's capture-date filter, used the
+receipt count as months, set `outstandingPremium` to one premium if the due date had passed, and
+derived "advance" from receipt count × premium. It summed receipt amounts into the policy's
+currency, ignored group lump sums, used UTC, and was capped at a 500 limit.
+
+**Fix:**
+- New pure `server/payment-position.ts`:
+  - `periodsPaidByReceipt`: the recorded covered period, otherwise amount ÷ premium.
+  - `paymentPosition`: periods owed since the paid-up-to date, and whole periods paid ahead.
+- `storage.getFinanceReportByOrg` rewritten:
+  - Dates filter only the receipts (local, approved). Every policy is listed, with a `paidOnly`
+    option.
+  - Owed and ahead are only for policies in force and not society members (`paidThroughGroup` +
+    `lastGroupReceipt`).
+  - Money is kept per receipt currency (`receivedByCurrency`).
+  - `groupId` was added to `PolicyReportRow`.
+- Route and UI default to all rows. New columns and a totals line; the export follows. The
+  arrears-breakdown / outstanding-payments exports now get real multi-month owed figures too.
+
+**Verified:**
+- Sep: 816 policies, 267 paid; received USD 3,769 + ZAR 4,565, matching the Income Statement.
+- Owed USD 491 + ZAR 240 on 35 policies; paid ahead USD 840 + ZAR 2,819.
+- New `tests/unit/payment-position.test.ts` (8).
+
+**Lesson for next time:** "count of receipts" is not "months paid", and "due date passed" is not
+"one premium owed". Derive both from the covered periods and the paid-up-to date. And never re-label
+money into the policy's currency: keep it in the currency it was paid in.
+
+---
+
 ## 2026-10-01 — IFRS 17 movement could never add up; receipts without covered months dropped
 
 **Symptom:** for Falakhe the report is all zeros, because no product is classified PAA (all 815

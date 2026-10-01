@@ -29,24 +29,38 @@ const cashupReconciliationColumns: EdtColumn<any>[] = [
 ];
 
 
+const fmtDay = (d?: string | null) => (d ? new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString() : "—");
 const financeReportColumns: EdtColumn<any>[] = [
   { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
   { id: "status", header: "Status", accessor: (r) => r.status, cell: (r) => <StatusBadge status={r.status} variant="policy" /> },
-  { id: "premium", header: "Premium", accessor: (r) => parseFloat(r.premiumAmount || 0), cell: (r) => <span className="whitespace-nowrap tabular-nums">{r.currency} {r.premiumAmount}</span> },
-  { id: "captureDate", header: "Capture date", accessor: (r) => r.policyCreatedAt ? new Date(r.policyCreatedAt) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</span> },
-  { id: "inceptionDate", header: "Inception date", accessor: (r) => r.inceptionDate ? new Date(r.inceptionDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.inceptionDate ? new Date(r.inceptionDate).toLocaleDateString() : "—"}</span> },
-  { id: "coverDate", header: "Cover date", accessor: (r) => r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.waitingPeriodEndDate ? new Date(r.waitingPeriodEndDate).toLocaleDateString() : "—"}</span> },
-  { id: "dueDate", header: "Due date", accessor: (r) => r.dueDate ? new Date(r.dueDate) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.dueDate ? new Date(r.dueDate).toLocaleDateString() : "—"}</span> },
-  { id: "datePaid", header: "Date paid", accessor: (r) => r.datePaid ? new Date(r.datePaid) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.datePaid ? new Date(r.datePaid).toLocaleDateString() : "—"}</span> },
-  { id: "receiptCount", header: "Receipt count", accessor: (r) => r.receiptCount, cell: (r) => <span className="tabular-nums">{r.receiptCount}</span> },
-  { id: "monthsPaid", header: "Months paid", accessor: (r) => r.monthsPaid, cell: (r) => <span className="tabular-nums">{r.monthsPaid}</span> },
-  { id: "graceUsed", header: "Grace used", accessor: (r) => r.graceDaysUsed, cell: (r) => <span className="tabular-nums">{r.graceDaysUsed}</span> },
-  { id: "graceRemaining", header: "Grace remaining", accessor: (r) => r.graceDaysRemaining != null ? r.graceDaysRemaining : "", cell: (r) => <span className="tabular-nums">{r.graceDaysRemaining != null ? r.graceDaysRemaining : "—"}</span> },
-  { id: "outstanding", header: "Outstanding", accessor: (r) => parseFloat(r.outstandingPremium || 0), cell: (r) => <span className="font-medium tabular-nums">{r.currency} {r.outstandingPremium}</span> },
-  { id: "advance", header: "Advance", accessor: (r) => parseFloat(r.advancePremium || 0), cell: (r) => <span className="text-green-700 tabular-nums">{r.currency} {r.advancePremium}</span> },
   { id: "client", header: "Client", accessor: (r) => [r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" "), cell: (r) => <span className="whitespace-nowrap">{[r.clientTitle, r.clientFirstName, r.clientLastName].filter(Boolean).join(" ")}</span> },
+  { id: "premium", header: "Premium", accessor: (r) => parseFloat(r.premiumAmount || 0), cell: (r) => <span className="whitespace-nowrap tabular-nums">{r.currency} {r.premiumAmount}</span> },
+  { id: "paidUpTo", header: "Paid up to", accessor: (r) => r.dueDate || "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.paidThroughGroup ? <span className="text-muted-foreground">Group</span> : fmtDay(r.dueDate)}</span> },
+  {
+    id: "owed", header: "Owed", accessor: (r) => parseFloat(r.outstandingPremium || 0),
+    cell: (r) => Number(r.outstandingPremium) > 0
+      ? <span className="font-medium tabular-nums text-amber-700 whitespace-nowrap">{r.currency} {r.outstandingPremium} <span className="text-xs font-normal">({r.periodsOwed} {r.periodsOwed === 1 ? "month" : "months"})</span></span>
+      : <span className="text-muted-foreground">—</span>,
+  },
+  {
+    id: "ahead", header: "Paid ahead", accessor: (r) => parseFloat(r.advancePremium || 0),
+    cell: (r) => Number(r.advancePremium) > 0
+      ? <span className="tabular-nums text-green-700 whitespace-nowrap">{r.currency} {r.advancePremium} <span className="text-xs">({r.periodsAhead} {r.periodsAhead === 1 ? "month" : "months"})</span></span>
+      : <span className="text-muted-foreground">—</span>,
+  },
+  {
+    id: "received", header: "Received (period)", accessor: (r) => Object.values(r.receivedByCurrency ?? {}).reduce((s: number, v: any) => s + Number(v), 0),
+    cell: (r) => r.paidThroughGroup && !r.receiptCount
+      ? <span className="text-xs text-muted-foreground whitespace-nowrap">Paid through group{r.lastGroupReceipt ? ` · last ${fmtDay(r.lastGroupReceipt)}` : ""}</span>
+      : <span className="tabular-nums whitespace-nowrap">{r.receiptCount ? Object.entries(r.receivedByCurrency ?? {}).map(([c, v]: [string, any]) => `${c} ${v}`).join(" + ") : "—"}</span>,
+  },
+  { id: "receiptCount", header: "Receipts", accessor: (r) => r.receiptCount, cell: (r) => <span className="tabular-nums">{r.receiptCount || "—"}</span> },
+  { id: "monthsPaid", header: "Months paid", accessor: (r) => r.monthsPaid, cell: (r) => <span className="tabular-nums">{r.monthsPaid || "—"}</span> },
+  { id: "datePaid", header: "Last paid", accessor: (r) => r.datePaid || "", cell: (r) => <span className="text-sm whitespace-nowrap">{fmtDay(r.datePaid)}</span> },
+  { id: "graceRemaining", header: "Grace left", accessor: (r) => r.graceDaysRemaining != null ? r.graceDaysRemaining : "", cell: (r) => <span className="tabular-nums">{r.graceDaysRemaining != null ? `${r.graceDaysRemaining} days` : "—"}</span> },
+  { id: "captureDate", header: "Captured", accessor: (r) => r.policyCreatedAt ? new Date(r.policyCreatedAt) : "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.policyCreatedAt ? new Date(r.policyCreatedAt).toLocaleDateString() : "—"}</span> },
+  { id: "inceptionDate", header: "Start date", accessor: (r) => r.inceptionDate || "", cell: (r) => <span className="text-sm whitespace-nowrap">{fmtDay(r.inceptionDate)}</span> },
   { id: "product", header: "Product", accessor: (r) => r.productName || "" },
-  { id: "productCode", header: "Product code", accessor: (r) => r.productCode || "", cell: (r) => <span className="font-mono text-sm">{r.productCode || "—"}</span> },
   { id: "branch", header: "Branch", accessor: (r) => r.branchName || "" },
   { id: "group", header: "Group", accessor: (r) => r.groupName || "" },
   { id: "agent", header: "Agent", accessor: (r) => r.agentDisplayName || r.agentEmail || "Walk-in" },
@@ -177,10 +191,11 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("platformReceivables"),
   });
+  const [finPaidOnly, setFinPaidOnly] = useState(false);
   const { data: financeReport = [], isLoading: loadingFinance } = useQuery<any[]>({
-    queryKey: ["reports", "finance", runKey, ...fk],
+    queryKey: ["reports", "finance", runKey, ...fk, finPaidOnly],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/finance?limit=500" + qAppend, { credentials: "include" });
+      const res = await fetch(getApiBase() + "/api/reports/finance" + (q ? `${q}&` : "?") + (finPaidOnly ? "paidOnly=1" : ""), { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -829,24 +844,44 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="finance">
         <CardSection
           title="Finance report"
-          description="Policies are narrowed by capture date when you set from/to. Receipt count, months paid, and totals use issued receipts in that same window when dates are set; otherwise receipts are lifetime-to-date."
+          description="Every policy's payment position today: paid up to, what's owed (months behind × premium) and what's paid ahead. From/to dates choose which payments count as 'received in the period' — not which policies are listed."
           icon={DollarSign}
-          headerRight={<ExportButton reportType="finance" filters={filters} />}
+          headerRight={<ExportButton reportType="finance" filters={{ ...filters, paidOnly: finPaidOnly }} />}
           flush
         >
           {loadingFinance ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={financeReportColumns}
-              rows={financeReport}
-              getRowKey={(r) => r.policyId}
-              rowTestId={(r) => `row-finance-${r.policyId}`}
-              exportFilename="finance-report"
-              storageKey="reports-finance"
-              emptyMessage="No policies match the filters."
-            />
-          )}
+          ) : (() => {
+            const sumBy = (key: string) => {
+              const m: Record<string, number> = {};
+              for (const r of financeReport) { const v = Number(r[key] || 0); if (v) m[r.currency || "USD"] = (m[r.currency || "USD"] || 0) + v; }
+              return Object.entries(m).map(([c, v]) => `${c} ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") || "—";
+            };
+            const owing = financeReport.filter((r: any) => Number(r.outstandingPremium) > 0).length;
+            return (
+              <>
+                <div className="px-4 py-3 border-b text-sm flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <span><span className="font-semibold tabular-nums">{financeReport.length}</span> policies</span>
+                  <span>Received in period: <span className="font-semibold tabular-nums">{(() => { const m: Record<string, number> = {}; for (const r of financeReport) for (const [c, v] of Object.entries(r.receivedByCurrency ?? {})) m[c] = (m[c] || 0) + Number(v); return Object.entries(m).map(([c, v]) => `${c} ${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") || "—"; })()}</span></span>
+                  <span>Owed: <span className="font-semibold tabular-nums text-amber-700">{sumBy("outstandingPremium")}</span> <span className="text-muted-foreground">({owing} {owing === 1 ? "policy" : "policies"})</span></span>
+                  <span>Paid ahead: <span className="font-semibold tabular-nums text-green-700">{sumBy("advancePremium")}</span></span>
+                  <label className="ml-auto flex items-center gap-2 text-xs cursor-pointer">
+                    <input type="checkbox" checked={finPaidOnly} onChange={(e) => setFinPaidOnly(e.target.checked)} data-testid="checkbox-finance-paid-only" />
+                    Only policies that paid in this period
+                  </label>
+                </div>
+                <EnhancedDataTable
+                  columns={financeReportColumns}
+                  rows={financeReport}
+                  getRowKey={(r) => r.policyId}
+                  rowTestId={(r) => `row-finance-${r.policyId}`}
+                  exportFilename="finance-report"
+                  storageKey="reports-finance-v2"
+                  emptyMessage="No policies match the filters."
+                />
+              </>
+            );
+          })()}
         </CardSection>
       </TabsContent>
 
