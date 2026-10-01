@@ -10,6 +10,48 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Actuarial export: blank balance sheet, grace lives missing, wrong premium history, liabilities as of today
+
+- **Symptom:** Reports → Finance → Actuarial Export had several broken downloads.
+  - "Balance sheet" downloaded an empty file.
+  - "Insured lives" left out the 137 lives on grace policies, which are still covered. It
+    used 4 wide age bands with no gender, and worked out ages as of today rather than the
+    period end.
+  - "Premium & payment history" exported 679 online/system payment records instead of the
+    receipts, so cash premiums and society lump sums were missing.
+  - "Claims history" had no policy, product, age at death or decision date.
+  - The IFRS 17 summary worked out its liabilities as of today rather than the period end,
+    so they didn't match the IFRS 17 tab's closing balance.
+- **Root cause:**
+  - The balance-sheet export read the old `balance_sheet_entries` manual table (0 rows),
+    not `buildBalanceSheet`.
+  - The exposure query filtered `status = 'active'`.
+  - The premium history pointed at the `payments` export (`payment_transactions`), not receipts.
+  - Both the contract-summary route and its export defaulted `asOf` to `todayForOrg`.
+- **Fix:**
+  - New `server/actuarial-export.ts`:
+    - `buildInForceLives`: one row per covered person on an active or grace policy, age at
+      the period end, 5-year bands by gender.
+    - `summarizeLives`, plus the data-gaps counts.
+    - `buildClaimsHistory`: age at death, months in force, reported and decided dates.
+  - Export cases `actuarial-exposure` (member-level), `actuarial-exposure-summary`,
+    `actuarial-balance-sheet` (now `buildBalanceSheet`) and `actuarial-claims`.
+  - Premium history now uses the `receipts` export.
+  - `asOf` defaults to the period end in both the route and the export.
+  - New `/api/reports/actuarial-lives-summary` puts a data-gaps note on the tab.
+- **Verified on Falakhe, 30 Sep:**
+  - 3,693 lives on 572 policies; 1,079 with no date of birth, 1,307 with no gender.
+  - The balance sheet balances (assets = L+E = USD 7,515.71 + ZAR 71,025).
+  - The IFRS 17 summary's LRC USD 2,499.30 + ZAR 5,664.91 equals the movement tab's closing
+    balance.
+  - Tests in `tests/unit/actuarial-export.test.ts`.
+- **Lesson for next time:** when two reports show the same figure (a balance sheet, a
+  liability), the export must call the same builder with the same date. A second data source
+  (a legacy manual table, or "today" instead of the period end) quietly diverges. "In force"
+  means active and grace, not just active.
+
+---
+
 ## 2026-10-01 — POL263 fees report: 200-row cap, "Settled" meant billed, no bills shown; a USD 250 payment existed only as a note
 
 - **Symptom:** Reports → Finance → "POL263 revenue" listed raw platform_receivables, one row per

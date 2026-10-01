@@ -13,6 +13,7 @@ const PDF_CAPABLE = new Set([
   "persistency", "lapse-analysis", "member-movement", "claims-aging", "claims-analytics", "anniversary",
   "trial-balance", "general-ledger", "ifrs17-movement", "bank-reconciliation",
   "active-policies", "awaiting-payments", "overdue", "pre-lapse", "lapsed",
+  "actuarial-exposure-summary", "actuarial-balance-sheet",
 ]);
 
 export type ReportFiltersState = {

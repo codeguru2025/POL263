@@ -62,6 +62,7 @@ import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
 import { buildReceiptsReport } from "./receipts-report";
 import { buildPol263FeesReport } from "./pol263-fees-report";
+import { buildInForceLives, buildClaimsHistory, summarizeLives, ageBand } from "./actuarial-export";
 import { buildExpenditureReport } from "./expenditure-report";
 import { buildCashupCheck } from "./cashup-check";
 import { sendEmail, escapeHtml } from "./email-service";
@@ -15294,12 +15295,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Insurance contract summary (IFRS 17, PAA) — additive alongside the cash-basis statements
   // above. See server/insurance-revenue.ts for why: earned revenue + liability for remaining
   // coverage, computed only for product versions explicitly classified measurementApproach='paa'.
+  // Actuarial export: the in-force data gaps an actuary will ask about, as at the period end.
+  app.get("/api/reports/actuarial-lives-summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    const asOf = filters.toDate || await todayForOrg(user.organizationId);
+    const { lives } = await buildInForceLives(user.organizationId, { asOf, branchId: filters.branchId });
+    return res.json({ asOf, ...summarizeLives(lives).gaps });
+  });
   app.get("/api/reports/insurance-contract-summary", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
-    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : await todayForOrg(user.organizationId);
+    // Liabilities as at the period end, so they agree with the IFRS 17 tab's closing balance.
+    const asOf = typeof req.query.asOf === "string" && req.query.asOf ? req.query.asOf : to;
     const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
     return res.json(await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId }));
   });
@@ -16371,21 +16381,51 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "actuarial-exposure": {
-          const summary = await storage.getActuarialExposureSummary(user.organizationId);
-          headers = ["Product", "Age Band", "Insured Members"];
-          rows = summary.map((r) => [r.productName, r.ageBand, r.memberCount]);
+          // One row per covered person on an active / grace policy, ages at the period end.
+          const asOfL = reportFilters.toDate || await todayForOrg(user.organizationId);
+          const { lives } = await buildInForceLives(user.organizationId, { asOf: asOfL, branchId: reportFilters.branchId });
+          headers = ["Policy No.", "Product", "Policy Status", "Inception Date", "Legacy", "Currency", "Premium", "Frequency", "Member No.", "Role", "Relationship", "Date of Birth", `Age at ${asOfL}`, "Age Band", "Gender"];
+          rows = lives.map((l) => [l.policyNumber, l.product, l.status, l.inceptionDate ?? "", l.isLegacy ? "Yes" : "No", l.currency, l.premium, l.frequency, l.memberNumber, l.role, l.relationship, l.dateOfBirth ?? "", l.age ?? "", ageBand(l.age), l.gender]);
+          break;
+        }
+        case "actuarial-exposure-summary": {
+          const asOfS = reportFilters.toDate || await todayForOrg(user.organizationId);
+          const { lives } = await buildInForceLives(user.organizationId, { asOf: asOfS, branchId: reportFilters.branchId });
+          const { rows: bands, gaps } = summarizeLives(lives);
+          headers = ["Product", `Age Band (at ${asOfS})`, "Male", "Female", "Gender Not Recorded", "Total Lives"];
+          rows = [
+            ...bands.map((b) => [b.product, b.band, b.male, b.female, b.unknown, b.total]),
+            ["All products", "All ages", "", "", "", gaps.lives],
+            [`Data gaps: ${gaps.noDateOfBirth} of ${gaps.lives} lives have no date of birth and ${gaps.noGender} no gender. Cover amounts aren't recorded per member; benefits are set on each product.`, "", "", "", "", ""],
+          ];
           break;
         }
         case "actuarial-balance-sheet": {
-          const entries = await storage.getBalanceSheetEntries(user.organizationId);
-          headers = ["Section", "Subsection", "Label", "Amount", "Currency", ...currencyHeaders("Amount"), "As Of Date"];
-          currencyTotals = { Amount: {} };
-          rows = entries.map((e: any) => {
-            const c = (e.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(e.amount ?? 0)) || 0;
-            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
-            return [e.section, e.subsection || "", e.label, e.amount, e.currency || "USD", ...currencyAmounts(e.amount, e.currency), e.asOfDate || ""];
-          });
+          // The Balance Sheet as at the period end (server/financial-statements.ts buildBalanceSheet).
+          const asOfB = reportFilters.toDate || await todayForOrg(user.organizationId);
+          const bs: any = await buildBalanceSheet(user.organizationId, { asOf: asOfB, branchId: reportFilters.branchId });
+          const curs: string[] = bs.currencies?.length ? bs.currencies : ["USD"];
+          headers = ["Section", "Line", ...curs, "Notes"];
+          const line = (section: string, l: any) => [section, l.label, ...curs.map((c) => (l.amounts?.[c] != null ? Number(l.amounts[c]).toFixed(2) : "")), l.notes ?? ""];
+          const total = (section: string, label: string, m: any) => [section, label, ...curs.map((c) => (m?.[c] != null ? Number(m[c]).toFixed(2) : "")), ""];
+          rows = [
+            ...bs.assets.current.map((l: any) => line("Assets — current", l)),
+            ...bs.assets.nonCurrent.map((l: any) => line("Assets — non-current", l)),
+            total("Assets", "Total assets", bs.assets.total),
+            ...bs.liabilities.current.map((l: any) => line("Liabilities — current", l)),
+            ...bs.liabilities.nonCurrent.map((l: any) => line("Liabilities — non-current", l)),
+            total("Liabilities", "Total liabilities", bs.liabilities.total),
+            ...bs.equity.lines.map((l: any) => line("Equity", l)),
+            total("Equity", "Total equity", bs.equity.total),
+            total("Check", "Liabilities + equity", bs.liabilitiesAndEquity),
+            total("Memo", "Premiums owed by policyholders (not income until received)", bs.premiumsOwed?.amounts),
+          ];
+          break;
+        }
+        case "actuarial-claims": {
+          const ch = await buildClaimsHistory(user.organizationId, reportFilters);
+          headers = ["Claim No.", "Policy No.", "Product", "Claim Type", "Deceased", "Relationship", "Gender", "Date of Birth", "Date of Death", "Age at Death", "Cause of Death", "Policy Inception", "Months In Force at Death", "Reported", "Decided", "Status", "Decision Reason", "Currency", "Cash in Lieu", "Charged to Society Ledger", "Ex Gratia"];
+          rows = ch.map((c) => [c.claimNumber, c.policyNumber, c.product, c.claimType, c.deceasedName, c.relationship, c.gender, c.dateOfBirth ?? "", c.dateOfDeath ?? "", c.ageAtDeath ?? "", c.causeOfDeath, c.inceptionDate ?? "", c.monthsInForce ?? "", c.reported, c.decided ?? "", c.status, c.decisionReason, c.currency, c.cashInLieu, c.ledgerAmount, c.exGratia ? "Yes" : "No"]);
           break;
         }
         case "insurance-contract-summary": {
@@ -16393,7 +16433,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const defRange = { from: `${orgToday.slice(0, 7)}-01`, to: orgToday };
           const from = reportFilters.fromDate || defRange.from;
           const to = reportFilters.toDate || defRange.to;
-          const asOf = orgToday;
+          const asOf = to; // period end — agrees with the IFRS 17 tab's closing balance
           const summary = await buildInsuranceContractSummary(user.organizationId, { from, to, asOf, branchId: reportFilters.branchId });
           headers = ["Metric", "Currency", "Amount", "Period / As Of", "Note"];
           rows = [

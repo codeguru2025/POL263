@@ -14,6 +14,7 @@ export type ReportDatasetId =
   | "commissionPlans"
   | "commissionSummary"
   | "pol263Fees"
+  | "actuarialLives"
   | "activations"
   | "activePolicies"
   | "awaitingPayments"
@@ -182,7 +183,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   expenditures: ["expenditures"],
   cashups: ["cashups"],
   platform: ["pol263Fees"],
-  actuarial: ["insuranceContractSummary"],
+  actuarial: ["insuranceContractSummary", "actuarialLives"],
   "ipec-return": ["ipecReturn"],
   budget: ["budget"],
   "agent-portfolio": ["agentPortfolio"],

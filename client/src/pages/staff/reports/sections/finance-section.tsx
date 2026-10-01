@@ -256,12 +256,21 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
   const { data: insuranceContractSummary, isLoading: loadingInsuranceContractSummary } = useQuery<any>({
     queryKey: ["reports", "insurance-contract-summary", runKey, ...fk],
     queryFn: async () => {
-      const asOf = `asOf=${filters.toDate || new Date().toISOString().slice(0, 10)}`;
-      const res = await fetch(getApiBase() + "/api/reports/insurance-contract-summary" + (q ? `${q}&${asOf}` : `?${asOf}`), { credentials: "include" });
+      // Liabilities as at the period end (the server defaults asOf to toDate).
+      const res = await fetch(getApiBase() + "/api/reports/insurance-contract-summary" + q, { credentials: "include" });
       if (!res.ok) return null;
       return res.json();
     },
     enabled: need("insuranceContractSummary"),
+  });
+  const { data: actuarialLives } = useQuery<{ asOf: string; lives: number; policies: number; noDateOfBirth: number; noGender: number }>({
+    queryKey: ["reports", "actuarial-lives", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/actuarial-lives-summary" + q, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load the in-force summary");
+      return res.json();
+    },
+    enabled: need("actuarialLives"),
   });
   const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; noRatesConfigured?: boolean; policyCount: number; byCurrency?: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
@@ -1124,7 +1133,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         <CardSection
           title="Actuarial data export"
           icon={FileText}
-          description="Clean exports for an external actuary's SFCR/ORSA prep — insured-lives exposure by product and age band, balance sheet, plus premium/payment and claims history."
+          description="The data files an outside actuary asks for, all as at the end of the selected period: who is covered, the balance sheet, premiums received and claims."
         >
           <div className="p-4 space-y-3">
             <div className="border rounded-lg p-3 space-y-3">
@@ -1180,33 +1189,51 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                 </>
               )}
             </div>
-            <div className="flex items-center justify-between border rounded-lg p-3">
+            {actuarialLives && (
+              <p className="text-xs rounded border px-3 py-2 bg-muted/40" data-testid="text-actuarial-gaps">
+                {actuarialLives.lives.toLocaleString()} lives covered on {actuarialLives.policies.toLocaleString()} active and grace policies at {fmtDay(actuarialLives.asOf)}.{" "}
+                {(actuarialLives.noDateOfBirth > 0 || actuarialLives.noGender > 0) && (
+                  <span className="text-amber-700">
+                    {actuarialLives.noDateOfBirth.toLocaleString()} have no date of birth and {actuarialLives.noGender.toLocaleString()} no gender — an actuary can't age-rate these lives. Fix them under Book Health → Data integrity.{" "}
+                  </span>
+                )}
+                Cover amounts aren't recorded per member; the actuary reads benefits from each product.
+              </p>
+            )}
+            <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
               <div>
-                <p className="font-medium text-sm">Insured-lives exposure</p>
-                <p className="text-xs text-muted-foreground">Active member counts by product and age band (0-17 / 18-65 / 66-84 / 85+).</p>
+                <p className="font-medium text-sm">In-force lives</p>
+                <p className="text-xs text-muted-foreground">One row per covered person on an active or grace policy: policy, product, inception, premium and frequency, holder or dependant, relationship, date of birth, age at the period end, gender.</p>
               </div>
               <ExportButton reportType="actuarial-exposure" filters={filters} />
             </div>
-            <div className="flex items-center justify-between border rounded-lg p-3">
+            <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
+              <div>
+                <p className="font-medium text-sm">In-force lives by age and gender</p>
+                <p className="text-xs text-muted-foreground">Lives per product in 5-year age bands, split male / female / not recorded, as at the period end.</p>
+              </div>
+              <ExportButton reportType="actuarial-exposure-summary" filters={filters} />
+            </div>
+            <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
               <div>
                 <p className="font-medium text-sm">Balance sheet</p>
-                <p className="text-xs text-muted-foreground">All recorded balance sheet entries — assets, liabilities, equity.</p>
+                <p className="text-xs text-muted-foreground">The Balance Sheet as at the period end — the same figures as Finance → Balance Sheet.</p>
               </div>
               <ExportButton reportType="actuarial-balance-sheet" filters={filters} />
             </div>
-            <div className="flex items-center justify-between border rounded-lg p-3">
+            <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
               <div>
-                <p className="font-medium text-sm">Premium &amp; payment history</p>
-                <p className="text-xs text-muted-foreground">Every recorded payment — reference, amount, currency, method, date.</p>
+                <p className="font-medium text-sm">Premium history</p>
+                <p className="text-xs text-muted-foreground">Every receipt in the period — premiums, funeral services and society lump sums — the same money as the Receipts report.</p>
               </div>
-              <ExportButton reportType="payments" filters={filters} />
+              <ExportButton reportType="receipts" filters={filters} />
             </div>
-            <div className="flex items-center justify-between border rounded-lg p-3">
+            <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
               <div>
                 <p className="font-medium text-sm">Claims history</p>
-                <p className="text-xs text-muted-foreground">Every claim — type, status, approved amount, currency, date.</p>
+                <p className="text-xs text-muted-foreground">Every claim reported in the period: policy, product, deceased's relationship, gender, date of birth, date of death and age at death, months the policy had been in force, dates reported and decided, outcome and amount.</p>
               </div>
-              <ExportButton reportType="claims" filters={filters} />
+              <ExportButton reportType="actuarial-claims" filters={filters} />
             </div>
           </div>
         </CardSection>

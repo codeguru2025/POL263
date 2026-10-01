@@ -31,6 +31,7 @@ export const REPORT_EXPORT_PERMISSIONS: Record<string, string> = {
   "receipt-amendments": "read:finance", "arrears-breakdown": "read:finance",
   "outstanding-payments": "read:finance",
   "actuarial-exposure": "read:finance", "actuarial-balance-sheet": "read:finance",
+  "actuarial-exposure-summary": "read:finance", "actuarial-claims": "read:finance",
   "insurance-contract-summary": "read:finance", "collection-efficiency": "read:finance",
   "trial-balance": "read:finance", "general-ledger": "read:finance",
   "premium-bordereau": "read:finance", "claims-bordereau": "read:finance",
