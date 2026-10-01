@@ -61,6 +61,7 @@ import { buildLapsedList } from "./lapsed-report";
 import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
 import { buildReceiptsReport } from "./receipts-report";
+import { buildPol263FeesReport } from "./pol263-fees-report";
 import { buildExpenditureReport } from "./expenditure-report";
 import { buildCashupCheck } from "./cashup-check";
 import { sendEmail, escapeHtml } from "./email-service";
@@ -14944,6 +14945,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await buildCashupCheck(user.organizationId, { fromDate: filters.fromDate, toDate: filters.toDate, branchId: filters.branchId, userId: staffId }));
   });
 
+  app.get("/api/reports/pol263-fees", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const filters = parseReportFilters(req.query);
+    return res.json(await buildPol263FeesReport(user.organizationId, {
+      fromDate: filters.fromDate || "2000-01-01",
+      toDate: filters.toDate || await todayForOrg(user.organizationId),
+    }));
+  });
   app.get("/api/reports/expenditure", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = parseReportFilters(req.query);
@@ -15711,15 +15720,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "platform": {
-          const receivables = await storage.getPlatformReceivables(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Description", "Amount", "Currency", ...currencyHeaders("Amount"), "Settled", "Created"];
-          currencyTotals = { Amount: {} };
-          rows = receivables.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.amount ?? 0)) || 0;
-            currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + amt;
-            return [r.description, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.isSettled ? "Yes" : "No", r.createdAt];
+          // POL263 fees: bills issued in the period, then fees not yet on a bill (server/pol263-fees-report.ts).
+          const pf = await buildPol263FeesReport(user.organizationId, {
+            fromDate: reportFilters.fromDate || "2000-01-01",
+            toDate: reportFilters.toDate || await todayForOrg(user.organizationId),
           });
+          const stateLabel = { open: "Not paid yet", overdue: "Overdue", paid: "Paid" } as const;
+          headers = ["Line", "Date", "Reference / Charged on", "Policy", "Due", "Status", "Currency", "Amount", ...currencyHeaders("Amount")];
+          currencyTotals = { Amount: {} };
+          rows = [
+            ...pf.bills.map((x) => {
+              currencyTotals!.Amount[x.currency] = (currencyTotals!.Amount[x.currency] || 0) + Number(x.amount);
+              return ["POL263 bill (" + x.kind + ")", x.issued, x.reference, "", x.due, stateLabel[x.state], x.currency, x.amount, ...currencyAmounts(x.amount, x.currency)];
+            }),
+            ...pf.fees.map((x) => {
+              currencyTotals!.Amount[x.currency] = (currencyTotals!.Amount[x.currency] || 0) + Number(x.fee);
+              return ["2.5% fee, not yet billed", x.date, x.source, x.policyNumber ?? "", "", "Waiting for next bill", x.currency, x.fee, ...currencyAmounts(x.fee, x.currency)];
+            }),
+          ];
           break;
         }
         case "reinstatements":

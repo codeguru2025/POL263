@@ -15,6 +15,7 @@ import { ledgerColumns } from "@/components/ledger-columns";
 import { ReceiptsPanel } from "./receipts-panel";
 import { ExpenditurePanel } from "./expenditure-panel";
 import { CashupsPanel } from "./cashups-panel";
+import { Pol263FeesPanel } from "./pol263-fees-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 interface FinanceSectionProps extends ReportSectionBaseProps {
@@ -87,17 +88,6 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
 // Curated default columns for the on-screen receipts table. The CSV export carries the fuller
 // Easipol-format column set; the screen view is for scanning, not spreadsheet work.
 
-
-
-
-const platformColumns: EdtColumn<any>[] = [
-  { id: "description", header: "Description", accessor: (cr) => cr.description },
-  { id: "amount", header: "Amount", accessor: (cr) => parseFloat(cr.amount || 0), cell: (cr) => <span className="font-semibold">{cr.currency || "USD"} {cr.amount}</span> },
-  { id: "currency", header: "Currency", accessor: (cr) => cr.currency },
-  { id: "settled", header: "Settled", accessor: (cr) => (cr.isSettled ? "Settled" : "Pending"), cell: (cr) => <Badge variant={cr.isSettled ? "default" : "secondary"}>{cr.isSettled ? "Settled" : "Pending"}</Badge> },
-  { id: "created", header: "Created", accessor: (cr) => new Date(cr.createdAt), cell: (cr) => <span className="text-sm text-muted-foreground">{new Date(cr.createdAt).toLocaleDateString()}</span> },
-];
-
 /** Raised-but-unpaid requisitions are spending that has probably happened but isn't in the
  *  statement yet — say so, with a way to clear them. */
 function UnpaidRequisitionsWarning({ info }: { info?: { count: number; amounts: Record<string, number> } }) {
@@ -123,15 +113,6 @@ function BranchExclusionNote({ items }: { items?: string[] }) {
 }
 
 export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, users }: FinanceSectionProps) {
-  const { data: platformReceivables = [], isLoading: loadingPlatform } = useQuery<any[]>({
-    queryKey: ["reports", "platform", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/platform/receivables?limit=200" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("platformReceivables"),
-  });
   const [finPaidOnly, setFinPaidOnly] = useState(false);
   const { data: financeReport = [], isLoading: loadingFinance } = useQuery<any[]>({
     queryKey: ["reports", "finance", runKey, ...fk, finPaidOnly],
@@ -886,21 +867,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       </TabsContent>
 
       <TabsContent value="platform">
-        <CardSection title="POL263 Platform Revenue Share" icon={Building} headerRight={<ExportButton reportType="platform" filters={filters} />} flush>
-          {loadingPlatform ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={platformColumns}
-              rows={platformReceivables}
-              getRowKey={(cr) => cr.id}
-              rowTestId={(cr) => `row-platform-receivable-${cr.id}`}
-              exportFilename="platform-revenue-share"
-              storageKey="reports-platform"
-              emptyMessage="No POL263 Platform receivables recorded."
-            />
-          )}
-        </CardSection>
+        <Pol263FeesPanel filters={filters} runKey={runKey} fk={fk} enabled={need("pol263Fees")} />
       </TabsContent>
 
       <TabsContent value="budget">

@@ -13,7 +13,7 @@ export type ReportDatasetId =
   | "payrollEmployees"
   | "commissionPlans"
   | "commissionSummary"
-  | "platformReceivables"
+  | "pol263Fees"
   | "activations"
   | "activePolicies"
   | "awaitingPayments"
@@ -90,7 +90,7 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
     { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
     { value: "cashups", label: "Cashups", testId: "tab-cashups-report" },
-    { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
+    { value: "platform", label: "POL263 fees", testId: "tab-platform-report" },
     { value: "actuarial", label: "Actuarial Export", testId: "tab-actuarial-export" },
     { value: "ipec-return", label: "IPEC Return", testId: "tab-ipec-return" },
     { value: "budget", label: "Budget", testId: "tab-budget" },
@@ -181,7 +181,7 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   receipts: ["receiptReport"],
   expenditures: ["expenditures"],
   cashups: ["cashups"],
-  platform: ["platformReceivables"],
+  platform: ["pol263Fees"],
   actuarial: ["insuranceContractSummary"],
   "ipec-return": ["ipecReturn"],
   budget: ["budget"],

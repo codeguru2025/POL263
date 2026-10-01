@@ -10,6 +10,36 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — POL263 fees report: 200-row cap, "Settled" meant billed, no bills shown; a USD 250 payment existed only as a note
+
+- **Symptom:** Reports → Finance → "POL263 revenue" listed raw platform_receivables, one row per
+  2.5% fee, capped at 200 of 1,014 rows. "Settled / Pending" really meant "on a bill / not yet billed",
+  not paid or unpaid. Descriptions showed internal payment UUIDs. The tenant's actual bills (the
+  overdue USD 367.60) were nowhere on it. Separately, Falakhe's USD 250 payment of 31 Aug was never
+  recorded as a payment: the USD 617.60 bill was cut to 367.60, and the 250 lived only in notes and
+  a "Less: payment received" line item. So the books showed August POL263 cost 367.60, not 617.60,
+  and the Cash Flow missed the 250 paid.
+- **Root cause:** the tab was built from POL263's own side (its receivables ledger) instead of the
+  tenant's (bills and what is owed). tenant_invoices has no part-payment concept, so a part payment
+  was "recorded" by editing the bill amount, which hides the payment from anything that reads paid bills.
+- **Fix:** new `server/pol263-fees-report.ts` (`buildPol263FeesReport`), `/api/reports/pol263-fees`, export
+  case "platform", `client/.../sections/pol263-fees-panel.tsx`. It shows bills issued in the period
+  (void hidden, open / overdue / paid), fees not yet on a bill (receipt no. + policy, society receipt +
+  group), owed now, overdue now, and fees building up. Period cost = bills + unbilled fees, the
+  Income Statement POL263 line; bills paid = the Cash Flow line. Nav label is "POL263 fees". Data:
+  `script/.tmp/split-pol263-bill.ts` adds a paid USD 250 bill (paid 31 Aug, settledAt set so the
+  settlement sweep ignores it) next to the untouched open 367.60 bill. Augustus runs it with --apply.
+- **Verified:** Aug / Sep / all-time cost equals the Income Statement POL263 lines to the cent
+  (Aug USD 542.88 before the split; Sep USD 349.24 + ZAR 197.50). All 325 September fees resolve to a
+  receipt, service receipt or society receipt, with no internal ids. Tests in
+  `tests/unit/pol263-fees-report.test.ts`.
+- **Lesson for next time:** when a payment exists only as a reduced invoice amount or a note,
+  every cash-out figure is wrong. Record a part payment as its own paid record, never by editing
+  the bill. And build tenant-facing reports from the tenant's side (bills, owed, paid), not from
+  the platform's internal ledger.
+
+---
+
 ## 2026-10-01 — Cash-ups: totals mixed currencies; report blank when nobody cashes up
 
 **Symptom:**
