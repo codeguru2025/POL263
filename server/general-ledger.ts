@@ -247,9 +247,10 @@ export async function buildLedgerPosition(orgId: string, params: { asOf: string;
   const classifyLiab = (label: string): string => {
     const l = label.toLowerCase();
     if (l.includes("claim") || l.includes("policyholder")) return "2100";
+    if (l.includes("salar") || l.includes("payroll")) return "2400";
     if (l.includes("reinsur") || l.includes("underwriter")) return "2200";
     if (l.includes("commission")) return "2300";
-    if (l.includes("platform")) return "2900";
+    if (l.includes("platform") || l.includes("pol263")) return "2900";
     return "2400";
   };
   const classifyEquity = (label: string): string => {

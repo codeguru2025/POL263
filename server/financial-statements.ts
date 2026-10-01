@@ -928,13 +928,21 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
 
 // ─── Balance Sheet ─────────────────────────────────────────────────────────
 //
-// Structure:
-//   Assets     = Current (cash, bank, receivables) + Non-current (manual: fixed assets, investments)
-//   Liabilities = Current (claims payable, platform fees, manual) + Non-current (loans, manual)
-//   Equity      = Retained earnings (derived) + Capital contributions (manual)
+// Built on the same books as the income statement, cash-flow statement and trial balance, from
+// the first day of trading to `asOf`:
+//   Cash and bank      = everything received − everything paid out (cumulative cash-flow net)
+//   What's owed        = costs recognised but not yet paid: commission to agents (earned − paid),
+//                        POL263 fees (charged − bills paid), payroll (approved − paid), claims
+//                        (decided − paid)
+//   Retained earnings  = cumulative income-statement surplus
+// Those three balance by construction (same rules as assembleTrialBalance). Manual entries
+// (vehicles, buildings, loans, capital) sit on top; if they don't balance among themselves the gap
+// is shown as one labelled line, "Opening balances not yet recorded", never hidden.
 //
-// Accounting equation check: Assets = Liabilities + Equity
-// (any gap is shown as "retained earnings adjustment")
+// Premiums clients owe are NOT an asset here: these books record income when it is received, so
+// unpaid premiums were never income — they're shown as a memo under the statement.
+// Cash-ups and bank-statement balances are what's physically there; they're compared with the
+// book cash as a check, not added to it.
 
 export interface BalanceSheetParams {
   asOf: string;    // YYYY-MM-DD — point-in-time date
@@ -949,110 +957,73 @@ export interface BsLine {
   notes?: string;
 }
 
+/** First day for "since the start" totals — before any tenant's first transaction. */
+const BOOKS_START = "2000-01-01";
+
 export async function buildBalanceSheet(orgId: string, params: BalanceSheetParams) {
   const { asOf, branchId } = params;
   const tdb = await getDbForOrg(orgId);
   const fx = await fxMapFor(orgId);
 
-  // ── ASSETS ──────────────────────────────────────────────────
+  const [is, cf] = await Promise.all([
+    buildIncomeStatement(orgId, { from: BOOKS_START, to: asOf, branchId }),
+    buildCashFlowStatement(orgId, { from: BOOKS_START, to: asOf, branchId }),
+  ]);
 
-  // 1. Cash on hand (unbanked cash held by admins) — scoped to asOf, not "now",
-  // so a historical balance sheet doesn't mix a live cash position with a past date.
-  const positions = await storage.getAdminCashPosition(orgId, asOf);
-  const cashOnHand: AmountMap = {};
-  for (const p of positions) {
-    if (p.onHand > 0) add(cashOnHand, p.currency, p.onHand);
-  }
+  // ── Cash and bank, per the books ──
+  const bookCash: AmountMap = {};
+  for (const [c, v] of Object.entries(cf.netCash)) if (Math.abs(v) > 0.005) bookCash[c] = v;
 
-  // 2. Bank balances — latest statement balance per account on or before asOf
-  const allAccounts = await storage.getBankAccounts(orgId);
-  const bankLines: BsLine[] = [];
-  for (const acct of allAccounts.filter(a => a.isActive)) {
-    const balances = await storage.getBankStatementBalances(orgId, acct.id);
-    const latest = balances.find(b => b.statementDate <= asOf);
-    if (latest) {
-      bankLines.push({
-        label: `Bank — ${acct.accountName}`,
-        amounts: { [acct.currency]: parseFloat(String(latest.closingBalance)) },
-        source: "derived",
-      });
-    }
-  }
+  // ── What's owed: recognised cost less what has been paid against it ──
+  const bySource = (source: string): AmountMap => {
+    const out: AmountMap = {};
+    for (const l of is.expenses.lines) if (l.source === source) for (const [c, v] of Object.entries(l.amounts)) add(out, c, v);
+    return out;
+  };
+  const owed = (recognised: AmountMap, paid: AmountMap | undefined): AmountMap => {
+    const out: AmountMap = {};
+    for (const [c, v] of Object.entries(recognised)) add(out, c, v);
+    for (const [c, v] of Object.entries(paid ?? {})) add(out, c, -v);
+    return Object.fromEntries(Object.entries(round2(out)).filter(([, v]) => Math.abs(v) > 0.005));
+  };
+  const commissionPayable = owed(bySource("commission"), cf.outflows.commissions);
+  const platformPayable = owed(bySource("platform_fee"), cf.outflows.pol263Bills);
+  const payrollPayable = owed(bySource("payroll"), cf.outflows.payroll);
+  const claimsPayable = owed(bySource("claims"), cf.outflows.claims);
 
-  // 3. Premium receivables — premiums owed by grace-period policyholders (one missed cycle)
-  //    and active policies where the current cycle has ended (admin hasn't run month-end yet).
-  //    Conservative estimate: 1 × premium_amount per overdue policy.
-  const receivableRows = await tdb.execute(sql`
-    SELECT currency,
-           COALESCE(SUM(premium_amount::numeric), 0) AS total
-    FROM policies
-    WHERE organization_id = ${orgId}
-      AND status IN ('grace')
-      AND premium_amount IS NOT NULL
-      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-    GROUP BY currency
-  `);
-  // Also include active policies whose cycle ended before today (haven't been moved to grace yet)
-  const activeOverdueRows = await tdb.execute(sql`
-    SELECT currency,
-           COALESCE(SUM(premium_amount::numeric), 0) AS total
-    FROM policies
-    WHERE organization_id = ${orgId}
-      AND status = 'active'
-      AND current_cycle_end IS NOT NULL
-      AND current_cycle_end < ${asOf}
-      AND premium_amount IS NOT NULL
-      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
-    GROUP BY currency
-  `);
-  const premiumReceivable: AmountMap = {};
-  for (const r of [...(receivableRows.rows ?? receivableRows) as any[], ...(activeOverdueRows.rows ?? activeOverdueRows) as any[]]) {
-    const amt = parseFloat(r.total ?? 0);
-    if (amt > 0.005) add(premiumReceivable, r.currency, amt);
-  }
-
-  // ── LIABILITIES ─────────────────────────────────────────────
-
-  // 4. Outstanding claims payable (approved, not yet paid)
-  const claimRows = await tdb
-    .select({ currency: claims.currency, total: sql<string>`COALESCE(SUM(${claims.cashInLieuAmount}), '0')` })
-    .from(claims)
-    .where(and(
-      eq(claims.organizationId, orgId),
-      eq(claims.status, "approved"),
-      sql`${claims.cashInLieuAmount} IS NOT NULL`,
-      // Ledger-group claims are settled from the group's own ledger on approval — not a
-      // payable out of the company's cash.
-      sql`${claims.groupId} IS NULL`,
-    ))
-    .groupBy(claims.currency);
-  const claimsPayable: AmountMap = {};
-  for (const r of claimRows) {
-    const amt = parseFloat(r.total);
-    if (amt > 0.005) add(claimsPayable, r.currency, amt);
-  }
-
-  // 5. Platform fees payable (unsettled receivables owed to POL263)
-  const pfRows = await tdb
-    .select({ currency: platformReceivables.currency, total: sql<string>`COALESCE(SUM(${platformReceivables.amount}), '0')` })
-    .from(platformReceivables)
-    .where(and(eq(platformReceivables.organizationId, orgId), eq(platformReceivables.isSettled, false)))
-    .groupBy(platformReceivables.currency);
-  const platformPayable: AmountMap = {};
-  for (const r of pfRows) {
-    const amt = parseFloat(r.total);
-    if (amt > 0.005) add(platformPayable, r.currency, amt);
-  }
-
-  // ── EQUITY — Retained Earnings (derived from cumulative P&L) ──
-  // Run income statement from inception to asOf.
-  const is = await buildIncomeStatement(orgId, { from: "2000-01-01", to: asOf, branchId });
+  // ── Retained earnings: cumulative surplus ──
   const retainedEarnings: AmountMap = {};
-  for (const [c, v] of Object.entries(is.net)) {
-    if (Math.abs(v) > 0.005) retainedEarnings[c] = v;
+  for (const [c, v] of Object.entries(is.net)) if (Math.abs(v) > 0.005) retainedEarnings[c] = v;
+
+  // ── Memo: premiums clients owe (grace, or active with the cycle already ended) ──
+  const owedRows = rowsOf<{ currency: string; total: string; n: string }>(await tdb.execute(sql`
+    SELECT currency, COALESCE(SUM(premium_amount), 0)::text AS total, COUNT(*)::text AS n
+    FROM policies
+    WHERE organization_id = ${orgId} AND deleted_at IS NULL AND premium_amount IS NOT NULL
+      AND (status = 'grace' OR (status = 'active' AND current_cycle_end IS NOT NULL AND current_cycle_end < ${asOf}))
+      ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
+    GROUP BY currency`));
+  const premiumsOwed: AmountMap = {};
+  let premiumsOwedPolicies = 0;
+  for (const r of owedRows) { premiumsOwedPolicies += Number(r.n); add(premiumsOwed, r.currency, parseFloat(r.total)); }
+
+  // ── Check: book cash vs what's physically counted / in the bank ──
+  const counted: AmountMap = {};
+  const positions = await storage.getAdminCashPosition(orgId, asOf);
+  for (const p of positions) if (p.onHand > 0) add(counted, p.currency, p.onHand);
+  let bankStatements = 0;
+  for (const acct of (await storage.getBankAccounts(orgId)).filter((a) => a.isActive)) {
+    const latest = (await storage.getBankStatementBalances(orgId, acct.id)).find((b) => b.statementDate <= asOf);
+    if (latest) { bankStatements++; add(counted, acct.currency, parseFloat(String(latest.closingBalance))); }
+  }
+  const hasCount = positions.some((p) => p.onHand > 0) || bankStatements > 0;
+  const cashCheckDifference: AmountMap = {};
+  if (hasCount) {
+    for (const [c, v] of Object.entries(bookCash)) add(cashCheckDifference, c, v);
+    for (const [c, v] of Object.entries(counted)) add(cashCheckDifference, c, -v);
   }
 
-  // ── MANUAL ENTRIES ───────────────────────────────────────────
+  // ── Manual entries ──
   const manualEntries = await storage.getBalanceSheetEntries(orgId, { asOfDate: asOf });
   const toLine = (e: any): BsLine => ({
     id: e.id,
@@ -1061,42 +1032,47 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
     source: "manual",
     notes: e.notes,
   });
-
   const manualAssetCurrent    = manualEntries.filter(e => e.section === "asset"     && e.subsection === "current").map(toLine);
   const manualAssetNonCurrent = manualEntries.filter(e => e.section === "asset"     && e.subsection === "non_current").map(toLine);
   const manualLiabCurrent     = manualEntries.filter(e => e.section === "liability" && e.subsection === "current").map(toLine);
   const manualLiabNonCurrent  = manualEntries.filter(e => e.section === "liability" && e.subsection === "non_current").map(toLine);
   const manualEquity          = manualEntries.filter(e => e.section === "equity").map(toLine);
 
-  // ── TOTALS ───────────────────────────────────────────────────
   const sumLines = (lines: BsLine[]): AmountMap => {
     const t: AmountMap = {};
     for (const l of lines) for (const [c, v] of Object.entries(l.amounts)) add(t, c, v);
     return t;
   };
+  const derived = (label: string, amounts: AmountMap): BsLine[] => (Object.keys(amounts).length ? [{ label, amounts: round2(amounts), source: "derived" }] : []);
 
-  const assetCurrentDerived: BsLine[] = [
-    ...(Object.keys(cashOnHand).length ? [{ label: "Cash on hand (unbanked)", amounts: cashOnHand, source: "derived" as const }] : []),
-    ...bankLines,
-    ...(Object.keys(premiumReceivable).length ? [{ label: "Premium receivables", amounts: premiumReceivable, source: "derived" as const }] : []),
+  // Manual entries must balance among themselves (an asset bought with capital or a loan); the
+  // remainder is shown as an explicit equity line rather than leaving the statement unbalanced.
+  const openingGap: AmountMap = {};
+  for (const [c, v] of Object.entries(sumLines([...manualAssetCurrent, ...manualAssetNonCurrent]))) add(openingGap, c, v);
+  for (const [c, v] of Object.entries(sumLines([...manualLiabCurrent, ...manualLiabNonCurrent, ...manualEquity]))) add(openingGap, c, -v);
+  const openingGapClean = Object.fromEntries(Object.entries(round2(openingGap)).filter(([, v]) => Math.abs(v) > 0.005));
+
+  const assetCurrentLines: BsLine[] = [
+    ...derived("Cash and bank (per the books)", bookCash),
     ...manualAssetCurrent,
   ];
   const assetNonCurrentLines = manualAssetNonCurrent;
-
   const liabCurrentLines: BsLine[] = [
-    ...(Object.keys(claimsPayable).length ? [{ label: "Claims payable (approved)", amounts: claimsPayable, source: "derived" as const }] : []),
-    ...(Object.keys(platformPayable).length ? [{ label: "Platform fees payable", amounts: platformPayable, source: "derived" as const }] : []),
+    ...derived("Commission owed to agents", commissionPayable),
+    ...derived("POL263 fees owed", platformPayable),
+    ...derived("Salaries owed (approved payroll not yet paid)", payrollPayable),
+    ...derived("Claims approved, not yet paid", claimsPayable),
     ...manualLiabCurrent,
   ];
   const liabNonCurrentLines = manualLiabNonCurrent;
-
   const equityLines: BsLine[] = [
-    ...(Object.keys(retainedEarnings).length ? [{ label: "Retained earnings", amounts: retainedEarnings, source: "derived" as const }] : []),
+    ...derived("Retained earnings", retainedEarnings),
     ...manualEquity,
+    ...derived("Opening balances not yet recorded", openingGapClean),
   ];
 
   const totalAssets: AmountMap = {};
-  for (const m of [sumLines(assetCurrentDerived), sumLines(assetNonCurrentLines)]) for (const [c, v] of Object.entries(m)) add(totalAssets, c, v);
+  for (const m of [sumLines(assetCurrentLines), sumLines(assetNonCurrentLines)]) for (const [c, v] of Object.entries(m)) add(totalAssets, c, v);
   const totalLiabilities: AmountMap = {};
   for (const m of [sumLines(liabCurrentLines), sumLines(liabNonCurrentLines)]) for (const [c, v] of Object.entries(m)) add(totalLiabilities, c, v);
   const totalEquity: AmountMap = sumLines(equityLines);
@@ -1108,6 +1084,8 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
     ...Object.keys(totalLiabilities),
     ...Object.keys(totalEquity),
   ].filter((c, i, a) => a.indexOf(c) === i).sort();
+  const balanced: Record<string, boolean> = {};
+  for (const c of allCurrencies) balanced[c] = Math.abs((totalAssets[c] ?? 0) - (liabPlusEquity[c] ?? 0)) < 0.01;
 
   const cAssets = consolidate(totalAssets, fx);
   const cLiab = consolidate(totalLiabilities, fx);
@@ -1116,7 +1094,7 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
   return {
     asOf, branchId: branchId ?? null, currencies: allCurrencies, fxRates: fx,
     assets: {
-      current:    assetCurrentDerived,
+      current:    assetCurrentLines,
       nonCurrent: assetNonCurrentLines,
       total: round2(totalAssets),
     },
@@ -1130,6 +1108,12 @@ export async function buildBalanceSheet(orgId: string, params: BalanceSheetParam
       total: round2(totalEquity),
     },
     liabilitiesAndEquity: round2(liabPlusEquity),
+    balanced,
+    /** Under the statement: unpaid premiums aren't income until received, so not an asset here. */
+    premiumsOwed: { amounts: round2(premiumsOwed), policies: premiumsOwedPolicies, asOfToday: asOf < (await todayForOrg(orgId)) },
+    /** Book cash compared with cash-ups and bank statements (what's actually there). */
+    cashCheck: { hasCount, counted: round2(counted), bankStatements, difference: round2(cashCheckDifference) },
+    excludedForBranch: is.excludedForBranch,
     consolidatedUsd: {
       totalAssets: cAssets.usd,
       totalLiabilities: cLiab.usd,

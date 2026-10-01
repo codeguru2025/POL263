@@ -10,6 +10,45 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Balance Sheet never balanced (no cash; receivables with nothing behind them)
+
+**Symptom:** as of 30 Sep 2026, Falakhe's Balance Sheet showed assets USD 536 against liabilities +
+equity USD 6,779.34 (ZAR 240 vs 67,734.37). The Trial Balance tab's "Statement of financial
+position", which is built from it, was unbalanced the same way.
+
+**Root cause:**
+- Cash came only from cash-ups and bank-statement balances, and Falakhe has never recorded either.
+  So the cash behind the retained earnings (USD 7,765.71 + ZAR 71,025 net since March) wasn't on
+  the sheet at all.
+- Premiums in arrears were added as an asset, though cash-basis books never recorded them as
+  income, so they had nothing on the other side.
+- Commission owed, payroll owed and claims owed weren't listed. POL263 fees owed used the
+  `is_settled` flag rather than the books.
+
+**Fix:** `server/financial-statements.ts` `buildBalanceSheet`, rebuilt on the same books as the
+statements, from the first day of trading to the as-of date:
+- Cash and bank = cumulative cash-flow net.
+- Payables = recognised cost − paid, for commission, POL263 fees, payroll and claims (the same rule
+  as `assembleTrialBalance`).
+- Retained earnings = cumulative surplus.
+- Manual entries sit on top. Any gap among them shows as an explicit "Opening balances not yet
+  recorded" equity line.
+- Premiums owed became a memo (`premiumsOwed`).
+- Cash-ups and bank statements are compared against book cash (`cashCheck`) instead of being added
+  to it.
+- `balanced` is returned.
+- `general-ledger.ts` classifies the new labels ("POL263 fees owed" → 2900, salaries → 2400).
+- UI: notes under the statement; the "add manual equity to balance it" advice is gone.
+
+**Verified:** balances, and so does the financial position, at 30 Jun, 31 Aug, 30 Sep and for a
+single branch. 919/919 tests.
+
+**Lesson for next time:** a balance sheet has to come from the same books as the P&L. Cash taken
+from a different, unused source (cash-ups) silently drops the asset side. If a profit is in
+retained earnings, the cash or the payable behind it must be on the sheet too.
+
+---
+
 ## 2026-09-30 — General Ledger posted one side only; Transaction Ledger missed most costs
 
 **Symptom:** the General Ledger for Sep 2026 disagreed with the Trial Balance on every account:

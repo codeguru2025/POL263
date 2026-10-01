@@ -82,7 +82,11 @@ export function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged 
   const curs: string[] = bs.currencies?.length ? bs.currencies : ["USD"];
   const cu = bs.consolidatedUsd || {};
   const fmt = (n: number) => Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const isBalanced = Math.abs(cu.totalAssets - cu.totalLiabilities - cu.totalEquity) < 0.02;
+  const isBalanced = bs.balanced
+    ? Object.values(bs.balanced).every(Boolean)
+    : Math.abs(cu.totalAssets - cu.totalLiabilities - cu.totalEquity) < 0.02;
+  const byCur = (m: Record<string, number> | undefined) =>
+    Object.entries(m ?? {}).filter(([, v]) => Math.abs(Number(v)) > 0.005).map(([c, v]) => `${c} ${fmt(Number(v))}`).join(" + ");
 
   const renderLines = (lines: any[], sectionKey: string, subsectionKey: string) => (
     <>
@@ -122,7 +126,7 @@ export function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged 
   return (
     <CardSection
       title={`Balance Sheet — as at ${new Date(asOf).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`}
-      description="Assets = Liabilities + Equity. Auto lines are derived from live data; manual lines are recorded entries."
+      description="What the business has and owes on this date. Assets = Liabilities + Equity. Auto lines come from the books; manual lines are entries you add."
       icon={DollarSign}
       flush
     >
@@ -143,8 +147,13 @@ export function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged 
           </div>
         </div>
         {!isBalanced && (
+          <p className="text-[11px] text-destructive bg-destructive/10 border border-destructive/30 rounded px-2 py-1">
+            Assets don't equal liabilities + equity — please report this; it shouldn't happen.
+          </p>
+        )}
+        {bs.excludedForBranch?.length > 0 && (
           <p className="text-[11px] text-amber-600 bg-amber-500/10 border border-amber-200 rounded px-2 py-1">
-            Balance sheet is out of balance by USD {fmt(Math.abs((cu.totalAssets || 0) - (cu.totalLiabilities || 0) - (cu.totalEquity || 0)))}. Add manual equity entries (capital contributions) to balance it.
+            One branch selected: {bs.excludedForBranch.join(" and ")} aren't recorded by branch, so they're not included. Clear the branch filter for the whole business.
           </p>
         )}
         {cu.unconvertible?.length > 0 && (
@@ -210,6 +219,35 @@ export function BalanceSheetPanel({ balanceSheet, loading, asOf, onEntryChanged 
               </TableRow>
             </TableBody>
           </DataTable>
+        </div>
+
+        {/* Notes under the statement */}
+        <div className="space-y-2 text-sm">
+          {bs.cashCheck && (
+            bs.cashCheck.hasCount ? (
+              <p className="rounded-md border p-3">
+                <span className="font-semibold">Cash check:</span> the books say {byCur(bs.assets?.current?.find((l: any) => l.source === "derived" && /cash/i.test(l.label))?.amounts) || "nothing"};
+                cash-ups and bank statements show {byCur(bs.cashCheck.counted) || "nothing"}.
+                {byCur(bs.cashCheck.difference)
+                  ? <> Difference to explain: <span className="font-semibold text-amber-700">{byCur(bs.cashCheck.difference)}</span>.</>
+                  : <> They agree.</>}
+              </p>
+            ) : (
+              <p className="rounded-md border p-3 text-muted-foreground">
+                <span className="font-semibold text-foreground">Cash check:</span> cash and bank comes from the books (everything received less everything paid out).
+                It hasn't been checked against a cash-up or a bank statement yet — record those to confirm the money is really there.
+              </p>
+            )
+          )}
+          {bs.premiumsOwed && byCur(bs.premiumsOwed.amounts) && (
+            <p className="rounded-md border p-3 text-muted-foreground">
+              <span className="font-semibold text-foreground">Premiums owed by clients:</span> {byCur(bs.premiumsOwed.amounts)} on {bs.premiumsOwed.policies} {bs.premiumsOwed.policies === 1 ? "policy" : "policies"} (in grace or past their due date){bs.premiumsOwed.asOfToday ? ", as things stand today" : ""}.
+              Not counted as an asset — income is only recorded when it's paid.
+            </p>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Auto lines come from the books since the first day of trading. Add manual lines only for things the system doesn't track — vehicles, buildings, loans, owner's capital — not cash or bank, which come from the books.
+          </p>
         </div>
       </div>
 
