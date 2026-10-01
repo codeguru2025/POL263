@@ -85,18 +85,6 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
 // Curated default columns for the on-screen receipts table. The CSV export carries the fuller
 // Easipol-format column set; the screen view is for scanning, not spreadsheet work.
 
-const paymentsColumns: EdtColumn<any>[] = [
-  { id: "reference", header: "Reference", accessor: (p) => p.reference || "", cell: (p) => <span className="font-mono text-sm">{p.reference || "—"}</span> },
-  { id: "amount", header: "Amount", accessor: (p) => parseFloat(p.amount || 0), cell: (p) => <span className="font-semibold">{p.currency} {p.amount}</span> },
-  { id: "method", header: "Method", accessor: (p) => p.paymentMethod },
-  {
-    id: "status",
-    header: "Status",
-    accessor: (p) => p.status,
-    cell: (p) => <Badge variant={p.status === "cleared" ? "default" : p.status === "reversed" ? "destructive" : "secondary"}>{p.status === "cleared" ? "Receipted" : p.status === "reversed" ? "Reversed" : p.status}</Badge>,
-  },
-  { id: "received", header: "Received", accessor: (p) => p.receivedAt ? new Date(p.receivedAt) : "", cell: (p) => <span className="text-sm text-muted-foreground">{p.receivedAt ? new Date(p.receivedAt).toLocaleDateString() : "—"}</span> },
-];
 
 const expendituresColumns: EdtColumn<any>[] = [
   { id: "description", header: "Description", accessor: (e) => e.description },
@@ -149,15 +137,6 @@ function BranchExclusionNote({ items }: { items?: string[] }) {
 }
 
 export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, users }: FinanceSectionProps) {
-  const { data: payments = [], isLoading: loadingPayments } = useQuery<any[]>({
-    queryKey: ["reports", "payments", runKey, ...fk],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/payments?limit=200" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("payments"),
-  });
   const { data: expenditures = [], isLoading: loadingExpenditures } = useQuery<any[]>({
     queryKey: ["reports", "expenditures", runKey, ...fk],
     queryFn: async () => {
@@ -928,23 +907,6 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
 
       <TabsContent value="receipts">
         <ReceiptsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("receiptReport")} />
-      </TabsContent>
-
-      <TabsContent value="payments">
-        <CardSection title="Payment Transactions" icon={Receipt} headerRight={<ExportButton reportType="payments" filters={filters} />} flush>
-          {loadingPayments ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (
-            <EnhancedDataTable
-              columns={paymentsColumns}
-              rows={payments}
-              getRowKey={(p) => p.id}
-              exportFilename="payment-transactions"
-              storageKey="reports-payments"
-              emptyMessage="No payments recorded."
-            />
-          )}
-        </CardSection>
       </TabsContent>
 
       <TabsContent value="expenditures">

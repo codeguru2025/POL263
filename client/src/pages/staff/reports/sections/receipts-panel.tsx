@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Receipt } from "lucide-react";
 import { ExportButton, buildQuery, type ReportFiltersState } from "../export-button";
 
-type Kind = "premium" | "service" | "society";
-const KIND_LABEL: Record<Kind, string> = { premium: "Premium", service: "Funeral service", society: "Society lump sum" };
+type Kind = "premium" | "service" | "society" | "online";
+const KIND_LABEL: Record<Kind, string> = { premium: "Premium", service: "Funeral service", society: "Society lump sum", online: "Online payment" };
 
 interface ReceiptsResponse {
   rows: any[];
@@ -17,7 +17,7 @@ interface ReceiptsResponse {
   summary: {
     count: number;
     byCurrency: Record<string, string>;
-    byKind: Record<Kind, Record<string, string>>;
+    byKind: Record<Exclude<Kind, "online">, Record<string, string>>;
     byMethod: Record<string, Record<string, string>>;
     pending: { count: number; byCurrency: Record<string, string> };
     excludedForFilter: string[];
@@ -38,7 +38,7 @@ const columns: EdtColumn<any>[] = [
     cell: (r) => (
       <span className="whitespace-nowrap text-xs">
         {KIND_LABEL[r.kind as Kind]}
-        {r.pending && <Badge variant="outline" className="ml-1 text-[10px] bg-amber-500/10 text-amber-700 border-amber-200">Waiting for approval</Badge>}
+        {r.pending && <Badge variant="outline" className="ml-1 text-[10px] bg-amber-500/10 text-amber-700 border-amber-200">{r.kind === "online" ? "Not completed" : "Waiting for approval"}</Badge>}
       </span>
     ),
   },
@@ -86,7 +86,7 @@ export function ReceiptsPanel({ filters, runKey, fk, enabled }: { filters: Repor
     >
       <div className="px-4 py-3 border-b text-sm space-y-2">
         <div className="flex gap-1.5 flex-wrap">
-          {tab("all", "All")}{tab("premium", "Premiums")}{tab("service", "Funeral services")}{tab("society", "Society lump sums")}
+          {tab("all", "All")}{tab("premium", "Premiums")}{tab("service", "Funeral services")}{tab("society", "Society lump sums")}{tab("online", "Online payments not completed")}
         </div>
         {s && (
           <>

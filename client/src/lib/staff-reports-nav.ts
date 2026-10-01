@@ -7,7 +7,6 @@ export type ReportSectionId = "policies" | "finance" | "agents" | "claims" | "op
 export type ReportDatasetId =
   | "policies"
   | "claims"
-  | "payments"
   | "funeralCases"
   | "fleet"
   | "expenditures"
@@ -89,7 +88,6 @@ export const SECTION_TAB_DEFS: Record<ReportSectionId, { value: string; label: s
     { value: "underwriter-payable", label: "Underwriter payable", testId: "tab-underwriter-payable" },
     { value: "reinsurance", label: "Reinsurance bordereaux", testId: "tab-reinsurance" },
     { value: "receipts", label: "Receipts", testId: "tab-receipts-report" },
-    { value: "payments", label: "Payments", testId: "tab-payments-report" },
     { value: "expenditures", label: "Expenditure", testId: "tab-expenditures-report" },
     { value: "cashups", label: "Cashups", testId: "tab-cashups-report" },
     { value: "platform", label: "POL263 revenue", testId: "tab-platform-report" },
@@ -181,7 +179,6 @@ export const TAB_DATASETS: Record<string, ReportDatasetId[]> = {
   "underwriter-payable": ["underwriterPayable"],
   reinsurance: ["premiumBordereau", "claimsBordereau"],
   receipts: ["receiptReport"],
-  payments: ["payments"],
   expenditures: ["expenditures"],
   cashups: ["cashups"],
   platform: ["platformReceivables"],
@@ -224,6 +221,7 @@ const TAB_ALIASES: Record<string, string> = {
   "pre-lapse": "overdue", // merged into Overdue / grace ("Lapsing within 7 days" filter)
   conversions: "activations", // merged into Activations ("First payment" filter)
   reinstatements: "activations", // merged into Activations ("Reinstated" filter)
+  payments: "receipts", // merged into Receipts (one place for money received)
 };
 
 /** True when the URL asked for the retired Pre-lapse tab — the merged tab opens pre-filtered. */

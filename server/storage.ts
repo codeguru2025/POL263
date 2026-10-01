@@ -2439,6 +2439,26 @@ export class DatabaseStorage implements IStorage {
     for (const r of rowsOf(dupIds)) out.push({ category: "Duplicate national ID", severity: "high", policyNumber: "—", client: r.names, detail: `${r.n} client records share national ID ${r.national_id}.` });
     for (const r of rowsOf(dupPhones)) out.push({ category: "Duplicate phone number", severity: "low", policyNumber: "—", client: r.names, detail: `${r.n} client records share phone ${r.phone}.` });
 
+    // Payments and receipts should pair up one-to-one: a payment advances cover and earns
+    // commission; a receipt is what the client holds and what the statements count.
+    const linked = sql`(r.metadata_json->>'transactionId' = t.id::text OR r.metadata_json->>'approvedTransactionId' = t.id::text)`;
+    const [txNoReceipt, receiptNoTx] = await Promise.all([
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name, t.amount, t.currency, t.created_at
+        FROM payment_transactions t JOIN policies p ON p.id = t.policy_id LEFT JOIN clients c ON c.id = p.client_id
+        WHERE t.organization_id = ${organizationId} AND t.deleted_at IS NULL AND t.status = 'cleared'
+          AND COALESCE(t.payment_method, '') <> 'credit_balance'
+          AND NOT EXISTS (SELECT 1 FROM payment_receipts r WHERE ${linked})
+        ORDER BY t.created_at`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name, r.receipt_number, r.amount, r.currency, r.issued_at
+        FROM payment_receipts r JOIN policies p ON p.id = r.policy_id LEFT JOIN clients c ON c.id = p.client_id
+        WHERE r.organization_id = ${organizationId} AND r.status = 'issued' AND COALESCE(r.approval_status, 'approved') = 'approved'
+          AND NOT EXISTS (SELECT 1 FROM payment_transactions t WHERE ${linked})
+        ORDER BY r.issued_at`),
+    ]);
+    const day = (d: unknown) => new Date(d as any).toISOString().slice(0, 10);
+    for (const r of rowsOf(txNoReceipt)) out.push({ category: "Payment with no receipt", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: `${r.currency} ${r.amount} payment on ${day(r.created_at)} has no receipt — the client has nothing to show, and it isn't in the receipt totals.` });
+    for (const r of rowsOf(receiptNoTx)) out.push({ category: "Receipt with no payment record", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: `Receipt ${r.receipt_number} (${r.currency} ${r.amount}, ${day(r.issued_at)}) has no payment record behind it — it doesn't advance cover dates or earn commission.` });
+
     const sevRank = { high: 0, medium: 1, low: 2 };
     return out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || a.category.localeCompare(b.category));
   }

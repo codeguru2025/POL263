@@ -44,4 +44,8 @@ describe("retired Conversions / Reinstatements tabs", () => {
     expect(legacyActivationsTabType("?tab=reinstatements")).toBe("reinstated");
     expect(legacyActivationsTabType("?tab=activations")).toBeUndefined();
   });
+
+  it("the retired Payments tab opens Receipts", () => {
+    expect(parseReportSearchParams("?section=finance&tab=payments").tab).toBe("receipts");
+  });
 });

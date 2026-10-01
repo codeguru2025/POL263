@@ -17,7 +17,7 @@ import { dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
 import { periodsPaidByReceipt } from "./payment-position";
 import { toCents, fromCents } from "@shared/money";
 
-export type ReceiptKind = "premium" | "service" | "society";
+export type ReceiptKind = "premium" | "service" | "society" | "online";
 
 export interface ReceiptRow {
   kind: ReceiptKind;
@@ -38,14 +38,14 @@ export interface ReceiptRow {
   capturedBy: string;
   groupName: string;
   branch: string;
-  pending: boolean;          // waiting for approval — not counted in totals
+  pending: boolean;          // waiting for approval, or an online payment not completed — not counted in totals
   notes: string;
 }
 
 export interface ReceiptsSummary {
   count: number;
   byCurrency: Record<string, string>;
-  byKind: Record<ReceiptKind, Record<string, string>>;
+  byKind: Record<Exclude<ReceiptKind, "online">, Record<string, string>>;
   byMethod: Record<string, Record<string, string>>;
   pending: { count: number; byCurrency: Record<string, string> };
   excludedForFilter: string[];
@@ -61,7 +61,8 @@ export async function buildReceiptsReport(orgId: string, f: ReceiptsFilters, max
   const tz = await getOrgTimezone(orgId);
   const { start, endExclusive } = await dayRangeForOrg(orgId, f.fromDate, f.toDate);
   const type = f.type ?? "all";
-  const want = (k: ReceiptKind) => type === "all" || type === k;
+  // Online payment attempts that never completed are a separate view, not part of "All".
+  const want = (k: ReceiptKind) => (k === "online" ? type === "online" : type === "all" || type === k);
   const excludedForFilter: string[] = [];
   const rows: ReceiptRow[] = [];
   const range = (col: any) => sql`${start ? sql`AND ${col} >= ${start}` : sql``} ${endExclusive ? sql`AND ${col} < ${endExclusive}` : sql``}`;
@@ -166,6 +167,36 @@ export async function buildReceiptsReport(orgId: string, f: ReceiptsFilters, max
     }
   }
 
+  if (want("online")) {
+    // PayNow / mobile-money attempts that never turned into money: started, failed, cancelled or
+    // expired. Shown so staff can follow up; never counted.
+    const onl = rowsOf<any>(await tdb.execute(sql`
+      SELECT i.id, i.merchant_reference, i.created_at, i.amount, i.currency, i.status, i.method_selected,
+             p.policy_number, cl.first_name, cl.last_name, b.name AS branch, ag.display_name AS agent
+      FROM payment_intents i
+      LEFT JOIN policies p ON p.id = i.policy_id
+      LEFT JOIN clients cl ON cl.id = i.client_id
+      LEFT JOIN branches b ON b.id = p.branch_id
+      LEFT JOIN users ag ON ag.id = p.agent_id
+      WHERE i.organization_id = ${orgId} AND i.status NOT IN ('paid', 'completed')
+        ${range(sql`i.created_at`)}
+        ${f.branchId ? sql`AND p.branch_id = ${f.branchId}` : sql``}
+        ${f.agentId ? sql`AND p.agent_id = ${f.agentId}` : sql``}
+      ORDER BY i.created_at DESC
+      LIMIT ${maxRows + 1}`));
+    for (const r of onl) {
+      rows.push({
+        kind: "online", id: r.id, receiptNumber: r.merchant_reference ?? "",
+        datePaid: dateInTimezone(r.created_at, tz), issuedAt: new Date(r.created_at).toISOString(),
+        policyNumber: r.policy_number ?? "", memberNumber: "", payer: name(r.first_name, r.last_name),
+        description: `Online payment ${String(r.status).replace(/_/g, " ")}`,
+        currency: (r.currency || "USD").toUpperCase(), amount: fromCents(toCents(r.amount)), premiumDue: "", monthsPaid: null,
+        method: r.method_selected && r.method_selected !== "unknown" ? r.method_selected : "online", agent: r.agent ?? "",
+        capturedBy: "", groupName: "", branch: r.branch ?? "", pending: true, notes: "",
+      });
+    }
+  }
+
   rows.sort((a, b) => (a.datePaid < b.datePaid ? 1 : a.datePaid > b.datePaid ? -1 : a.issuedAt < b.issuedAt ? 1 : -1));
   const truncated = rows.length > maxRows;
   const out = rows.slice(0, maxRows);
@@ -175,7 +206,7 @@ export async function buildReceiptsReport(orgId: string, f: ReceiptsFilters, max
 /** Totals over counted (non-pending) receipts, per currency — never adding currencies together. Pure. */
 export function summarizeReceipts(rows: ReceiptRow[], excludedForFilter: string[] = []): ReceiptsSummary {
   const cents: Record<string, number> = {};
-  const kind: Record<ReceiptKind, Record<string, number>> = { premium: {}, service: {}, society: {} };
+  const kind: Record<Exclude<ReceiptKind, "online">, Record<string, number>> = { premium: {}, service: {}, society: {} };
   const method: Record<string, Record<string, number>> = {};
   const pend: Record<string, number> = {};
   let count = 0, pendingCount = 0;
@@ -184,7 +215,7 @@ export function summarizeReceipts(rows: ReceiptRow[], excludedForFilter: string[
     if (r.pending) { pendingCount++; pend[r.currency] = (pend[r.currency] ?? 0) + c; continue; }
     count++;
     cents[r.currency] = (cents[r.currency] ?? 0) + c;
-    kind[r.kind][r.currency] = (kind[r.kind][r.currency] ?? 0) + c;
+    if (r.kind !== "online") kind[r.kind][r.currency] = (kind[r.kind][r.currency] ?? 0) + c;
     const m = r.method || "not recorded";
     method[m] ??= {};
     method[m][r.currency] = (method[m][r.currency] ?? 0) + c;

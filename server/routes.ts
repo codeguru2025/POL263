@@ -14944,7 +14944,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/receipts", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const type = ["premium", "service", "society"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society") : "all";
+    const type = ["premium", "service", "society", "online"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society" | "online") : "all";
     return res.json(await buildReceiptsReport(user.organizationId, { ...filters, type }, REPORT_EXPORT_MAX_ROWS));
   });
   app.get("/api/reports/commissions-summary", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
@@ -15967,9 +15967,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "receipts": {
-          const rType = ["premium", "service", "society"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society") : "all";
+          const rType = ["premium", "service", "society", "online"].includes(String(req.query.type)) ? (String(req.query.type) as "premium" | "service" | "society" | "online") : "all";
           const rr = await buildReceiptsReport(user.organizationId, { ...reportFilters, type: rType }, REPORT_EXPORT_MAX_ROWS);
-          const kindLabel = { premium: "Premium", service: "Funeral service", society: "Society lump sum" } as const;
+          const kindLabel = { premium: "Premium", service: "Funeral service", society: "Society lump sum", online: "Online payment not completed" } as const;
           headers = [
             "Date Paid", "Receipt No.", "Type", "Policy No.", "Member No.", "Paid By", "Product / Description",
             "Currency", "Amount", ...currencyHeaders("Amount"), "Premium Due", "Months Paid", "Method",
@@ -15981,7 +15981,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             return [
               x.datePaid, x.receiptNumber, kindLabel[x.kind], x.policyNumber, x.memberNumber, x.payer, x.description,
               x.currency, x.amount, ...currencyAmounts(x.amount, x.currency), x.premiumDue, x.monthsPaid ?? "", x.method || "not recorded",
-              x.agent, x.capturedBy, x.groupName, x.branch, x.pending ? "Yes — not counted" : "", x.notes,
+              x.agent, x.capturedBy, x.groupName, x.branch, x.pending ? (x.kind === "online" ? "Not completed — not counted" : "Yes — not counted") : "", x.notes,
             ];
           });
           break;
