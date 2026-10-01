@@ -10,6 +10,30 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Clients never got a receipt SMS when their payment needed approval
+
+**Symptom:** FLK00332 (Lister Mdluli) paid USD 12 at 09:38 on 1 Oct (receipt #813) and got no SMS.
+Other receipts that morning texted normally.
+
+**Root cause:** receipt #813 needed approval (premium override / backdated). `POST
+/api/payment-receipts/:id/approve` applies the payment, records the commission and the platform
+fee, but never called `dispatchNotification`. Only the normal receipt paths (cash follow-up in
+`outbox-handlers.ts`, group receipts) send the "payment_receipt" SMS. None of the 8 receipts
+approved since 29 Sep (#778, 792, 794, 795, 804, 807, 812, 813) texted the client.
+
+**Fix:** `server/routes.ts` approve route. After the payment is applied, build the policy context
+and dispatch `receiptEventFor(org)` to the client, the same as the cash path.
+
+**Verified:** `tsc` clean. Falakhe DB checked read-only: 8/8 approved receipts have the POL263 fee,
+5/8 have commission (the other 3 are walk-in or society, which is correct), and 0/8 had an SMS.
+
+**Lesson for next time:** when a payment can arrive by more than one route (direct, approval,
+group, PayNow), the side effects — fee, commission, receipt SMS — must be checked on every route.
+Grep for `dispatchNotification(.*payment_receipt` next to `recordAgentCommission`, not just one of
+them.
+
+---
+
 ## 2026-10-01 — Balance Sheet never balanced (no cash; receivables with nothing behind them)
 
 **Symptom:** as of 30 Sep 2026, Falakhe's Balance Sheet showed assets USD 536 against liabilities +

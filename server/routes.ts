@@ -7153,6 +7153,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await auditLog(req, "APPROVE_RECEIPT", "PaymentReceipt", receiptId, { approvalStatus: "pending" }, { approvalStatus: "approved", approvalNote: String(approvalNote).trim() });
       // Approved override/backdated receipts never recorded agent commission.
       if (approvedTxId) await recordAgentCommission(user.organizationId, policy, approvedTxId, String(receipt.amount));
+      // …and never texted the client their receipt: a payment that needed approval (premium
+      // override, backdated) went through silently. Same "payment_receipt" SMS as any other
+      // receipt, sent once it actually counts. dispatchNotification never throws.
+      if (policy?.clientId) {
+        const ctx = await buildPolicyContext(policy, user.organizationId, {
+          paymentAmount: `${receipt.currency} ${fromCents(toCents(receipt.amount))}`,
+          paymentDate: new Date().toLocaleDateString("en-GB"),
+          paymentMethod: receipt.paymentChannel === "cash" || !receipt.paymentChannel ? "Cash" : String(receipt.paymentChannel).replace(/_/g, " "),
+          receiptId: receipt.id,
+        });
+        await dispatchNotification(user.organizationId, await receiptEventFor(user.organizationId), policy.clientId, ctx);
+      }
       // Backdated group receipts credit the group ledger here (per-policy, at approval time)
       // rather than at submission — the non-backdated path credits immediately in POST
       // /api/group-receipt since that money is already cleared. Only fires for receipts that
