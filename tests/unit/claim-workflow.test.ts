@@ -182,7 +182,7 @@ describe("ledgerDebitFor — what a ledger-group claim deducts", () => {
   });
 
   it("refuses to approve when there's nothing to deduct", () => {
-    expect(() => ledgerDebitFor(legacy, null, { cashInLieuAmount: null, currency: "USD" })).toThrow(/no amount to deduct/);
+    expect(() => ledgerDebitFor(legacy, null, { cashInLieuAmount: null, currency: "USD" })).toThrow(/doesn.t say how much it.s for/);
   });
 });
 

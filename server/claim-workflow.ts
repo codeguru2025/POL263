@@ -164,7 +164,7 @@ export function ledgerDebitFor(
   const amount = quotation ? quotationAmount(quotation) : parseFloat(String(claim.cashInLieuAmount ?? "0"));
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new ClaimWorkflowError(400,
-      `This claim is paid from ${group.name}'s ledger, but there's no amount to deduct. Enter the claim amount or attach a cash-service quote, then approve it.`,
+      `This claim is paid from ${group.name}'s ledger, but the claim itself doesn't say how much it's for yet. Click "Edit claim" and enter the claim amount (or attach the funeral quote), then approve it — that amount is what comes off the ledger.`,
       "ledger_amount_required");
   }
   return { amount, currency: quotation?.currency || claim.currency || "USD", quotationNumber: quotation?.quotationNumber ?? null };
