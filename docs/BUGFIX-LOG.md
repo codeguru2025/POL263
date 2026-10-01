@@ -10,6 +10,47 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — IFRS 17 movement could never add up; receipts without covered months dropped
+
+**Symptom:** for Falakhe the report is all zeros, because no product is classified PAA (all 815
+policies are on unclassified versions). That's a setting, not a bug. Reviewing the logic turned up
+real ones:
+- 108 of Sep's 264 receipts (90 society group receipts + 18 approved overrides/backdated) have no
+  `period_from/period_to`. LRC skipped them entirely.
+- The LRC roll-forward had a structural "residual": opening LRC counted receipts issued *after* the
+  opening date (backdated).
+- The LIC movement used a different population than LIC itself:
+  - incurred/paid counted cash-in-lieu only and included ledger-group claims;
+  - LIC excluded group claims and valued in-kind claims at the product's cash-in-lieu rate;
+  - payable/completed statuses were missing.
+- `payable` and `scheduled` claims (decided, not yet paid or delivered) dropped out of the LIC.
+- UTC dates; unapproved receipts counted.
+
+**Fix:**
+- `server/insurance-revenue.ts`:
+  - `coveredPeriod`: an unstamped receipt covers round(amount ÷ premium) premium periods from the
+    local payment date.
+  - `unearnedAt` counts only receipts already received by the date. Earned in a period = unearned
+    at the start (or the full receipt, if received during it) − unearned at the end, so the LRC
+    identity is exact.
+  - Shared `OPEN_CLAIM_STATUSES` now include payable/scheduled. Shared `fetchPaaClaims`,
+    `claimOpenAt` and `claimStatusAsOf`.
+- `server/ifrs17-movement.ts`: LIC = opening open claims + reported − (no longer open, split into
+  settled and declined). Same claims, same valuation, so the residual is 0 by construction.
+  `nothingClassified` flag.
+- UI: a plain empty state when nothing is classified; "Difference (should be 0)"; a declined-claims
+  line; a note on derived periods. The export matches.
+
+**Verified:** `tests/unit/insurance-revenue.test.ts` (6) includes an LRC roll-forward identity test
+over advance, backdated, straddling and post-period receipts. 931/931. Real figures await PAA
+classification.
+
+**Lesson for next time:** a roll-forward (opening + in − out = closing) must take its movements
+from the same population and rules as its balances, or a "residual" is guaranteed. Make the
+identity hold by construction and test it, rather than explaining the residual away.
+
+---
+
 ## 2026-10-01 — Bank Reconciliation invented opening balances and ignored bank-paid money
 
 **Symptom:** found reviewing the report; Falakhe has no bank accounts set up yet, so nobody saw it.

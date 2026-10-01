@@ -16505,12 +16505,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           emitMv("LRC", "Premiums received", mv.lrc.premiumsReceived);
           emitMv("LRC", "Insurance revenue recognised", mv.lrc.revenueRecognised);
           emitMv("LRC", "Closing balance", mv.lrc.closing);
-          emitMv("LRC", "Residual (straddling receipts)", mv.lrc.residual);
+          emitMv("LRC", "Difference (should be 0)", mv.lrc.residual);
           emitMv("LIC", "Opening balance", mv.lic.opening);
-          emitMv("LIC", "Claims incurred (reported)", mv.lic.claimsIncurred);
+          emitMv("LIC", "Claims reported", mv.lic.claimsIncurred);
           emitMv("LIC", "Claims paid / settled", mv.lic.claimsPaid);
+          emitMv("LIC", "Claims declined", mv.lic.claimsDeclined);
           emitMv("LIC", "Closing balance", mv.lic.closing);
-          emitMv("LIC", "Residual", mv.lic.residual);
+          emitMv("LIC", "Difference (should be 0)", mv.lic.residual);
           break;
         }
         case "bank-reconciliation": {

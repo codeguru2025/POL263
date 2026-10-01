@@ -732,8 +732,8 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
         >
           {loadingIfrs17 ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : !ifrs17 ? (
-            <EmptyState title="No PAA-classified business in the period" description="Classify product versions as 'PAA' under Products to include them in IFRS 17 reporting." className="border-0 rounded-none bg-transparent py-8" />
+          ) : !ifrs17 || ifrs17.nothingClassified ? (
+            <EmptyState title="No products are classified for IFRS 17 yet" description={`IFRS 17 figures only include products under the Premium Allocation Approach (PAA)${ifrs17?.classification?.excludedActivePolicyCount ? ` — all ${ifrs17.classification.excludedActivePolicyCount} active policies are on unclassified products` : ""}. Set the measurement approach to PAA on each product version under Products, and this report fills in.`} className="border-0 rounded-none bg-transparent py-8" />
           ) : (() => {
             const curs: string[] = ifrs17.currencies?.length ? ifrs17.currencies : ["USD"];
             const m = (obj: any, c: string) => (obj?.[c] != null ? Number(obj[c]).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—");
@@ -764,19 +764,21 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                   ["premiumsReceived", "Add: premiums received"],
                   ["revenueRecognised", "Less: insurance revenue recognised"],
                   ["closing", "Closing balance"],
-                  ["residual", "Residual (straddling receipts)"],
+                  ["residual", "Difference (should be 0)"],
                 ])}
                 {block("Liability for Incurred Claims (LIC)", ifrs17.lic, [
                   ["opening", "Opening balance"],
-                  ["claimsIncurred", "Add: claims incurred (reported)"],
+                  ["claimsIncurred", "Add: claims reported"],
                   ["claimsPaid", "Less: claims paid / settled"],
+                  ["claimsDeclined", "Less: claims declined"],
                   ["closing", "Closing balance"],
-                  ["residual", "Residual"],
+                  ["residual", "Difference (should be 0)"],
                 ])}
                 <p className="text-xs text-muted-foreground">
                   {ifrs17.classification.paaPolicyCount} PAA-classified {ifrs17.classification.paaPolicyCount === 1 ? "policy" : "policies"} included.
                   {ifrs17.classification.excludedActivePolicyCount > 0 ? ` ${ifrs17.classification.excludedActivePolicyCount} excluded (unclassified / GMM / VFA).` : ""}
                 </p>
+                {ifrs17.lrc?.derivedPeriods > 0 && <p className="text-xs text-muted-foreground mt-1">{ifrs17.lrc.derivedPeriods} receipt{ifrs17.lrc.derivedPeriods === 1 ? "" : "s"} had no recorded covered months and were spread over amount ÷ premium months from the payment date.</p>}
                 <p className="text-[11px] text-muted-foreground mt-1">{ifrs17.note}</p>
               </div>
             );
