@@ -10,6 +10,35 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Cash-ups: totals mixed currencies; report blank when nobody cashes up
+
+**Symptom:**
+- "Load from my receipts" on the cash-up form added USD and ZAR together and labelled the total
+  with whichever currency appeared most. It also used UTC day bounds and counted unapproved
+  receipts.
+- The Cashups report only listed submitted cash-ups, so Falakhe (which has never done one) saw an
+  empty page, while USD 7,799 + ZAR 11,465 was taken in cash in Sep with no check at all.
+
+**Fix:**
+- `storage.getReceiptTotalsByUserDate(org, user, date, currency)`: one currency, local day,
+  approved receipts. It returns `currencies` so the form warns "do a separate cash-up for each
+  currency".
+- New `server/cashup-check.ts` (`buildCashupCheck`, pure `cashupStatus`, `countedCash`,
+  `summarizeCashupCheck`): per staff member, per local day, per currency, cash receipts (premium +
+  service) against the cash-up for that day and currency. Each line is agrees / short / over / not
+  cashed up; society lump sums are a separate "not assigned" line.
+- `/api/reports/cashups` and the export now use it.
+- New `reports/sections/cashups-panel.tsx`.
+
+**Verified:** Sep: cash taken USD 7,799 + ZAR 11,465 (equals the Receipts report's cash), 47
+staff-day-currency lines, all not cashed up, and 6 lines with no recorded issuer.
+`tests/unit/cashup-check.test.ts`. 950/950.
+
+**Lesson for next time:** a control report that only lists the controls that were done can't show
+the ones that weren't. Start from the activity (cash taken) and match the control (cash-up) to it.
+
+---
+
 ## 2026-10-01 — Expenditure report showed nothing for a tenant that spends through requisitions
 
 **Symptom:** Falakhe's Expenditure tab was empty. It listed only the `expenditures` table (0 rows),

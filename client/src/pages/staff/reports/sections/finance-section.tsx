@@ -14,6 +14,7 @@ import { BalanceSheetPanel } from "./balance-sheet-panel";
 import { ledgerColumns } from "@/components/ledger-columns";
 import { ReceiptsPanel } from "./receipts-panel";
 import { ExpenditurePanel } from "./expenditure-panel";
+import { CashupsPanel } from "./cashups-panel";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 interface FinanceSectionProps extends ReportSectionBaseProps {
@@ -88,15 +89,6 @@ const underwriterPayableColumns: EdtColumn<any>[] = [
 
 
 
-const cashupsColumns = (users: any[]): EdtColumn<any>[] => [
-  { id: "cashupDate", header: "Cashup date", accessor: (c) => c.cashupDate, cell: (c) => <span className="font-mono text-sm">{c.cashupDate}</span> },
-  { id: "currency", header: "Currency", accessor: (c) => c.currency || "USD" },
-  { id: "totalAmount", header: "Total amount", accessor: (c) => parseFloat(c.totalAmount || 0), cell: (c) => <span className="font-semibold">{c.currency || "USD"} {c.totalAmount}</span> },
-  { id: "transactionCount", header: "Transaction count", accessor: (c) => c.transactionCount },
-  { id: "locked", header: "Locked", accessor: (c) => (c.isLocked ? "Locked" : "Open"), cell: (c) => <Badge variant={c.isLocked ? "default" : "secondary"}>{c.isLocked ? "Locked" : "Open"}</Badge> },
-  { id: "preparedBy", header: "Prepared by", accessor: (c) => (users as any[])?.find((u: any) => u.id === c.preparedBy)?.displayName || c.preparedBy || "" },
-  { id: "created", header: "Created", accessor: (c) => new Date(c.createdAt), cell: (c) => <span className="text-sm text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span> },
-];
 
 const platformColumns: EdtColumn<any>[] = [
   { id: "description", header: "Description", accessor: (cr) => cr.description },
@@ -298,15 +290,6 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       return res.json();
     },
     enabled: need("underwriterPayable"),
-  });
-  const { data: cashups = [], isLoading: loadingCashups } = useQuery<any[]>({
-    queryKey: ["reports", "cashups", runKey, ...fk, userId],
-    queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/cashups" + q, { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: need("cashups"),
   });
 
   return (
@@ -899,19 +882,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       </TabsContent>
 
       <TabsContent value="cashups">
-        <CardSection title="Daily Cashups by User" icon={Calendar} description="Use the Report filters above to set date range and optional user." headerRight={<ExportButton reportType="cashups" filters={filters} />} flush>
-          {loadingCashups ? <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div> : (
-            <EnhancedDataTable
-              columns={cashupsColumns(users)}
-              rows={cashups}
-              getRowKey={(c) => c.id}
-              rowTestId={(c) => `row-cashup-${c.id}`}
-              exportFilename="daily-cashups"
-              storageKey="reports-cashups"
-              emptyMessage="No cashups in range."
-            />
-          )}
-        </CardSection>
+        <CashupsPanel filters={filters} runKey={runKey} fk={fk} enabled={need("cashups")} />
       </TabsContent>
 
       <TabsContent value="platform">

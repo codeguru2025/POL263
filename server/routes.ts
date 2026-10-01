@@ -62,6 +62,7 @@ import { summarizeNewJoinings, type NewJoiningReportRow } from "./new-joinings";
 import { summarizeActivations, ACTIVATION_TYPE_LABEL } from "./activations-report";
 import { buildReceiptsReport } from "./receipts-report";
 import { buildExpenditureReport } from "./expenditure-report";
+import { buildCashupCheck } from "./cashup-check";
 import { sendEmail, escapeHtml } from "./email-service";
 import { resolveTenantEmailOverrides } from "./tenant-email-sending";
 import { getTenantEmailDomain } from "./email-domain-provisioning";
@@ -14939,8 +14940,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const preparedBy = filters.agentId ?? filters.userId;
-    return res.json(await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...filters, preparedBy }));
+    const staffId = filters.agentId ?? filters.userId;
+    return res.json(await buildCashupCheck(user.organizationId, { fromDate: filters.fromDate, toDate: filters.toDate, branchId: filters.branchId, userId: staffId }));
   });
 
   app.get("/api/reports/expenditure", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
@@ -15963,18 +15964,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "cashups": {
-          const cashupsList = await storage.getCashups(user.organizationId, REPORT_EXPORT_MAX_ROWS, { ...reportFilters, preparedBy: reportFilters.userId });
-          headers = ["Cashup Date", "Currency", "Total Amount", ...currencyHeaders("Total"), "Transaction Count", "Status", "Locked", "Prepared By", "Confirmed By", "Discrepancy Amount", "Discrepancy Notes", "Created"];
-          currencyTotals = { Total: {} };
-          rows = cashupsList.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.totalAmount ?? 0)) || 0;
-            currencyTotals!.Total[c] = (currencyTotals!.Total[c] || 0) + amt;
-            return [
-              r.cashupDate, r.currency || "USD", r.totalAmount, ...currencyAmounts(r.totalAmount, r.currency), r.transactionCount, r.status || "—", r.isLocked ? "Yes" : "No", r.preparedBy,
-              r.confirmedBy || "—", r.discrepancyAmount ?? "—", r.discrepancyNotes ?? "—", r.createdAt,
-            ];
-          });
+          const cc = await buildCashupCheck(user.organizationId, { fromDate: reportFilters.fromDate, toDate: reportFilters.toDate, branchId: reportFilters.branchId, userId: reportFilters.agentId ?? reportFilters.userId });
+          const cuLabel = { agrees: "Agrees", short: "Short", over: "Over", not_cashed_up: "Not cashed up", unassigned: "Not assigned to a staff member" } as const;
+          headers = ["Date", "Staff Member", "Currency", "Cash Taken", "Receipts", "Cash-up State", "Counted", "Difference", "Status"];
+          currencyTotals = null;
+          rows = cc.rows.map((x) => [x.date, x.staff, x.currency, x.cashTaken, x.receipts, x.cashupState ?? "", x.counted ?? "", x.difference ?? "", cuLabel[x.status]]);
           break;
         }
         case "receipts": {
