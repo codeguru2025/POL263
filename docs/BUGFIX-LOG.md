@@ -10,6 +10,29 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-01 — Underwriter payable counted the wrong policies
+
+**Symptom:** found reviewing the report (Falakhe has no underwriter, so every amount is 0 and the
+screen just showed zeros).
+- Dates narrowed the list to policies *captured* in the range.
+- Lapsed, cancelled, never-paid and deleted policies were all counted as owing the underwriter.
+- It was capped at 500 rows, and ages came from the server clock.
+
+**Fix:** `storage.getUnderwriterPayableReport`.
+- It uses `policyListConditions` with dates ignored and statuses defaulting to active + grace (the
+  book in force); deleted policies are excluded.
+- Ages are taken from the org's local today (UTC calendar maths).
+- `summary.noRatesConfigured` makes the UI say "No underwriter rates set" instead of zeros.
+- The route and UI no longer cap at 500.
+
+**Verified:** Falakhe: 575 in-force policies (540 active + 35 grace); `noRatesConfigured` is true.
+939/939.
+
+**Lesson for next time:** a payable owed on the book (underwriter, reinsurer) is a function of what
+is in force, not of when the policies were captured. Don't reuse a capture-date filter for it.
+
+---
+
 ## 2026-10-01 — Finance report: months paid = receipt count, owed capped at one premium, 316 policies missing
 
 **Symptom (Falakhe, 1 Oct):**

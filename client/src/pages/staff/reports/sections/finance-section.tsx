@@ -341,10 +341,10 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
     },
     enabled: need("insuranceContractSummary"),
   });
-  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; policyCount: number; byCurrency?: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> } }>({
+  const { data: underwriterPayableResult, isLoading: loadingUnderwriterPayable } = useQuery<{ rows: any[]; summary: { totalMonthlyPayable: number; totalPayableIncludingAdvance: number; noRatesConfigured?: boolean; policyCount: number; byCurrency?: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }> } }>({
     queryKey: ["reports", "underwriter-payable", runKey, ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/underwriter-payable?limit=500" + qAppend, { credentials: "include" });
+      const res = await fetch(getApiBase() + "/api/reports/underwriter-payable" + q, { credentials: "include" });
       if (!res.ok) return { rows: [], summary: { totalMonthlyPayable: 0, totalPayableIncludingAdvance: 0, policyCount: 0, byCurrency: {} } };
       return res.json();
     },
@@ -888,12 +888,18 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="underwriter-payable">
         <CardSection
           title="Underwriter payable"
-          description="Monthly amount the tenant pays to the underwriter per policy (per adult/child). Includes advance months where applicable. Use filters to narrow by branch, product or status."
+          description="What is owed to the underwriter each month for the policies in force (active and in grace): the per-adult and per-child underwriter rate times the people covered, plus any advance months."
           icon={Truck}
           headerRight={<ExportButton reportType="underwriter-payable" filters={filters} />}
         >
           {loadingUnderwriterPayable ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : underwriterPayableResult?.summary?.noRatesConfigured ? (
+            <EmptyState
+              title="No underwriter rates set"
+              description="None of your products has an underwriter amount, so nothing is owed to an underwriter. If your policies are underwritten, add the per-adult and per-child underwriter amounts on each product version under Products."
+              className="border-0 rounded-none bg-transparent py-8"
+            />
           ) : !underwriterPayableResult?.rows?.length ? (
             <EmptyState
               title="No matching policies"

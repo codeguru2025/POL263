@@ -14807,7 +14807,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/underwriter-payable", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
+    const limit = Math.min(parseInt(String(req.query.limit)) || REPORT_EXPORT_MAX_ROWS, REPORT_EXPORT_MAX_ROWS);
     const offset = parseInt(String(req.query.offset)) || 0;
     const result = await storage.getUnderwriterPayableReport(user.organizationId, limit, offset, filters);
     return res.json(result);

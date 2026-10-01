@@ -314,6 +314,7 @@ export interface UnderwriterPayableReportResult {
     totalMonthlyPayable: number;
     totalPayableIncludingAdvance: number;
     policyCount: number;
+    noRatesConfigured: boolean;
     byCurrency: Record<string, { monthlyPayable: number; totalPayable: number; policyCount: number }>;
   };
 }
@@ -3227,19 +3228,14 @@ export class DatabaseStorage implements IStorage {
 
   async getUnderwriterPayableReport(organizationId: string, limit: number, offset: number, filters?: ReportFilters): Promise<UnderwriterPayableReportResult> {
     const tdb = await getDbForOrg(organizationId);
-    const conditions = [eq(policies.organizationId, organizationId)];
-    if (filters?.fromDate) conditions.push(gte(policies.createdAt, new Date(filters.fromDate + "T00:00:00.000Z")));
-    if (filters?.toDate) conditions.push(lte(policies.createdAt, new Date(filters.toDate + "T23:59:59.999Z")));
-    if (filters?.status) conditions.push(eq(policies.status, filters.status));
-    if (filters?.statuses?.length) conditions.push(inArray(policies.status, filters.statuses));
-    if (filters?.branchId) conditions.push(eq(policies.branchId, filters.branchId));
-    if (filters?.agentId) conditions.push(eq(policies.agentId, filters.agentId));
-    if (filters?.productId) {
-      const versionIds = await tdb.select({ id: productVersions.id }).from(productVersions).where(eq(productVersions.productId, filters.productId!));
-      const ids = versionIds.map((v) => v.id);
-      if (ids.length > 0) conditions.push(inArray(policies.productVersionId, ids));
-      else conditions.push(sql`1 = 0`);
-    }
+    // An underwriter is paid for the book in force — active and grace policies — not for the
+    // policies captured in a date range (lapsed, cancelled and never-paid policies owe nothing).
+    // Deleted policies are excluded by policyListConditions.
+    const { fromDate: _from, toDate: _to, ...rest } = (filters ?? {}) as ReportFilters & { statuses?: string[] };
+    const conditions = await this.policyListConditions(organizationId, {
+      ...rest,
+      ...(rest.status || (rest as any).statuses?.length ? {} : { statuses: ["active", "grace"] }),
+    });
     const baseRows = await tdb
       .select({
         policyId: policies.id,
@@ -3292,14 +3288,14 @@ export class DatabaseStorage implements IStorage {
       const deps = await tdb.select({ id: dependents.id, dateOfBirth: dependents.dateOfBirth }).from(dependents).where(inArray(dependents.id, dependentIds));
       for (const d of deps) dependentDobMap[d.id] = d.dateOfBirth ? String(d.dateOfBirth) : null;
     }
-    const asOfDate = new Date();
+    const asOfDate = new Date((await todayForOrg(organizationId)) + "T00:00:00Z");
 
     function ageAt(dob: string | null): number | null {
       if (!dob) return null;
-      const birth = new Date(dob);
-      let age = asOfDate.getFullYear() - birth.getFullYear();
-      const m = asOfDate.getMonth() - birth.getMonth();
-      if (m < 0 || (m === 0 && asOfDate.getDate() < birth.getDate())) age--;
+      const birth = new Date(String(dob).slice(0, 10) + "T00:00:00Z");
+      let age = asOfDate.getUTCFullYear() - birth.getUTCFullYear();
+      const m = asOfDate.getUTCMonth() - birth.getUTCMonth();
+      if (m < 0 || (m === 0 && asOfDate.getUTCDate() < birth.getUTCDate())) age--;
       return age;
     }
 
@@ -3370,6 +3366,8 @@ export class DatabaseStorage implements IStorage {
         totalMonthlyPayable,
         totalPayableIncludingAdvance,
         policyCount: rows.length,
+        /** No product version in the book has underwriter rates — nothing is underwritten. */
+        noRatesConfigured: baseRows.every((r) => r.underwriterAmountAdult == null && r.underwriterAmountChild == null),
         byCurrency,
       },
     };
