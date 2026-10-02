@@ -15248,7 +15248,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
-    return res.json(await storage.getLapseAnalysisReport(user.organizationId, from, to));
+    // From the status history: monthly lapse rate on in-force at the start of the month, grace
+    // saves, lapses by duration and agent, and a call list (server/lapse-analysis.ts).
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const { buildLapseAnalysis } = await import("./lapse-analysis");
+    return res.json(await buildLapseAnalysis(user.organizationId, { fromDate: from, toDate: to, branchId: filters.branchId, agentId: filters.agentId }));
   });
 
   app.get("/api/reports/member-movement", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -16530,12 +16534,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "lapse-analysis": {
           const orgToday = await todayForOrg(user.organizationId);
-          const la = await storage.getLapseAnalysisReport(user.organizationId, reportFilters.fromDate || `${orgToday.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday);
-          headers = ["Month", "Lapses", "Reinstatements"];
-          rows = la.months.map((m) => [m.month, m.lapses, m.reinstatements]);
-          rows.push(["TOTAL", la.totalLapses, la.totalReinstatements]);
-          rows.push(["", "", ""]);
-          rows.push([`In force now: ${la.inForceNow}`, `Approx. period lapse rate: ${la.approxLapseRate}%`, ""]);
+          const { buildLapseAnalysis } = await import("./lapse-analysis");
+          const la = await buildLapseAnalysis(user.organizationId, { fromDate: reportFilters.fromDate || `${orgToday.slice(0, 4)}-01-01`, toDate: reportFilters.toDate || orgToday, branchId: reportFilters.branchId, agentId: reportFilters.agentId });
+          headers = ["Section", "Month / Policy", "In Force at Start", "Into Grace", "Paid Their Way Back", "Lapsed", "Reinstated", "Lapse Rate %"];
+          rows = la.months.map((m) => ["By month", m.month, m.inForceAtStart, m.intoGrace, m.recovered, m.lapsed, m.reinstated, m.lapseRatePct ?? ""]);
+          rows.push(["Totals", "", "", la.totals.intoGrace, la.totals.recovered, la.totals.lapsed, la.totals.reinstated, `grace save ${la.graceSavePct ?? "—"}%`]);
+          rows.push(["", "", "", "", "", "", "", ""]);
+          for (const d of la.byDuration) rows.push(["Lapsed by cover length", d.duration, "", "", "", `new sales ${d.newSales} · typed in ${d.typedIn}`, "", ""]);
+          for (const a of la.byAgent) rows.push(["Lapsed by agent", a.agent, "", "", "", `new sales ${a.newSales} · typed in ${a.typedIn}`, "", ""]);
+          rows.push(["", "", "", "", "", "", "", ""]);
+          for (const p of la.lapsedNow) rows.push(["Lapsed now", `${p.policyNumber} ${p.client} ${p.phone}`, `lapsed ${p.lapsedOn ?? ""}`, `paid up to ${p.paidUpTo ?? ""}`, `last paid ${p.lastPaymentDate ?? ""}`, p.agent, p.typedIn ? "typed in" : "new sale", ""]);
           break;
         }
         case "member-movement": {

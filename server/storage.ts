@@ -451,8 +451,6 @@ export interface IStorage {
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
   /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
   getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
-  /** Lapse & reinstatement analysis for a period, by month, from policy_status_history. */
-  getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }>;
   /** Member / dependant additions and removals over a period, from the audit trail. */
   getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]>;
   /** Active/grace policies whose inception anniversary falls within the next `withinDays` days. */
@@ -2542,34 +2540,6 @@ export class DatabaseStorage implements IStorage {
     return Array.from(map.values())
       .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
       .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
-  }
-
-  /**
-   * Lapse & reinstatement analysis for a period, by month, from policy_status_history. The
-   * period lapse rate is approximate: lapses in period / (currently active + grace + lapses in
-   * period) — the system has no point-in-time in-force count to use as a clean denominator.
-   */
-  async getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }> {
-    const tdb = await getDbForOrg(organizationId);
-    const rowsOf = (r: any): any[] => r.rows ?? r;
-    const fromTs = new Date(from + "T00:00:00.000Z");
-    const toTs = new Date(to + "T23:59:59.999Z");
-    const [monthRows, inForceRows] = await Promise.all([
-      tdb.execute(sql`
-        SELECT to_char(psh.created_at, 'YYYY-MM') AS month,
-               COUNT(*) FILTER (WHERE psh.to_status = 'lapsed') AS lapses,
-               COUNT(*) FILTER (WHERE psh.to_status = 'active' AND psh.from_status = 'lapsed') AS reinstatements
-        FROM policy_status_history psh JOIN policies p ON p.id = psh.policy_id
-        WHERE p.organization_id = ${organizationId} AND psh.created_at >= ${fromTs} AND psh.created_at <= ${toTs}
-        GROUP BY month ORDER BY month`),
-      tdb.execute(sql`SELECT COUNT(*) AS n FROM policies WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND status IN ('active','grace')`),
-    ]);
-    const months = rowsOf(monthRows).map((r: any) => ({ month: r.month, lapses: parseInt(r.lapses), reinstatements: parseInt(r.reinstatements) }));
-    const totalLapses = months.reduce((s, m) => s + m.lapses, 0);
-    const totalReinstatements = months.reduce((s, m) => s + m.reinstatements, 0);
-    const inForceNow = parseInt(rowsOf(inForceRows)[0]?.n ?? "0");
-    const denom = inForceNow + totalLapses;
-    return { months, totalLapses, totalReinstatements, inForceNow, approxLapseRate: denom > 0 ? Number(((totalLapses / denom) * 100).toFixed(1)) : 0 };
   }
 
   /**

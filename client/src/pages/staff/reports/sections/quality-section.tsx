@@ -11,7 +11,12 @@ type IntegrityIssue = { category: string; severity: "high" | "medium" | "low"; p
 type CollectionRow = { branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number };
 type PersistencyRow = { cohort: string; monthsSinceSale: number | null; sold: number; neverPaid: number; notTakenUpPct: number | null; startedPaying: number; inForce: number; lapsed: number; cancelled: number; persistencyPct: number | null };
 type PersistencyData = { cohorts: PersistencyRow[]; typedIn: PersistencyRow };
-type LapseAnalysis = { months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number };
+type LapseMonth = { month: string; inForceAtStart: number; intoGrace: number; recovered: number; lapsed: number; reinstated: number; lapseRatePct: number | null };
+type LapsedPolicy = { policyNumber: string; client: string; phone: string; agent: string; typedIn: boolean; product: string; currency: string; premium: string; lapsedOn: string | null; paidUpTo: string | null; lastPaymentDate: string | null; lastPaymentAmount: string | null };
+type LapseAnalysis = {
+  months: LapseMonth[]; totals: { lapsed: number; intoGrace: number; recovered: number; reinstated: number }; graceSavePct: number | null;
+  byDuration: { duration: string; newSales: number; typedIn: number }[]; byAgent: { agent: string; newSales: number; typedIn: number }[]; lapsedNow: LapsedPolicy[];
+};
 type MovementRow = { date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string };
 type AnnivRow = { policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number };
 
@@ -72,10 +77,24 @@ const annivColumns: EdtColumn<AnnivRow>[] = [
   { id: "days", header: "Days until", align: "right", accessor: (r) => r.daysUntil, cell: (r) => <span className={`tabular-nums ${r.daysUntil <= 14 ? "text-amber-600 font-semibold" : ""}`}>{r.daysUntil}</span> },
 ];
 
-const lapseColumns: EdtColumn<{ month: string; lapses: number; reinstatements: number }>[] = [
-  { id: "month", header: "Month", accessor: (r) => r.month, cell: (r) => <span className="font-mono text-sm">{r.month}</span> },
-  { id: "lapses", header: "Lapses", align: "right", accessor: (r) => r.lapses, cell: (r) => <span className="tabular-nums text-destructive">{r.lapses}</span> },
-  { id: "reinstatements", header: "Reinstatements", align: "right", accessor: (r) => r.reinstatements, cell: (r) => <span className="tabular-nums text-emerald-600">{r.reinstatements}</span> },
+const lapseColumns: EdtColumn<LapseMonth>[] = [
+  { id: "month", header: "Month", accessor: (r) => r.month, cell: (r) => <span className="text-sm whitespace-nowrap">{new Date(r.month + "-01T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" })}</span> },
+  { id: "inForce", header: "In force at start", align: "right", accessor: (r) => r.inForceAtStart, cell: (r) => <span className="tabular-nums">{r.inForceAtStart}</span> },
+  { id: "grace", header: "Into grace", align: "right", accessor: (r) => r.intoGrace, cell: (r) => <span className="tabular-nums text-amber-600">{r.intoGrace}</span> },
+  { id: "recovered", header: "Paid their way back", align: "right", accessor: (r) => r.recovered, cell: (r) => <span className="tabular-nums text-emerald-600">{r.recovered}</span> },
+  { id: "lapsed", header: "Lapsed", align: "right", accessor: (r) => r.lapsed, cell: (r) => <span className="tabular-nums text-destructive">{r.lapsed}</span> },
+  { id: "reinstated", header: "Reinstated", align: "right", accessor: (r) => r.reinstated, cell: (r) => <span className="tabular-nums text-emerald-600">{r.reinstated}</span> },
+  { id: "rate", header: "Lapse rate", align: "right", accessor: (r) => r.lapseRatePct ?? -1, cell: (r) => r.lapseRatePct == null ? <span className="text-muted-foreground">—</span> : <span className={`tabular-nums font-semibold ${r.lapseRatePct > 5 ? "text-destructive" : r.lapseRatePct > 2 ? "text-amber-600" : "text-emerald-600"}`}>{r.lapseRatePct}%</span> },
+];
+const lapsedNowColumns: EdtColumn<LapsedPolicy>[] = [
+  { id: "policy", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "client", header: "Client", accessor: (r) => r.client, cell: (r) => <span className="whitespace-nowrap">{r.client}</span> },
+  { id: "phone", header: "Phone", accessor: (r) => r.phone },
+  { id: "lapsedOn", header: "Lapsed on", accessor: (r) => r.lapsedOn ?? "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.lapsedOn ? new Date(r.lapsedOn + "T00:00:00").toLocaleDateString() : "—"}</span> },
+  { id: "paidUpTo", header: "Paid up to", accessor: (r) => r.paidUpTo ?? "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.paidUpTo ? new Date(r.paidUpTo + "T00:00:00").toLocaleDateString() : "—"}</span> },
+  { id: "last", header: "Last payment", accessor: (r) => r.lastPaymentDate ?? "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.lastPaymentDate ? `${new Date(r.lastPaymentDate + "T00:00:00").toLocaleDateString()} · ${r.currency} ${r.lastPaymentAmount}` : "never"}</span> },
+  { id: "premium", header: "Premium", align: "right", accessor: (r) => Number(r.premium), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {r.premium}</span> },
+  { id: "agent", header: "Agent", accessor: (r) => r.agent, cell: (r) => <span className="whitespace-nowrap text-sm">{r.agent}{r.typedIn && <span className="block text-[10px] text-muted-foreground">typed in</span>}</span> },
 ];
 
 export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBaseProps) {
@@ -159,8 +178,8 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
 
       <TabsContent value="lapse-analysis">
         <CardSection
-          title="Lapse & reinstatement analysis"
-          description="Policies that lapsed and were reinstated in the selected period, by month, from the status history. The period lapse rate is approximate — lapses ÷ (in-force now + lapses in period); the system keeps no point-in-time in-force count for a clean denominator."
+          title="Lapse analysis"
+          description="From the status history, by month: policies in force at the start of the month, how many went into grace and how many paid their way back, how many lapsed (policies, not events) and were reinstated. Lapse rate = lapsed ÷ in force at the start of the month. Below: when in their cover policies lapse, by agent, and who is lapsed now to call."
           icon={RotateCcw}
           headerRight={<ExportButton reportType="lapse-analysis" filters={filters} />}
           flush
@@ -172,12 +191,28 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
           ) : (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4">
-                <KpiStatCard label="Lapses" value={<span className="text-destructive">{lapse.totalLapses}</span>} icon={RotateCcw} />
-                <KpiStatCard label="Reinstatements" value={<span className="text-emerald-600">{lapse.totalReinstatements}</span>} icon={RotateCcw} />
-                <KpiStatCard label="In force now" value={lapse.inForceNow} icon={Activity} />
-                <KpiStatCard label="Approx. lapse rate" value={<span className={rateColor(100 - lapse.approxLapseRate)}>{lapse.approxLapseRate}%</span>} icon={TrendingUp} />
+                <KpiStatCard label="Lapsed (policies)" value={<span className="text-destructive">{lapse.totals.lapsed}</span>} icon={RotateCcw} />
+                <KpiStatCard label="Grace save rate" value={lapse.graceSavePct == null ? "—" : <span className={rateColor(lapse.graceSavePct)}>{lapse.graceSavePct}%</span>} icon={TrendingUp} />
+                <KpiStatCard label="Reinstated" value={<span className="text-emerald-600">{lapse.totals.reinstated}</span>} icon={RotateCcw} />
+                <KpiStatCard label="Lapsed now (call list)" value={lapse.lapsedNow.length} icon={Activity} />
               </div>
-              <EnhancedDataTable columns={lapseColumns} rows={lapse.months.map((r, i) => ({ ...r, _k: i }))} getRowKey={(r: any) => String(r._k)} exportFilename="lapse-analysis" storageKey="reports-lapse-analysis" emptyMessage="No months." />
+              <EnhancedDataTable columns={lapseColumns} rows={lapse.months} getRowKey={(r) => r.month} exportFilename="lapse-analysis" storageKey="reports-lapse-analysis-v2" emptyMessage="No months." />
+              {(lapse.byDuration.length > 0 || lapse.byAgent.length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
+                  <div>
+                    <p className="text-sm font-semibold mb-1">When in their cover they lapsed</p>
+                    <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground"><tr><th className="text-left py-1">Cover had run</th><th className="text-right">New sales</th><th className="text-right">Typed in</th></tr></thead>
+                      <tbody>{lapse.byDuration.map((d) => <tr key={d.duration} className="border-t"><td className="py-1">{d.duration}</td><td className="text-right tabular-nums">{d.newSales}</td><td className="text-right tabular-nums text-muted-foreground">{d.typedIn}</td></tr>)}</tbody></table>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">By agent</p>
+                    <table className="w-full text-sm"><thead className="text-xs uppercase text-muted-foreground"><tr><th className="text-left py-1">Agent</th><th className="text-right">New sales</th><th className="text-right">Typed in</th></tr></thead>
+                      <tbody>{lapse.byAgent.map((x) => <tr key={x.agent} className="border-t"><td className="py-1">{x.agent}</td><td className="text-right tabular-nums">{x.newSales}</td><td className="text-right tabular-nums text-muted-foreground">{x.typedIn}</td></tr>)}</tbody></table>
+                  </div>
+                </div>
+              )}
+              <div className="px-4 pt-2 text-xs font-semibold uppercase text-muted-foreground">Lapsed now — call to reinstate</div>
+              <EnhancedDataTable columns={lapsedNowColumns} rows={lapse.lapsedNow} getRowKey={(r) => r.policyNumber} exportFilename="lapsed-call-list" storageKey="reports-lapsed-now" emptyMessage="No policies are lapsed right now." />
             </>
           )}
         </CardSection>

@@ -10,6 +10,35 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Lapse analysis: guessed lapse rate, counted events not policies, ignored grace
+
+- **Symptom:** the Lapse analysis showed an "approximate" 7.5% lapse rate, with in-force *today*
+  as the denominator.
+  - It counted 47 lapse events, but there were really 35 policies; some lapsed, were reinstated
+    and lapsed again.
+  - It said nothing about grace: 170 policies went into grace and 100 paid their way back.
+  - There was no who or when, and months were computed in UTC.
+- **Root cause:** `getLapseAnalysisReport` assumed there was no point-in-time in-force count.
+  But `policy_status_history` records every change, so status at any date can be
+  reconstructed.
+- **Fix:** new `server/lapse-analysis.ts`:
+  - `statusAt` rebuilds each policy's status at the start of each month.
+  - Monthly: in force at start, into grace, paid back, lapsed (distinct policies), reinstated,
+    and lapse rate = lapsed ÷ in force at the start.
+  - Grace save rate, lapses by cover duration and by agent (new sales vs typed in), and a call
+    list of policies lapsed now (lapse date, paid up to, last payment, phone, agent).
+  - Route, export and tab rewritten, and the old query was removed.
+- **Verified on Falakhe, June–2 Oct:**
+  - September 28 lapsed of 422 in force at the start = 6.6%.
+  - 35 policies lapsed, grace save rate 58.8% (100 of 170), all lapses within 6 months of cover.
+  - 27 lapsed now.
+  - Tests in `tests/unit/lapse-analysis.test.ts`.
+- **Lesson for next time:** before calling a metric "approximate", check whether a history table
+  lets you reconstruct the exact figure. Count distinct entities, not events, when an entity can
+  repeat the transition.
+
+---
+
 ## 2026-10-02 — Persistency hid never-paid sales and counted typed-in policies as new business
 
 - **Symptom:** Book Health → Persistency showed Falakhe's cohorts at 86–99%.
