@@ -57,6 +57,7 @@ export const SYSTEM_PERMISSIONS = [
   { name: "approve:finance", description: "Approve financial actions (maker-checker)", category: "finance" },
   { name: "delete:payment", description: "Delete payment transactions", category: "finance" },
   { name: "delete:receipt", description: "Delete payment receipts", category: "finance" },
+  { name: "create:requisition", description: "Raise requisitions (ask for money to be spent) and submit them; approving and paying stay with finance", category: "finance" },
   { name: "delete:requisition", description: "Permanently delete requisitions (and any linked disbursement)", category: "finance" },
   { name: "delete:expenditure", description: "Permanently delete expenditures (and any linked disbursement)", category: "finance" },
   { name: "edit:payment", description: "Edit payment transactions", category: "finance" },
@@ -140,6 +141,9 @@ export const ROLE_PERMISSION_MAP: Record<string, string[]> = {
     // Edits members, products and premiums on policies (Augustus, 2026-09-30). An off-premium
     // receipt still waits for a finance_manager (approve:finance) before it counts.
     "edit:premium",
+    // Raises and submits their own requisitions (Augustus, 2026-10-02); approving and paying
+    // them stays with finance (approve:finance / write:finance).
+    "create:requisition",
   ],
 
   // The money powers: corrections, backdating, premium overrides, posting, approvals, payroll,

@@ -57,6 +57,8 @@ export function useFinancePermissions() {
   const canWriteFinance = permissions.includes("write:finance");
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;
   const canDeleteRequisition = permissions.includes("delete:requisition") || (authUser as any)?.isPlatformOwner;
+  // Raise and submit requisitions — finance staff, or anyone given create:requisition (administrators).
+  const canCreateRequisition = canWriteFinance || permissions.includes("create:requisition") || !!(authUser as any)?.isPlatformOwner;
   const canBackdatePayment = permissions.includes("backdate:payment") || (authUser as any)?.isPlatformOwner;
   const canEditPayment = permissions.includes("edit:payment") || (authUser as any)?.isPlatformOwner;
   const canDeleteExpenditure = permissions.includes("delete:expenditure") || (authUser as any)?.isPlatformOwner;
@@ -132,7 +134,7 @@ export function useFinancePermissions() {
 
   return {
     roles, permissions, authUser, isAgent,
-    canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
+    canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition, canCreateRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
     canReceipt, canReceiptCash, canReceiptTransfer, commissionOnly, canManageSettings,
     pendingApprovalsCount,

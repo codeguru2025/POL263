@@ -10033,7 +10033,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }));
   });
 
-  app.post("/api/requisitions", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.post("/api/requisitions", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "create:requisition"), async (req, res) => {
     const user = req.user as any;
     const requisitionNumber = await storage.generateRequisitionNumber(user.organizationId);
     const submit = req.body.submit === true || req.body.status === "submitted";
@@ -10109,7 +10109,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json({ ...created, items: savedItems });
   });
 
-  app.patch("/api/requisitions/:id", requireAuth, requireTenantScope, requirePermission("write:finance"), async (req, res) => {
+  app.patch("/api/requisitions/:id", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "create:requisition"), async (req, res) => {
     const user = req.user as any;
     const existing = await storage.getRequisition(req.params.id as string, user.organizationId);
     if (!existing) return res.status(404).json({ message: "Requisition not found" });
@@ -10130,6 +10130,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // see the matching comment in POST /api/requisitions/:id/payments for why that's the line
     // that matters, not "did they raise it."
     const isSelfRequisition = existing.requestedBy === effectiveUserId && !user.isPlatformOwner;
+    // Someone who may only raise requisitions (create:requisition, no write:finance) works on
+    // their own drafts: edit and submit. Approving, paying and corrections are finance's.
+    if (!user.isPlatformOwner && !effPerms.includes("write:finance")) {
+      if (existing.requestedBy !== effectiveUserId) return res.status(403).json({ message: "You can only change requisitions you raised." });
+      if (action && action !== "submit") return res.status(403).json({ message: "Approving, paying and correcting requisitions is done by finance." });
+    }
     if ((action === "approve" || action === "reject") && isSelfRequisition) {
       return res.status(403).json({ message: "You cannot approve or reject a requisition you raised yourself." });
     }

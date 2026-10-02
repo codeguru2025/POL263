@@ -41,7 +41,7 @@ export default function StaffFinance() {
 
   const {
     authUser, isAgent,
-    canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
+    canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition, canCreateRequisition,
     canBackdatePayment, canEditPayment, canDeleteExpenditure, canReadCommission,
     canReceipt, canReceiptCash, canReceiptTransfer, commissionOnly, canManageSettings,
     pendingApprovalsCount,
@@ -400,6 +400,7 @@ export default function StaffFinance() {
                   canWriteFinance={canWriteFinance}
                   canApproveFinance={canApproveFinance}
                   canDeleteRequisition={canDeleteRequisition}
+                  canCreateRequisition={canCreateRequisition}
                   canBackdatePayment={canBackdatePayment}
                   canEditPayment={canEditPayment}
                   staffUsers={payDialog.staffUsers}

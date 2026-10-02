@@ -21,6 +21,12 @@ describe("role templates", () => {
     }
   });
 
+  it("administrator raises requisitions but approving and paying stay with finance", () => {
+    expect(ROLE_PERMISSION_MAP.administrator).toContain("create:requisition");
+    expect(SYSTEM_PERMISSIONS.map((x) => x.name)).toContain("create:requisition");
+    for (const p of ["write:finance", "approve:finance"]) expect(ROLE_PERMISSION_MAP.administrator, p).not.toContain(p);
+  });
+
   it("finance_manager holds every money power", () => {
     for (const p of [...MONEY_POWERS, "edit:premium"]) expect(ROLE_PERMISSION_MAP.finance_manager, p).toContain(p);
   });

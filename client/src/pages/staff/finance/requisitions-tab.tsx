@@ -28,6 +28,8 @@ interface RequisitionsTabProps {
   canWriteFinance: boolean;
   canApproveFinance: boolean;
   canDeleteRequisition: boolean;
+  /** Raise and submit requisitions (write:finance or create:requisition). */
+  canCreateRequisition: boolean;
   canBackdatePayment: boolean;
   canEditPayment: boolean;
   staffUsers: any[];
@@ -35,7 +37,7 @@ interface RequisitionsTabProps {
 }
 
 export function RequisitionsTab({
-  authUser, canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition,
+  authUser, canReadFinance, canWriteFinance, canApproveFinance, canDeleteRequisition, canCreateRequisition,
   canBackdatePayment, canEditPayment, staffUsers, openPayDialog,
 }: RequisitionsTabProps) {
   const { toast } = useToast();
@@ -153,7 +155,7 @@ export function RequisitionsTab({
   });
 
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
-  const { data: funeralCasesForLinking = [] } = useQuery<any[]>({ queryKey: ["/api/funeral-cases"], enabled: canWriteFinance });
+  const { data: funeralCasesForLinking = [] } = useQuery<any[]>({ queryKey: ["/api/funeral-cases"], enabled: canCreateRequisition });
   const funeralCaseOptions: SearchableOption[] = (funeralCasesForLinking as any[])
     .map((c: any) => ({ value: c.id, label: `${c.caseNumber} — ${c.deceasedName}`, hint: c.status || undefined }));
 
@@ -165,7 +167,7 @@ export function RequisitionsTab({
         description="Raise an expenditure request, route it for approval, then mark it paid. Paid requisitions appear as expenses on the income statement."
         icon={FileText}
         flush
-        headerRight={canWriteFinance ? (
+        headerRight={canCreateRequisition ? (
           <Button size="sm" onClick={() => setShowRequisitionDialog(true)} data-testid="button-new-requisition">
             <Plus className="h-4 w-4 mr-2" />New Requisition
           </Button>
@@ -249,7 +251,7 @@ export function RequisitionsTab({
                   <TableCell className="pt-3"><StatusBadge status={r.status} /></TableCell>
                   <TableCell className="text-right pt-3" onClick={(e) => e.stopPropagation()}>
                     <div className="flex justify-end gap-1.5 flex-wrap">
-                      {r.status === "draft" && canWriteFinance && (
+                      {r.status === "draft" && canCreateRequisition && (
                         <Button size="sm" variant="outline" onClick={() => requisitionActionMutation.mutate({ id: r.id, action: "submit" })} data-testid={`btn-submit-req-${r.id}`}>Submit</Button>
                       )}
                       {r.status === "submitted" && canApproveFinance && (
