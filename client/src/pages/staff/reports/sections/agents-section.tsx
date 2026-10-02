@@ -15,25 +15,35 @@ interface AgentsSectionProps extends ReportSectionBaseProps {
   canReadCommission: boolean;
 }
 
+const fmtDay = (d?: string | null) => (d ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString() : "—");
+const byCur = (m: Record<string, string> | undefined) =>
+  Object.entries(m ?? {}).filter(([, v]) => Number(v) !== 0).map(([c, v]) => `${c} ${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") || "—";
+
+const agentSummaryColumns: EdtColumn<any>[] = [
+  { id: "agent", header: "Agent", accessor: (a) => a.agent, cell: (a) => <span className="text-sm whitespace-nowrap">{a.agent}</span> },
+  { id: "active", header: "Active", align: "right", accessor: (a) => a.active },
+  { id: "grace", header: "Grace", align: "right", accessor: (a) => a.grace },
+  { id: "lapsed", header: "Lapsed", align: "right", accessor: (a) => a.lapsed },
+  { id: "neverPaid", header: "Never paid", align: "right", accessor: (a) => a.neverPaid, cell: (a) => <span className="tabular-nums text-muted-foreground">{a.neverPaid}</span> },
+  { id: "premium", header: "Monthly premium in force", align: "right", accessor: (a) => Object.values(a.monthlyPremiumInForce ?? {}).reduce((s: number, v: any) => s + Number(v), 0), cell: (a) => <span className="tabular-nums whitespace-nowrap">{byCur(a.monthlyPremiumInForce)}</span> },
+  { id: "behind", header: "Behind on payment", align: "right", accessor: (a) => a.behind, cell: (a) => <span className={`tabular-nums ${a.behind ? "text-rose-700 font-medium" : ""}`}>{a.behind}</span> },
+];
+
 const agentPortfolioColumns: EdtColumn<any>[] = [
-  { id: "agent", header: "Agent", accessor: (p) => p.AgentsName || "Walk-in", cell: (p) => <span className="text-sm whitespace-nowrap">{p.AgentsName || "Walk-in"}</span> },
-  { id: "policyNumber", header: "Policy #", accessor: (p) => p.Policy_Number || "", cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.Policy_Number || "—"}</span> },
-  { id: "status", header: "Status", accessor: (p) => p.currstatus, cell: (p) => <StatusBadge status={p.currstatus} variant="policy" /> },
-  { id: "firstName", header: "First Name", accessor: (p) => (p.fullname ?? "").split(" ")[0] || "", cell: (p) => <span className="whitespace-nowrap">{(p.fullname ?? "").split(" ")[0] || "—"}</span> },
-  { id: "lastName", header: "Last Name", accessor: (p) => (p.fullname ?? "").split(" ").slice(1).join(" ") || "", cell: (p) => <span className="whitespace-nowrap">{(p.fullname ?? "").split(" ").slice(1).join(" ") || "—"}</span> },
-  { id: "nationalId", header: "National ID", accessor: (p) => p.ID_Number || "", cell: (p) => <span className="font-mono text-sm">{p.ID_Number || "—"}</span> },
-  { id: "phone", header: "Phone", accessor: (p) => p.Cell_Number || "" },
-  { id: "product", header: "Product", accessor: (p) => p.ProductName || "" },
-  { id: "branch", header: "Branch", accessor: (p) => p.BranchName || "" },
-  { id: "premium", header: "Premium", accessor: (p) => p.UsualPremium || "", cell: (p) => <span className="tabular-nums whitespace-nowrap">{p.UsualPremium || "—"}</span> },
-  {
-    id: "effectiveDate",
-    header: "Effective Date",
-    accessor: (p) => p.Inception_Date ? new Date(p.Inception_Date) : "",
-    cell: (p) => <span className="text-sm whitespace-nowrap">{p.Inception_Date ? new Date(p.Inception_Date).toLocaleDateString() : "—"}</span>,
-  },
-  { id: "callOutcome", header: "Call Outcome", sortable: false, headClassName: "text-muted-foreground italic", cell: () => <span className="text-muted-foreground text-xs italic border-l">____________</span> },
-  { id: "nextEngagement", header: "Next Engagement", sortable: false, headClassName: "text-muted-foreground italic", cell: () => <span className="text-muted-foreground text-xs italic border-l">____________</span> },
+  { id: "agent", header: "Agent", accessor: (p) => p.agent, cell: (p) => <span className="text-sm whitespace-nowrap">{p.agent}</span> },
+  { id: "policyNumber", header: "Policy #", accessor: (p) => p.policyNumber, cell: (p) => <span className="font-mono text-sm whitespace-nowrap">{p.policyNumber || "—"}</span> },
+  { id: "status", header: "Status", accessor: (p) => p.status, cell: (p) => <StatusBadge status={p.status} variant="policy" /> },
+  { id: "firstName", header: "First name", accessor: (p) => p.firstName, cell: (p) => <span className="whitespace-nowrap">{p.firstName || "—"}</span> },
+  { id: "lastName", header: "Last name", accessor: (p) => p.lastName, cell: (p) => <span className="whitespace-nowrap">{p.lastName || "—"}</span> },
+  { id: "phone", header: "Phone", accessor: (p) => p.phone },
+  { id: "product", header: "Product", accessor: (p) => p.product },
+  { id: "premium", header: "Premium", align: "right", accessor: (p) => Number(p.premium), cell: (p) => <span className="tabular-nums whitespace-nowrap">{p.currency} {p.premium}</span> },
+  { id: "paidUpTo", header: "Paid up to", accessor: (p) => p.paidUpTo ?? "", cell: (p) => <span className="text-sm whitespace-nowrap">{fmtDay(p.paidUpTo)}</span> },
+  { id: "behind", header: "Behind", align: "right", accessor: (p) => p.periodsBehind, cell: (p) => p.periodsBehind ? <span className="tabular-nums text-rose-700 whitespace-nowrap">{p.periodsBehind} ({p.currency} {p.amountBehind})</span> : <span className="text-muted-foreground">—</span> },
+  { id: "lastPayment", header: "Last payment", accessor: (p) => p.lastPaymentDate ?? "", cell: (p) => <span className="text-sm whitespace-nowrap">{p.lastPaymentDate ? `${fmtDay(p.lastPaymentDate)} · ${p.lastPaymentCurrency ?? p.currency} ${p.lastPaymentAmount}` : "—"}</span> },
+  { id: "group", header: "Group", accessor: (p) => p.group },
+  { id: "branch", header: "Branch", accessor: (p) => p.branch },
+  { id: "effectiveDate", header: "Effective date", accessor: (p) => p.inceptionDate ?? "", cell: (p) => <span className="text-sm whitespace-nowrap">{fmtDay(p.inceptionDate)}</span> },
 ];
 
 const agentProductivityColumns: EdtColumn<any>[] = [
@@ -137,11 +147,11 @@ const commissionPaymentsColumns: EdtColumn<any>[] = [
 ];
 
 export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate, toDate, agentId, canReadCommission }: AgentsSectionProps) {
-  const { data: agentPortfolio = [], isLoading: loadingAgentPortfolio } = useQuery<any[]>({
+  const { data: agentPortfolio, isLoading: loadingAgentPortfolio } = useQuery<{ agents: any[]; policies: any[]; asOf: string }>({
     queryKey: ["reports", "agent-portfolio", runKey, ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/agent-portfolio?limit=2000" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
+      const res = await fetch(getApiBase() + "/api/reports/agent-portfolio" + q, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load the agent portfolio");
       return res.json();
     },
     enabled: need("agentPortfolio"),
@@ -188,7 +198,7 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
       <TabsContent value="agent-portfolio">
         <CardSection
           title="Agent portfolio"
-          description="All policies assigned to each agent. Filter by agent or status. Export as PDF for printing or CSV for Excel — both include Call Outcome and Next Engagement Date columns for client follow-up."
+          description="Each agent's book at a glance, then every policy as a call list — most behind on payment first. A society's agent owns the society's policies. The PDF and CSV call sheets add blank Call Outcome and Next Engagement columns for follow-up."
           icon={UserCircle}
           headerRight={
             <div className="flex gap-2">
@@ -214,14 +224,26 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
           {loadingAgentPortfolio ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (
+            <>
+            <div className="px-4 pt-3 text-xs font-semibold uppercase text-muted-foreground">By agent</div>
+            <EnhancedDataTable
+              columns={agentSummaryColumns}
+              rows={agentPortfolio?.agents ?? []}
+              getRowKey={(a) => a.agent}
+              exportFilename="agent-portfolio-summary"
+              storageKey="reports-agent-portfolio-summary"
+              emptyMessage="No policies found."
+            />
+            <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Policies — most behind first</div>
             <EnhancedDataTable
               columns={agentPortfolioColumns}
-              rows={agentPortfolio}
-              getRowKey={(p) => p.Policy_Number || `${p.AgentsName}-${p.ID_Number}-${p.Inception_Date}`}
+              rows={agentPortfolio?.policies ?? []}
+              getRowKey={(p) => p.policyNumber || `${p.agent}-${p.nationalId}-${p.inceptionDate}`}
               exportFilename="agent-portfolio"
-              storageKey="reports-agent-portfolio"
+              storageKey="reports-agent-portfolio-v2"
               emptyMessage="No policies found. Adjust filters and click Run report."
             />
+            </>
           )}
         </CardSection>
       </TabsContent>

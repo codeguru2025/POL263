@@ -10,6 +10,37 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Agent portfolio: premium with no currency, names split wrongly, no view of who's behind
+
+- **Symptom:** Reports → Agents → Agent portfolio listed 820 policies flat.
+  - The premium showed no currency, though USD and ZAR are mixed.
+  - First and last names came from splitting `fullname` on the first space, so
+    multi-word first names broke.
+  - It had no per-agent totals and nothing on whether clients were paying.
+  - All 532 policies with no agent sat under one "Walk-in" label. 451 of those are existing
+    policies typed in, not walk-in sales.
+- **Root cause:** the tab rendered `getAllPoliciesReportByOrg`'s Easipol-format export columns
+  (`UsualPremium`, `fullname`, `AgentsName`). It used neither the structured fields (`currency`,
+  `clientFirstName`/`clientLastName`, `paidUpTo`, `lastPayment*`) nor `isLegacy`.
+- **Fix:**
+  - New `server/agent-portfolio.ts`: `buildAgentPortfolio` and `summarizePortfolio`. One line per
+    agent: active, grace, lapsed, never paid, monthly premium in force per currency, and how many
+    are behind. "Months behind" uses the same paid-up-to rule as the Finance report
+    (`paymentPosition`).
+  - Policies with no agent split into "existing policies typed in" vs "new walk-ins". The policy
+    list sorts most-behind first.
+  - The route, the CSV call sheet and `agents-section.tsx` all use it.
+- **Verified on Falakhe:**
+  - Pesuate Mhlanga: 14 active, 53 never paid, USD 162/month in force, 4 behind.
+  - No agent: 451 typed in, 81 walk-ins.
+  - FLK00401 (lapsed) shows 2 behind, USD 24.
+  - Tests in `tests/unit/agent-portfolio.test.ts`.
+- **Lesson for next time:** columns named for a legacy export format (`UsualPremium`,
+  `fullname`) are lossy. On-screen reports should use the structured fields and attach the
+  currency to every amount.
+
+---
+
 ## 2026-10-02 — Monthly income series counted commission and POL263 payouts; budget compared part-months with whole-month targets
 
 - **Symptom:**

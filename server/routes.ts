@@ -15031,9 +15031,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/agent-portfolio", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 2000, REPORT_EXPORT_MAX_ROWS);
-    const offset = parseInt(String(req.query.offset)) || 0;
-    return res.json(await storage.getAllPoliciesReportByOrg(user.organizationId, limit, offset, filters));
+    // Each agent's book at a glance + every policy as a call list (server/agent-portfolio.ts).
+    const { buildAgentPortfolio } = await import("./agent-portfolio");
+    return res.json(await buildAgentPortfolio(user.organizationId, filters, REPORT_EXPORT_MAX_ROWS));
   });
 
   app.get("/api/reports/commission-statement/pdf", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
@@ -15993,41 +15993,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "agent-portfolio": {
-          const portfolio = await storage.getAllPoliciesReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = [
-            "Agent",
-            "Policy_Number",
-            "Status",
-            "First_Name",
-            "Last_Name",
-            "National_ID",
-            "Phone",
-            "Product",
-            "Branch",
-            "Premium",
-            "Currency",
-            "Effective_Date",
-            "Capture_Date",
-            "Call_Outcome",
-            "Next_Engagement_Date",
-          ];
+          // Call sheet: one row per policy, most behind first within each agent (server/agent-portfolio.ts).
+          const { buildAgentPortfolio } = await import("./agent-portfolio");
+          const ap = await buildAgentPortfolio(user.organizationId, reportFilters, REPORT_EXPORT_MAX_ROWS);
+          headers = ["Agent", "Policy_Number", "Status", "First_Name", "Last_Name", "National_ID", "Phone", "Product", "Group", "Branch",
+            "Currency", "Premium", "Frequency", "Effective_Date", "Paid_Up_To", "Premiums_Behind", "Amount_Behind", "Last_Payment_Date", "Last_Payment",
+            "Call_Outcome", "Next_Engagement_Date"];
           currencyTotals = null;
-          rows = portfolio.map((r: any) => [
-            r.AgentsName ?? "",
-            r.Policy_Number ?? "",
-            r.currstatus ?? "",
-            (r.fullname ?? "").split(" ")[0] ?? "",
-            (r.fullname ?? "").split(" ").slice(1).join(" ") ?? "",
-            r.ID_Number ?? "",
-            r.Cell_Number ?? "",
-            r.ProductName ?? "",
-            r.BranchName ?? "",
-            r.UsualPremium ?? "",
-            r.Currency ?? "",
-            r.Inception_Date ?? "",
-            r.Date_Captured ?? "",
-            "",
-            "",
+          rows = ap.policies.map((p) => [
+            p.agent, p.policyNumber, p.status === "inactive" ? "never paid" : p.status, p.firstName, p.lastName, p.nationalId, p.phone, p.product, p.group, p.branch,
+            p.currency, p.premium, p.schedule, p.inceptionDate ?? "", p.paidUpTo ?? "", p.periodsBehind || "", p.periodsBehind ? p.amountBehind : "",
+            p.lastPaymentDate ?? "", p.lastPaymentAmount ? `${p.lastPaymentCurrency ?? p.currency} ${p.lastPaymentAmount}` : "", "", "",
           ]);
           break;
         }
