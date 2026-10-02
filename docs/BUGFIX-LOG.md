@@ -34,6 +34,11 @@ convention" note in `CLAUDE.md`.
 - **Verified:** every agent's September subtotal equals the Commissions statement's earned and
   clawed back to the cent. Only FLK00595 falls outside 50% / 10%: a 5-month payment spanning
   both tiers. Tests in `tests/unit/commission-by-payment.test.ts`.
+- **Follow-up, same day:** after the walk-in backfill (130 rows), the company line was USD 10.60
+  short of the statement. Commission on payments with no receipt was invisible here. The builder now
+  starts from the commission ledger (grouped per payment, receipt attached when there is one), and
+  receipts that earned nothing are added as information. The two reports now agree by construction
+  (company USD 228.70 + ZAR 366.50, September).
 - **Lesson for next time:** a per-transaction report and a balance report over the same ledger
   must include the same rows. Rows with no transaction (adjustments, clawbacks) are the ones
   that get dropped.
