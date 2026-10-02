@@ -1035,8 +1035,9 @@ export default function StaffDashboard() {
                   <Label htmlFor="new-tenant-databaseUrl">Dedicated Database URL (optional)</Label>
                   <Input
                     id="new-tenant-databaseUrl"
+                    name="dedicated-database-url"
                     type="password"
-                    autoComplete="off"
+                    autoComplete="new-password"
                     value={newTenant.databaseUrl}
                     onChange={(e) => setNewTenant((p) => ({ ...p, databaseUrl: e.target.value }))}
                     placeholder="postgresql://... (leave empty for shared database)"

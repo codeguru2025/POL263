@@ -16,6 +16,7 @@
  * registry DB read plus a separate write on the tenant pool before that transaction (or via
  * `ensureRegistryUserMirroredToOrgDataDbInTx` inside the callback when used).
  */
+import { isPostgresUrl } from "@shared/validation";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -101,6 +102,11 @@ function buildPoolConfig(connectionString: string, { forTenant = false } = {}): 
 }
 
 /** Get the pool for this tenant. Uses default pool if org has no database_url. */
+/** Each org's routing as last confirmed by the control plane (null = shared DB). Used when the
+ *  control plane can't be reached, instead of trusting organizations.database_url blindly. Not
+ *  evicted with the pool cache — it's tiny and only ever holds confirmed answers. */
+const lastKnownRouting = new Map<string, string | null>();
+
 export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
   const cached = poolCache.get(orgId);
   if (cached) {
@@ -124,6 +130,7 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
         .from(tenantDatabases)
         .where(eq(tenantDatabases.tenantId, orgId));
       url = row?.databaseUrl?.trim() || undefined;
+      lastKnownRouting.set(orgId, url ?? null);
     } catch (err: any) {
       // Control plane unreachable — fall back to shared DB lookup so the app
       // keeps working during a control plane outage or before migration runs.
@@ -135,15 +142,28 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
       // the process restarts or the pool cache evicts under LRU pressure.
       controlPlaneFailed = true;
       structuredLog("error", "Control plane lookup failed — using shared-DB fallback for this request only (not cached)", { orgId, error: err?.message });
-      try {
-        const { db } = await import("./db");
-        const [org] = await db
-          .select({ databaseUrl: organizations.databaseUrl })
-          .from(organizations)
-          .where(eq(organizations.id, orgId));
-        url = org?.databaseUrl?.trim() || undefined;
-      } catch (fallbackErr: any) {
-        structuredLog("error", "Shared-DB fallback lookup also failed", { orgId, error: fallbackErr?.message });
+      if (lastKnownRouting.has(orgId)) {
+        // Last answer the control plane gave — far safer than the registry copy below.
+        url = lastKnownRouting.get(orgId) ?? undefined;
+      } else {
+        try {
+          const { db } = await import("./db");
+          const [org] = await db
+            .select({ databaseUrl: organizations.databaseUrl })
+            .from(organizations)
+            .where(eq(organizations.id, orgId));
+          const fallback = org?.databaseUrl?.trim() || undefined;
+          if (fallback && !isPostgresUrl(fallback)) {
+            // Not a connection string (once a password autofilled into the field). Opening and
+            // caching a pool on it would fail every request for this org; better to fail this one.
+            structuredLog("error", "Shared-DB fallback database address is not a valid postgresql:// URL — refusing it", { orgId });
+            throw new Error("This organisation's database can't be reached right now. Please try again in a moment.");
+          }
+          url = fallback;
+        } catch (fallbackErr: any) {
+          if (/can't be reached right now/.test(fallbackErr?.message ?? "")) throw fallbackErr;
+          structuredLog("error", "Shared-DB fallback lookup also failed", { orgId, error: fallbackErr?.message });
+        }
       }
     }
     if (!url) {
@@ -176,6 +196,9 @@ export async function getPoolForOrg(orgId: string): Promise<pg.Pool> {
       structuredLog("warn", "Tenant DB auto-migration failed — pool still usable", { orgId, host: urlHost, error: err.message });
     }
 
+    // A pool opened from an unconfirmed fallback (control plane down, no last-known routing) isn't
+    // cached: the next request asks the control plane again.
+    if (controlPlaneFailed && !lastKnownRouting.has(orgId)) return tenantPool;
     poolCache.set(orgId, tenantPool);
     poolLastAccess.set(orgId, Date.now());
     return tenantPool;

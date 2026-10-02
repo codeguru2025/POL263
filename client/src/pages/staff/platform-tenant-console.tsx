@@ -767,12 +767,12 @@ function DatabaseTab({ tenantId, tenantName, database, onSaved }: { tenantId: st
         </div>
         <div className="space-y-2">
           <Label htmlFor="ptd-url">Database URL (pooler)</Label>
-          <Input id="ptd-url" type="password" autoComplete="off" value={databaseUrl} onChange={(e) => setDatabaseUrl(e.target.value)}
+          <Input id="ptd-url" type="password" autoComplete="new-password" value={databaseUrl} onChange={(e) => setDatabaseUrl(e.target.value)}
             placeholder={database.hasDatabaseUrl ? "•••••••••••• (leave blank to keep)" : "postgresql://... (leave empty for shared database)"} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="ptd-direct">Database Direct URL (migrations, optional)</Label>
-          <Input id="ptd-direct" type="password" autoComplete="off" value={databaseDirectUrl} onChange={(e) => setDatabaseDirectUrl(e.target.value)} />
+          <Input id="ptd-direct" type="password" autoComplete="new-password" value={databaseDirectUrl} onChange={(e) => setDatabaseDirectUrl(e.target.value)} />
         </div>
         <div className="space-y-2">
           <Label htmlFor="ptd-confirm">Type the tenant name (<span className="font-mono">{tenantName}</span>) to confirm</Label>
@@ -842,7 +842,7 @@ function StorageTab({ tenantId, storage, onSaved }: { tenantId: string; storage:
           </div>
           <div className="space-y-2">
             <Label htmlFor="pts-secret">Secret Access Key (optional)</Label>
-            <Input id="pts-secret" type="password" autoComplete="off" value={secretAccessKey} onChange={(e) => setSecretAccessKey(e.target.value)}
+            <Input id="pts-secret" type="password" autoComplete="new-password" value={secretAccessKey} onChange={(e) => setSecretAccessKey(e.target.value)}
               placeholder={storage.hasSecretAccessKey ? "Leave blank to keep existing" : "Stored encrypted, server-side only"} />
           </div>
         </div>

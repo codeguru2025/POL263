@@ -8,6 +8,7 @@
  * variant, since this is platform-owner-exclusive by design (see
  * docs — the "control plane" is metadata about tenants, not tenant data itself).
  */
+import { isPostgresUrl } from "../shared/validation";
 import type { Express } from "express";
 import multer from "multer";
 import path from "path";
@@ -569,6 +570,11 @@ export function registerPlatformRoutes(app: Express): void {
     const { databaseUrl, databaseDirectUrl, migrationState } = req.body;
     if (databaseUrl !== undefined && databaseUrl !== null && typeof databaseUrl !== "string") {
       return res.status(400).json({ message: "databaseUrl must be a string or null" });
+    }
+    for (const [label, v] of [["database address", databaseUrl], ["direct database address", databaseDirectUrl]] as const) {
+      if (typeof v === "string" && v.trim() && !isPostgresUrl(v)) {
+        return res.status(400).json({ message: `The ${label} must start with postgresql:// — check it wasn't filled in with a saved password.` });
+      }
     }
     const patch = {
       databaseUrl: databaseUrl || null,

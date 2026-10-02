@@ -85,7 +85,7 @@ import { cpDb } from "./control-plane-db";
 import { tenants as cpTenants, tenantBranding as cpTenantBranding, tenantDatabases as cpTenantDatabases } from "@shared/control-plane-schema";
 import { applyPolicyStatusForClearedPayment, advancePolicyCycle } from "./policy-status-on-payment";
 import { runApplyCreditBalances } from "./credit-apply";
-import { toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, normalizeEnabledCurrencies, DEFAULT_ENABLED_CURRENCIES, parsePositiveAmount, validatePasswordPolicy, NATIONAL_ID_FORMATS, NATIONAL_ID_FORMAT_KEYS, DEFAULT_NATIONAL_ID_FORMAT, isNationalIdFormatKey, nationalIdFormatHint, type NationalIdFormatKey } from "../shared/validation";
+import { isPostgresUrl, toUpperTrim, normalizeNationalId, isValidNationalId, normalizeCurrency, isSupportedCurrency, SUPPORTED_CURRENCIES, normalizeEnabledCurrencies, DEFAULT_ENABLED_CURRENCIES, parsePositiveAmount, validatePasswordPolicy, NATIONAL_ID_FORMATS, NATIONAL_ID_FORMAT_KEYS, DEFAULT_NATIONAL_ID_FORMAT, isNationalIdFormatKey, nationalIdFormatHint, type NationalIdFormatKey } from "../shared/validation";
 import { computeServiceCharge } from "../shared/pricing";
 import { checkAvailability } from "./scheduling-availability";
 import {
@@ -2420,6 +2420,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!isPlatformOwner) {
       delete orgData.isWhitelabeled;
       delete orgData.databaseUrl;
+    }
+    if (typeof orgData.databaseUrl === "string" && !orgData.databaseUrl.trim()) delete orgData.databaseUrl;
+    if (orgData.databaseUrl !== undefined && orgData.databaseUrl !== null && !isPostgresUrl(orgData.databaseUrl)) {
+      return res.status(400).json({ message: "The dedicated database address must start with postgresql:// — check it wasn't filled in with a saved password." });
     }
     if (adminEmail) {
       const adminPasswordPolicyError = validatePasswordPolicy(adminPassword);

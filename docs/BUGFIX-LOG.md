@@ -10,6 +10,39 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Falakhe's fallback database address was a password: a control-plane blip could take Falakhe down
+
+- **Symptom:** while running scripts, a control-plane timeout made `getPoolForOrg` fall back to
+  `organizations.database_url`. It opened a pool on host "base" and every query failed with
+  `getaddrinfo ENOTFOUND base`. Falakhe's stored fallback was the string `ncube2026`, which is not
+  a connection string.
+- **Root cause:**
+  - The platform owner's "create tenant" form has an admin password field and a
+    `type="password"` "Dedicated Database URL" field with `autoComplete="off"`, which browsers
+    ignore for password inputs. A saved password was most likely autofilled into the URL box.
+  - `POST /api/organizations` saved it unchecked.
+  - In `getPoolForOrg`, a fallback pool built from it was then **cached**, so in the live app one
+    control-plane blip during a cold start would have broken every Falakhe request until restart.
+- **Fix:**
+  - `isPostgresUrl` in `shared/validation.ts`. Tenant creation and
+    `PUT /api/platform/tenants/:id/database` reject anything that isn't a `postgresql://` URL.
+  - The database fields use `autoComplete="new-password"`.
+  - `server/tenant-db.ts`: a `lastKnownRouting` map records each org's control-plane answer and
+    is used first during an outage. An invalid registry fallback is refused with a clear,
+    retryable error. A pool opened from an unconfirmed fallback is not cached.
+  - `script/.tmp/sync-fallback-db-urls.ts` copies the control-plane address into the registry
+    fallback for dedicated tenants. Augustus runs it with --apply; only Falakhe needs it.
+- **Verified:** typecheck and tests (`tests/unit/postgres-url.test.ts`). The dry run shows
+  Falakhe's fallback "(not an address)" → `pol263-falakhe-…:25061`.
+- **Lesson for next time:**
+  - Never put a secret-ish URL in a `type="password"` box next to a real password field without
+    `autoComplete="new-password"`.
+  - Validate connection strings on the server.
+  - A fallback path must never cache what it couldn't confirm, and it should prefer the
+    last-known-good answer over a secondary copy (see feedback: fail-open to last-known-good).
+
+---
+
 ## 2026-10-02 — Commissions: nobody could see what agents are owed; referral fees left out of expenses
 
 - **Symptom:**

@@ -82,6 +82,19 @@ export function isSupportedCurrency(value: string | null | undefined): value is 
   return typeof value === "string" && (SUPPORTED_CURRENCIES as string[]).includes(value);
 }
 
+/** A PostgreSQL connection string (postgres:// or postgresql:// with a host). Guards the tenant
+ *  database fields: a browser once autofilled a saved password into one, and the app later tried to
+ *  connect to it (Falakhe's organizations.database_url was "ncube2026"). */
+export function isPostgresUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    const u = new URL(value.trim());
+    return (u.protocol === "postgres:" || u.protocol === "postgresql:") && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeCurrency(value: string | null | undefined): SupportedCurrency {
   if (!value) return "USD";
   const upper = value.trim().toUpperCase();
