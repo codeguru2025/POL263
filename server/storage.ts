@@ -2459,6 +2459,42 @@ export class DatabaseStorage implements IStorage {
     for (const r of rowsOf(txNoReceipt)) out.push({ category: "Payment with no receipt", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: `${r.currency} ${r.amount} payment on ${day(r.created_at)} has no receipt — the client has nothing to show, and it isn't in the receipt totals.` });
     for (const r of rowsOf(receiptNoTx)) out.push({ category: "Receipt with no payment record", severity: "medium", policyNumber: r.policy_number, client: name(r), detail: `Receipt ${r.receipt_number} (${r.currency} ${r.amount}, ${day(r.issued_at)}) has no payment record behind it — it doesn't advance cover dates or earn commission.` });
 
+    // A funeral done under a policy but not linked to it: the death never reaches the policy,
+    // claims or actuarial figures. Offer covered members with exactly the same name as a lead.
+    const normName = (col: any) => sql`upper(regexp_replace(trim(${col}), '\\s+', ' ', 'g'))`;
+    const [funeralNoPolicy, livesNoAge] = await Promise.all([
+      tdb.execute(sql`SELECT f.case_number, f.deceased_name, f.date_of_death, f.created_at,
+          (SELECT string_agg(DISTINCT p.policy_number, ', ') FROM policy_members pm JOIN policies p ON p.id = pm.policy_id
+             LEFT JOIN clients mc ON mc.id = pm.client_id LEFT JOIN dependents md ON md.id = pm.dependent_id
+             WHERE p.organization_id = f.organization_id AND p.deleted_at IS NULL
+               AND ${normName(sql`COALESCE(mc.first_name, md.first_name, '') || ' ' || COALESCE(mc.last_name, md.last_name, '')`)} = ${normName(sql`f.deceased_name`)}) AS name_matches
+        FROM funeral_cases f
+        WHERE f.organization_id = ${organizationId} AND f.service_type = 'claim' AND f.policy_id IS NULL AND f.status <> 'cancelled'
+        ORDER BY f.created_at`),
+      tdb.execute(sql`SELECT p.policy_number, c.first_name, c.last_name,
+          count(*) FILTER (WHERE COALESCE(mc.date_of_birth, md.date_of_birth) IS NULL)::int no_dob,
+          count(*) FILTER (WHERE upper(COALESCE(mc.gender, md.gender, '')) NOT IN ('MALE', 'FEMALE', 'M', 'F'))::int no_gender
+        FROM policy_members pm JOIN policies p ON p.id = pm.policy_id LEFT JOIN clients c ON c.id = p.client_id
+          LEFT JOIN clients mc ON mc.id = pm.client_id LEFT JOIN dependents md ON md.id = pm.dependent_id
+        WHERE p.organization_id = ${organizationId} AND p.status IN ('active', 'grace') AND p.deleted_at IS NULL
+          AND pm.is_active = true AND pm.date_of_death IS NULL
+        GROUP BY p.policy_number, c.first_name, c.last_name
+        HAVING count(*) FILTER (WHERE COALESCE(mc.date_of_birth, md.date_of_birth) IS NULL) > 0
+            OR count(*) FILTER (WHERE upper(COALESCE(mc.gender, md.gender, '')) NOT IN ('MALE', 'FEMALE', 'M', 'F')) > 0
+        ORDER BY p.policy_number`),
+    ]);
+    for (const r of rowsOf(funeralNoPolicy)) {
+      const died = r.date_of_death ? day(r.date_of_death) : day(r.created_at);
+      out.push({
+        category: "Policy funeral not linked to a policy", severity: "high", policyNumber: "—", client: r.deceased_name,
+        detail: `Funeral ${r.case_number} (${died}) was done under a policy, but no policy is linked — open the case, find the policy and pick the member, then raise the claim.${r.name_matches ? ` Same name on: ${r.name_matches}.` : ""}`,
+      });
+    }
+    for (const r of rowsOf(livesNoAge)) {
+      const parts = [r.no_dob ? `${r.no_dob} with no date of birth` : "", r.no_gender ? `${r.no_gender} with no gender` : ""].filter(Boolean).join(" and ");
+      out.push({ category: "Covered lives missing date of birth / gender", severity: "low", policyNumber: r.policy_number, client: name(r), detail: `${parts} — these lives can't be age-rated for the actuary or the IPEC return.` });
+    }
+
     const sevRank = { high: 0, medium: 1, low: 2 };
     return out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || a.category.localeCompare(b.category));
   }

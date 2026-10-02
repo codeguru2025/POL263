@@ -2,7 +2,8 @@
  * Reports → Finance → Actuarial export: the data files an outside actuary asks for.
  *   In-force lives — one row per covered person on an active / grace policy, ages at the period end,
  *                    plus a 5-year-band × gender summary and the data gaps (no date of birth / gender).
- *   Claims history — one row per claim reported in the period, with the deceased's age at death.
+ *   Claims history — one row per claim reported in the period, with the deceased's age at death,
+ *                    plus funerals done under a policy where no claim was raised (still deaths).
  * Premium history is the Receipts export; the balance sheet and IFRS 17 figures come from their own
  * builders, all as at the period end. Policy status is today's (status history isn't kept).
  */
@@ -173,7 +174,20 @@ export async function buildClaimsHistory(orgId: string, f: { fromDate?: string; 
       ${start ? sql`AND c.created_at >= ${start}` : sql``} ${endExclusive ? sql`AND c.created_at < ${endExclusive}` : sql``}
       ${f.branchId ? sql`AND COALESCE(c.branch_id, p.branch_id) = ${f.branchId}` : sql``}
     ORDER BY c.created_at DESC`));
-  return rows.map((r) => {
+  // Funerals done under a policy with no claim raised are still deaths an actuary must count.
+  const funerals = rowsOf<any>(await tdb.execute(sql`
+    SELECT f.case_number AS claim_number, p.policy_number, prod.name AS product, 'Funeral (no claim raised)' AS claim_type,
+      f.deceased_name, f.deceased_relationship, f.date_of_death, f.cause_of_death, f.created_at, f.completed_at AS decided_at,
+      f.status, '' AS decision_reason, p.currency, NULL AS cash_in_lieu_amount, NULL AS ledger_amount, false AS is_ex_gratia,
+      p.inception_date, f.deceased_dob AS dob, f.deceased_gender AS gender, NULL AS role
+    FROM funeral_cases f
+    LEFT JOIN policies p ON p.id = f.policy_id
+    LEFT JOIN product_versions pv ON pv.id = p.product_version_id
+    LEFT JOIN products prod ON prod.id = pv.product_id
+    WHERE f.organization_id = ${orgId} AND f.service_type = 'claim' AND f.claim_id IS NULL AND f.status <> 'cancelled'
+      ${start ? sql`AND f.created_at >= ${start}` : sql``} ${endExclusive ? sql`AND f.created_at < ${endExclusive}` : sql``}
+      ${f.branchId ? sql`AND COALESCE(f.branch_id, p.branch_id) = ${f.branchId}` : sql``}`));
+  return [...rows, ...funerals].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map((r) => {
     const dob = iso(r.dob), dod = iso(r.date_of_death), inc = iso(r.inception_date);
     return {
       claimNumber: r.claim_number, policyNumber: r.policy_number ?? "", product: r.product ?? "",

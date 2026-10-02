@@ -8251,6 +8251,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(fc);
   });
 
+  /** The policy a funeral case belongs to: the one given (must be this org's), else the linked claim's. */
+  async function resolveFuneralPolicyLink(orgId: string, policyId: unknown, claimId: unknown): Promise<{ policyId: string | null } | { error: string }> {
+    if (typeof policyId === "string" && policyId) {
+      const policy = await storage.getPolicy(policyId, orgId);
+      if (!policy || policy.organizationId !== orgId) return { error: "That policy wasn't found." };
+      return { policyId: policy.id };
+    }
+    if (typeof claimId === "string" && claimId) {
+      const claim = await storage.getClaim(claimId, orgId);
+      if (claim?.policyId) return { policyId: claim.policyId };
+    }
+    return { policyId: null };
+  }
+
   app.post("/api/funeral-cases", requireAuth, requireTenantScope, requirePermission("write:funeral_ops"), async (req, res) => {
     const user = req.user as any;
     const quotationId = typeof req.body.quotationId === "string" && req.body.quotationId ? req.body.quotationId : null;
@@ -8280,6 +8294,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!caseBody.branchId) {
       const headOffice = await storage.getHeadOfficeBranch(user.organizationId);
       if (headOffice) caseBody.branchId = headOffice.id;
+    }
+    // A funeral done under a policy must say which policy — otherwise the death never reaches the
+    // policy, claims or actuarial figures (all of Falakhe's first 90 "claim" funerals had none).
+    const link = await resolveFuneralPolicyLink(user.organizationId, caseBody.policyId, caseBody.claimId);
+    if ("error" in link) return res.status(422).json({ message: link.error });
+    caseBody.policyId = link.policyId;
+    if (caseBody.serviceType === "claim" && !caseBody.policyId) {
+      return res.status(422).json({ message: "This funeral is under a policy — find the policy and pick the person who died before saving." });
     }
     const parsed = insertFuneralCaseSchema.parse({
       ...caseBody,
@@ -8331,6 +8353,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const d = new Date(sanitized[f]);
           sanitized[f] = isNaN(d.getTime()) ? null : d;
         }
+      }
+      // Never let a blank form field wipe a saved policy link; take the policy from a linked claim.
+      if ("policyId" in sanitized && !sanitized.policyId && before.policyId) delete sanitized.policyId;
+      if (("policyId" in sanitized && sanitized.policyId) || ("claimId" in sanitized && sanitized.claimId && !before.policyId)) {
+        const link = await resolveFuneralPolicyLink(user.organizationId, sanitized.policyId ?? before.policyId, sanitized.claimId ?? before.claimId);
+        if ("error" in link) return res.status(422).json({ message: link.error });
+        if (link.policyId) sanitized.policyId = link.policyId;
       }
       const userIdsToMirrorFuneralPatch = [sanitized.removalDriverId, sanitized.burialDriverId, sanitized.attendingAgentId, sanitized.assignedTo]
         .filter((id): id is string => typeof id === "string" && id.length > 0);
@@ -16424,7 +16453,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "actuarial-claims": {
           const ch = await buildClaimsHistory(user.organizationId, reportFilters);
-          headers = ["Claim No.", "Policy No.", "Product", "Claim Type", "Deceased", "Relationship", "Gender", "Date of Birth", "Date of Death", "Age at Death", "Cause of Death", "Policy Inception", "Months In Force at Death", "Reported", "Decided", "Status", "Decision Reason", "Currency", "Cash in Lieu", "Charged to Society Ledger", "Ex Gratia"];
+          headers = ["Claim / Funeral No.", "Policy No.", "Product", "Claim Type", "Deceased", "Relationship", "Gender", "Date of Birth", "Date of Death", "Age at Death", "Cause of Death", "Policy Inception", "Months In Force at Death", "Reported", "Decided", "Status", "Decision Reason", "Currency", "Cash in Lieu", "Charged to Society Ledger", "Ex Gratia"];
           rows = ch.map((c) => [c.claimNumber, c.policyNumber, c.product, c.claimType, c.deceasedName, c.relationship, c.gender, c.dateOfBirth ?? "", c.dateOfDeath ?? "", c.ageAtDeath ?? "", c.causeOfDeath, c.inceptionDate ?? "", c.monthsInForce ?? "", c.reported, c.decided ?? "", c.status, c.decisionReason, c.currency, c.cashInLieu, c.ledgerAmount, c.exGratia ? "Yes" : "No"]);
           break;
         }

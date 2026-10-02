@@ -1231,7 +1231,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
             <div className="flex items-center justify-between border rounded-lg p-3 gap-3">
               <div>
                 <p className="font-medium text-sm">Claims history</p>
-                <p className="text-xs text-muted-foreground">Every claim reported in the period: policy, product, deceased's relationship, gender, date of birth, date of death and age at death, months the policy had been in force, dates reported and decided, outcome and amount.</p>
+                <p className="text-xs text-muted-foreground">Every claim reported in the period, and every funeral done under a policy where no claim was raised (those are deaths too): policy, product, deceased's relationship, gender, date of birth, date of death and age at death, months the policy had been in force, dates reported and decided, outcome and amount.</p>
               </div>
               <ExportButton reportType="actuarial-claims" filters={filters} />
             </div>

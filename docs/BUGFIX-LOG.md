@@ -10,6 +10,42 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — 81 funerals done under a policy were never linked to it: deaths invisible to claims and the actuary
+
+- **Symptom:** Falakhe had 128 funeral cases, and 83 of them were marked "Policy Claim". None had
+  a policy linked and only 2 had a claim, so claims history showed 2 deaths. Members who had
+  died stayed "active" on their policies.
+- **Root cause:** the funeral case form's policy lookup is optional. Nothing on the client or the
+  server required a policy for a "claim" funeral. The audit trail shows all 122 creations and 349
+  edits arrived with `policyId` null, so the link was never sent, never stored, and never flagged.
+  I couldn't reproduce how staff lost it (the lookup works for the people who capture funerals,
+  and they aren't agent-scoped). So the fix makes the loss impossible rather than relying on
+  staff using the lookup. Separately, an edit sends `policyId: null` from an empty form field,
+  which would have wiped a saved link.
+- **Fix:**
+  - `server/routes.ts` `resolveFuneralPolicyLink`: the policy must belong to the org, or is taken
+    from the linked claim. POST /api/funeral-cases returns 422 for a "claim" funeral with no policy.
+    PATCH never lets a blank field wipe a saved link.
+  - `client/src/pages/staff/funerals.tsx`: Save is disabled until the policy is found, with a
+    prompt shown.
+  - `storage.getDataIntegrityReport`: two new checks. "Policy funeral not linked to a policy"
+    (high) lists the 81 cases, with any covered member of exactly the same name as a lead; it
+    never auto-links, because common surnames make that unsafe. "Covered lives missing date of
+    birth / gender" (low) covers 385 policies.
+  - `server/actuarial-export.ts` `buildClaimsHistory`: counts policy funerals with no claim as
+    deaths.
+  - Data: `script/.tmp/gender-from-relationship.ts` fills in gender for 106 dependants whose
+    relationship states it (nephew, niece, son…). Augustus runs it with --apply.
+- **Verified:** Data integrity on Falakhe lists the 81 funerals and 385 policies. The claims
+  history now includes FNC-000129 and FNC-000131 etc. alongside CLM-000003/4. Typecheck and
+  all tests pass.
+- **Lesson for next time:** when a form offers an optional link ("find the policy") and the
+  record makes no sense without it, require it on the server, or it will silently be blank for
+  months. Check the audit trail's `after` JSON to see what clients actually sent. Never
+  auto-link by name in a population full of shared surnames; produce a worklist instead.
+
+---
+
 ## 2026-10-01 — Actuarial export: blank balance sheet, grace lives missing, wrong premium history, liabilities as of today
 
 - **Symptom:** Reports → Finance → Actuarial Export had several broken downloads.

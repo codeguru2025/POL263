@@ -2683,6 +2683,9 @@ function CaseFormDialog({
                 </Button>
               </div>
               {policyLookupError && <p className="text-xs text-destructive">{policyLookupError}</p>}
+              {!form.policyId && !policyLookupError && (
+                <p className="text-[11px] text-amber-700">A funeral under a policy can't be saved until the policy is found — type the policy number and press Find.</p>
+              )}
               {foundPolicy && (
                 <div className="space-y-2 text-xs border-t pt-2">
                   <p className="text-muted-foreground">
@@ -2974,7 +2977,7 @@ function CaseFormDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={isPending || !form.deceasedName || (!initial && form.serviceType === "cash" && !form.quotationId)} data-testid="button-submit-case">
+            <Button type="submit" disabled={isPending || !form.deceasedName || (!initial && form.serviceType === "cash" && !form.quotationId) || (!initial && form.serviceType === "claim" && !form.policyId)} data-testid="button-submit-case">
               {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
               {initial ? "Save Changes" : "Create Case"}
             </Button>
