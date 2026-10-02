@@ -23,9 +23,14 @@ export const AGENT_SCOPE_OVERRIDE_ROLES = new Set([
  * superuser) is treated as the superior role for data-scoping purposes so that
  * multi-role assignments work as expected.
  */
-export function isAgentScoped(roles: { name: string }[]): boolean {
+export function isAgentScoped(roles: { name: string }[], permissions?: readonly string[] | null): boolean {
   const hasAgent = roles.some((r) => r.name === "agent");
   if (!hasAgent) return false;
+  // With the user's effective permissions, "sees all clients" is the view:all_clients permission —
+  // so it can be granted to (or taken from) one person in the permission editor. Every role in
+  // AGENT_SCOPE_OVERRIDE_ROLES carries it (superuser gets every permission), so the role-only
+  // answer below is the same unless someone's permissions were changed by hand.
+  if (permissions) return !permissions.includes("view:all_clients");
   const hasSuperior = roles.some((r) => AGENT_SCOPE_OVERRIDE_ROLES.has(r.name));
   return !hasSuperior;
 }

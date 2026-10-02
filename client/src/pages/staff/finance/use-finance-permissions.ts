@@ -52,7 +52,7 @@ export const FINANCE_GROUP_ORDER: FinanceGroup[] = ["payments", "banking", "spen
  *  just relocated out of the (formerly) 3895-line finance.tsx. */
 export function useFinancePermissions() {
   const { roles, permissions, user: authUser } = useAuth();
-  const isAgent = isAgentScoped(roles);
+  const isAgent = isAgentScoped(roles, Array.isArray(permissions) ? permissions : null);
   const canReadFinance = permissions.includes("read:finance");
   const canWriteFinance = permissions.includes("write:finance");
   const canApproveFinance = permissions.includes("approve:finance") || (authUser as any)?.isPlatformOwner;

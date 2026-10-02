@@ -332,6 +332,9 @@ export const roles = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     isSystem: boolean("is_system").default(false).notNull(),
+    /** The ROLE_PERMISSION_MAP template last applied to this built-in role (0136). The startup sync
+     *  applies only what changed since, so hand edits in the role matrix are kept. */
+    templatePermissions: jsonb("template_permissions").$type<string[]>(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [index("roles_org_idx").on(t.organizationId)]

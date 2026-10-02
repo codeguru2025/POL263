@@ -12,6 +12,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { storage } from "./storage";
 import { isAgentScoped } from "@shared/roles";
 import { resolveOrSyncTenantUserId } from "./tenant-db";
+import { effectivePermissionsOf } from "./route-helpers";
 
 type Kind = "policy" | "client" | "claim" | "lead" | "receipt" | "group";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -57,7 +58,7 @@ function guard(kind: Kind) {
       const id = String(req.params.id ?? "");
       if (!user?.organizationId || user.isPlatformOwner || !UUID.test(id)) return next();
       const roles = await storage.getUserRoles(user.id, user.organizationId);
-      if (!isAgentScoped(roles)) return next();
+      if (!isAgentScoped(roles, await effectivePermissionsOf(req))) return next();
       const agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
       const owns = await agentOwns(kind, id, agentId, user.organizationId);
       if (owns === false) return res.status(403).json({ message: "Access denied — this record belongs to another agent." });

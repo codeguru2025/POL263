@@ -1172,6 +1172,10 @@ export class DatabaseStorage implements IStorage {
   async getPermissions(): Promise<Permission[]> {
     return db.select().from(permissions);
   }
+  /** Keep a permission's wording in step with the code (shown in the role / per-user editors). */
+  async updatePermissionText(id: string, description: string | null, category: string | null): Promise<void> {
+    await db.update(permissions).set({ description, category } as any).where(eq(permissions.id, id));
+  }
   async createPermission(perm: InsertPermission): Promise<Permission> {
     const [created] = await db.insert(permissions).values(perm).returning();
     return created;
@@ -1203,6 +1207,11 @@ export class DatabaseStorage implements IStorage {
     const [role] = await tdb.select().from(roles).where(eq(roles.id, roleId)).limit(1);
     if (!role) throw new Error("Role not found in organization");
     await tdb.delete(rolePermissions).where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)));
+  }
+  /** Remember which template was last applied to a built-in role (see seedOrgRoles). */
+  async setRoleTemplatePermissions(roleId: string, orgId: string, permissionNames: string[]): Promise<void> {
+    const tdb = await getDbForOrg(orgId);
+    await tdb.update(roles).set({ templatePermissions: permissionNames }).where(and(eq(roles.id, roleId), eq(roles.organizationId, orgId)));
   }
   async clearRolePermissions(roleId: string, orgId: string): Promise<void> {
     const tdb = await getDbForOrg(orgId);

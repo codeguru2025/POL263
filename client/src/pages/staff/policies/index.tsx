@@ -27,7 +27,7 @@ export default function StaffPolicies() {
   const { user, roles, permissions, isPlatformOwner } = useAuth();
   const safeRoles = Array.isArray(roles) ? roles : [];
   const safePermissions = Array.isArray(permissions) ? permissions : [];
-  const isAgent = isAgentScoped(safeRoles);
+  const isAgent = isAgentScoped(safeRoles, safePermissions);
   const canWritePolicy = safePermissions.includes("write:policy");
   // Receipting roles (cashiers, admins, clerks) receipt without write:finance.
   const canReceipt = isPlatformOwner || ["write:finance", "receipt:cash", "receipt:mobile", "receipt:transfer"].some((p) => safePermissions.includes(p));

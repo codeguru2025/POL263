@@ -844,6 +844,16 @@ export function handleZodError(err: any, res: any): boolean {
   return false;
 }
 
+/** The signed-in user's effective permissions for this request — the list the permission
+ *  middleware already loaded (requirePermission / requireAnyPermission), else loaded once and kept. */
+export async function effectivePermissionsOf(req: any): Promise<string[]> {
+  if (Array.isArray(req.effectivePermissions)) return req.effectivePermissions;
+  const user = req.user as any;
+  const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
+  req.effectivePermissions = perms;
+  return perms;
+}
+
 export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   const user = req.user as any;
   if (!user) return filters;
@@ -851,7 +861,7 @@ export async function enforceAgentScope(req: any, filters: any): Promise<any> {
   const userRoles = await storage.getUserRoles(user.id, user.organizationId);
   // Use the canonical scope gate so an admin/manager who also holds the agent role
   // (e.g. for a referral code) is NOT restricted to only their own data.
-  const isAgent = isAgentScoped(userRoles as { name: string }[]);
+  const isAgent = isAgentScoped(userRoles as { name: string }[], await effectivePermissionsOf(req));
   if (isAgent) return { ...filters, agentId: user.id };
   return filters;
 }
@@ -883,7 +893,7 @@ export async function enforceAgentPolicyAccess<T extends { organizationId?: stri
   // superuser) must NOT be scoped down to only their own policies — isAgentScoped()
   // is the canonical gate used across routes.ts. The previous naive `r.name === "agent"`
   // check denied admins who also carried an agent role (e.g. for a referral code).
-  const isAgent = isAgentScoped(userRoles as { name: string }[]);
+  const isAgent = isAgentScoped(userRoles as { name: string }[], await effectivePermissionsOf(req));
 
   // Policies store the agent's tenant-DB id, which differs from the registry id on a dedicated DB.
   if (isAgent && policy.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {

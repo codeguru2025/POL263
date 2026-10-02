@@ -607,7 +607,7 @@ export default function StaffDashboard() {
   const { toast } = useToast();
   const effectiveOrgId = user?.effectiveOrganizationId ?? user?.organizationId ?? null;
   const isControlPlaneMode = isPlatformOwner && !effectiveOrgId;
-  const isAgent = isAgentScoped(roles);
+  const isAgent = isAgentScoped(roles, Array.isArray(permissions) ? permissions : null);
   const commandCenters = useFlag("commandCenters");
   const canReadFinance = permissions.includes("read:finance");
   const canReadClaims = permissions.includes("read:claim");

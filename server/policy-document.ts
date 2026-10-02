@@ -8,7 +8,7 @@ import { resolveOrSyncTenantUserId } from "./tenant-db";
 /** Agents only see their own policies — same rule as GET /api/policies/:id. */
 async function agentMayNotSee(user: any, policy: { agentId?: string | null }): Promise<boolean> {
   const roles = await storage.getUserRoles(user.id, user.organizationId);
-  if (!isAgentScoped(roles)) return false;
+  if (!isAgentScoped(roles, await storage.getUserEffectivePermissions(user.id, user.organizationId))) return false;
   return policy.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id);
 }
 import { todayForOrg } from "./date-utils";

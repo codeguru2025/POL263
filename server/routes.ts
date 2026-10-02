@@ -16,7 +16,7 @@ import {
 import { requireAuth, requirePermission, requireAnyPermission, requireTenantScope, invalidateTenantActiveCache, getEffectiveOrgId } from "./auth";
 import { structuredLog } from "./logger";
 import { toCents, tryToCents, fromCents, centsToNumber, roundMoney, moneyString, moneyEquals, sumMoney, sumCents, subMoney, allocateProRata } from "@shared/money";
-import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, recordAgentCommission, recordAgentCommissionForTransactions, nullifyEmptyFields, enforceAgentScope, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
+import { auditLog, platformAuditLog, safeError, sanitizeOrgForClient, handleZodError, getAddOnPrice, computePolicyPremium, computeIndividualAgeRatedPremium, resolveAddOnCashCharge, PricingConfigError, recordClawback, rollbackClawbacks, rollbackClawbacksInTx, recordAgentCommission, recordAgentCommissionForTransactions, nullifyEmptyFields, enforceAgentScope, effectivePermissionsOf, enforceAgentPolicyAccess, computePolicyOutstanding, reconcilePremiumChange, periodsBetween, resolvePolicyWaitingPeriodEndDate } from "./route-helpers";
 import { validateReceiptAdvertImage } from "./receipt-advert-image-validation";
 import { isReceiptAdvertFormat } from "@shared/receipt-advert-specs";
 import { withClaimAging } from "./claims-sla";
@@ -1744,7 +1744,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const lead = await storage.getLead(leadId, user.organizationId);
       if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
       const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-      if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+      if (isAgentScoped(userRoles, await effectivePermissionsOf(req)) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
         return res.status(403).json({ message: "Access denied" });
       }
       validatedLeadId = lead.id;
@@ -2902,7 +2902,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (req.query.status) filters.status = String(req.query.status);
     if (req.query.branchId) filters.branchId = String(req.query.branchId);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getDashboardStats(user.organizationId, filters, agentId));
   });
@@ -2972,7 +2972,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const search = typeof req.query.q === "string" ? req.query.q.trim() || undefined : undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const list = isAgent
       ? await storage.getClientsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId, limit, offset, search)
       : await storage.getClientsByOrg(user.organizationId, limit, offset, search);
@@ -2990,7 +2990,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!client) return res.status(404).json({ message: "Not found" });
     if (client.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent) {
       const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), client.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
@@ -3082,7 +3082,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const activationCode = `ACT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
     const userRolesForCreate = await storage.getUserRoles(user.id, user.organizationId);
     const creatorHasAgentRole = userRolesForCreate.some((r: { name?: string }) => r?.name === "agent");
-    const creatorIsAgentScoped = isAgentScoped(userRolesForCreate);
+    const creatorIsAgentScoped = isAgentScoped(userRolesForCreate, await effectivePermissionsOf(req));
     // Tenant-db user id (FK target), not the raw sign-in id — they can differ on a dedicated DB.
     const creatorAgentId = creatorIsAgentScoped ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     if (creatorHasAgentRole) {
@@ -3158,7 +3158,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getClient(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent) {
       const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), before.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
@@ -3300,7 +3300,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!client || client.organizationId !== user.organizationId) return res.status(404).json({ message: "Client not found" });
     // Agent scope: agent must have access to this client
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent) {
       const hasAccess = await storage.isClientAccessibleByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), client.id, user.organizationId);
       if (!hasAccess) return res.status(403).json({ message: "Access denied" });
@@ -3952,7 +3952,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const qRaw = typeof req.query.q === "string" ? req.query.q : typeof req.query.search === "string" ? req.query.search : "";
     const search = qRaw.trim() || undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const filters: ReportFilters & { search?: string } = {};
     if (fromDate) filters.fromDate = fromDate;
     if (toDate) filters.toDate = toDate;
@@ -3985,7 +3985,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     if (req.query.excludeUnpaidMigrated === "1") filters.excludeUnpaidMigrated = true;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    if (isAgentScoped(userRoles)) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
+    if (isAgentScoped(userRoles, await effectivePermissionsOf(req))) filters.agentId = await resolveOrSyncTenantUserId(user.organizationId, user.id);
     else if (str(req.query.agentId)) filters.agentId = str(req.query.agentId);
     const status = str(req.query.status);
 
@@ -4035,7 +4035,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!policy) return res.status(404).json({ message: "Not found" });
     if (policy.organizationId !== user.organizationId) return res.status(403).json({ message: "Cross-tenant access denied" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
     const today = await todayForOrg(user.organizationId);
     const statusOk = policy.status === "active" || policy.status === "grace";
@@ -4686,7 +4686,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const before = await storage.getPolicy(req.params.id as string, user.organizationId);
     if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent && (before as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
     // Manual premium override is gated by the dedicated edit:premium permission.
     const effPerms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
@@ -4864,7 +4864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const policy = await storage.getPolicy(req.params.id as string, user.organizationId);
       if (!policy || policy.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
       const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-      const isAgent = isAgentScoped(userRoles);
+      const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
       if (isAgent && (policy as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
 
       const targetProductVersionId = typeof req.body.productVersionId === "string" ? req.body.productVersionId : "";
@@ -5786,7 +5786,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getPaymentsByOrg(user.organizationId, limit, offset, filters, agentId));
   });
@@ -5799,7 +5799,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const filters = (fromDate || toDate) ? { fromDate, toDate } : undefined;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getPaymentsSummary(user.organizationId, filters, agentId));
   });
@@ -6084,7 +6084,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const agentId = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined;
     return res.json(await storage.getPaymentIntentsByOrg(user.organizationId, limit, agentId));
   });
@@ -7551,7 +7551,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const canReadFinance = perms.includes("read:finance");
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const fromDate = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : undefined;
     const toDate = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : undefined;
     const userId = typeof req.query.userId === "string" && req.query.userId ? req.query.userId : undefined;
@@ -7607,7 +7607,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!cashup) return res.status(404).json({ message: "Not found" });
     const perms = await storage.getUserEffectivePermissions(user.id, user.organizationId);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     // Compare against the resolved tenant-db id — preparedBy is stored as that, not the raw
     // registry id, so an unresolved comparison would wrongly deny the platform owner (whose
     // registry/tenant ids can differ) access to their own cashup. resolveOrSyncTenantUserId,
@@ -9557,7 +9557,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/commission-ledger", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const agentId = req.query.agentId as string | undefined;
     const filterAgent = isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : agentId;
     const limit = Math.min(parseInt(req.query.limit as string) || 500, 2000);
@@ -9571,7 +9571,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const user = req.user as any;
     const orgId = user.organizationId;
     const userRoles = await storage.getUserRoles(user.id, orgId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     // Agents see their own P&L; managers can view any agent's P&L via ?agentId=. Policies/
     // commission entries store the tenant-resolved agent id, so the own-portfolio fallback
     // must resolve user.id the same way or an isolated-tenant agent's own P&L comes back empty.
@@ -9707,7 +9707,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const list = isAgent
       ? (await storage.getLeadsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)).slice(offset, offset + limit)
       : await storage.getLeadsByOrg(user.organizationId, limit, offset);
@@ -9719,7 +9719,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const lead = await storage.getLead(req.params.id as string, user.organizationId);
     if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+    if (isAgentScoped(userRoles, await effectivePermissionsOf(req)) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
       return res.status(403).json({ message: "Access denied" });
     }
     return res.json(lead);
@@ -9732,7 +9732,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const lead = await storage.getLead(req.params.id as string, user.organizationId);
     if (!lead || lead.organizationId !== user.organizationId) return res.status(404).json({ message: "Lead not found" });
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    if (isAgentScoped(userRoles) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+    if (isAgentScoped(userRoles, await effectivePermissionsOf(req)) && (lead as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
       return res.status(403).json({ message: "Access denied" });
     }
     const quote = await storage.getQuoteByLeadId(lead.id, user.organizationId);
@@ -9748,7 +9748,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!quote || quote.organizationId !== user.organizationId) return res.status(404).json({ message: "Quote not found" });
 
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    if (isAgentScoped(userRoles) && quote.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
+    if (isAgentScoped(userRoles, await effectivePermissionsOf(req)) && quote.agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) {
       // Ownership lives on the quote itself (quote.agentId) — checked directly rather than
       // via quote.leadId's lead, since a lead-less quote or one whose lead was later deleted
       // would otherwise skip the check entirely.
@@ -9812,7 +9812,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const before = await storage.getLead(req.params.id as string, user.organizationId);
       if (!before || before.organizationId !== user.organizationId) return res.status(404).json({ message: "Not found" });
       const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-      const isAgent = isAgentScoped(userRoles);
+      const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
       if (isAgent && (before as any).agentId !== await resolveOrSyncTenantUserId(user.organizationId, user.id)) return res.status(403).json({ message: "Access denied" });
       const updated = await storage.updateLead(req.params.id as string, req.body, user.organizationId);
       await auditLog(req, "UPDATE_LEAD", "Lead", req.params.id as string, before, updated);
@@ -9926,7 +9926,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/expenditures", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent) return res.json([]);
     const limit = Math.max(1, Math.min(parseInt(req.query.limit as string) || 100, 500));
     const offset = Math.max(0, parseInt(req.query.offset as string) || 0);
@@ -14505,7 +14505,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/diagnostics", requireAuth, requireTenantScope, requirePermission("read:audit_log"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const stats = await storage.getDashboardStats(user.organizationId, undefined, isAgent ? await resolveOrSyncTenantUserId(user.organizationId, user.id) : undefined);
     const unallocated = await storage.getPaymentsByOrg(user.organizationId, 100, 0);
     const unallocatedPayments = unallocated.filter((p: any) => !p.policyId);
@@ -14525,7 +14525,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     let payments: any[];
     if (isAgent) {
       const agentPolicyIds = new Set((await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)).map((p) => p.id));
@@ -14556,7 +14556,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, no-cache");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const allPolicies = isAgent
       ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
@@ -14576,7 +14576,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard/lead-funnel", requireAuth, requireTenantScope, requireAnyPermission("read:finance", "read:policy", "read:client"), async (req, res) => {
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const allLeads = isAgent
       ? await storage.getLeadsByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getLeadsByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
@@ -14591,7 +14591,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, max-age=30, stale-while-revalidate=60");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     if (isAgent) {
       const agentPolicies = await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId);
       const activePolicies = agentPolicies.filter((p: any) => p.status === "active");
@@ -14609,7 +14609,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const allProducts = await storage.getProductsByOrg(user.organizationId);
     const allPolicies = isAgent
       ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
@@ -14657,7 +14657,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "private, max-age=60, stale-while-revalidate=120");
     const user = req.user as any;
     const userRoles = await storage.getUserRoles(user.id, user.organizationId);
-    const isAgent = isAgentScoped(userRoles);
+    const isAgent = isAgentScoped(userRoles, await effectivePermissionsOf(req));
     const allPolicies = isAgent
       ? await storage.getPoliciesByAgent(await resolveOrSyncTenantUserId(user.organizationId, user.id), user.organizationId)
       : await storage.getPoliciesByOrg(user.organizationId, DASHBOARD_MAX_ROWS, 0);
@@ -16859,8 +16859,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { seedPermissions, seedOrgRoles } = await import("./seed");
       const permMap = await seedPermissions();
-      await seedOrgRoles(user.organizationId, permMap);
-      await auditLog(req, "SYNC_PERMISSIONS", "Role", user.organizationId, null, { message: "Permissions and roles synchronized" });
+      // Default: apply what changed in the role templates and keep hand edits. { reset: true } puts
+      // every built-in role back to exactly its template.
+      const resetToDefaults = req.body?.reset === true;
+      await seedOrgRoles(user.organizationId, permMap, { resetToDefaults });
+      await auditLog(req, "SYNC_PERMISSIONS", "Role", user.organizationId, null, { message: resetToDefaults ? "Roles reset to their defaults" : "Permissions and roles synchronized (hand edits kept)" });
       return res.json({ success: true, message: "Permissions and roles synchronized" });
     } catch (err: any) {
       return res.status(500).json({ message: safeError(err) });

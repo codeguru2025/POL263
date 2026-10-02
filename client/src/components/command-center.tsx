@@ -19,7 +19,7 @@ import { useFlag } from "@/lib/flags";
 export function CommandCenter() {
   const [, setLocation] = useLocation();
   const { user, roles, permissions } = useAuth();
-  const isAgent = isAgentScoped(roles);
+  const isAgent = isAgentScoped(roles, Array.isArray(permissions) ? permissions : null);
   const has = (p: string) => permissions.includes(p);
 
   const canFinance = has("read:finance") || has("read:commission");

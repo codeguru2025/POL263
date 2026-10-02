@@ -26,6 +26,10 @@ export async function seedPermissions(): Promise<Map<string, string>> {
     const existing = existingPerms.find((p) => p.name === perm.name);
     if (existing) {
       permMap.set(perm.name, existing.id);
+      // Wording changed in code → update it, so the editors describe what the permission really does.
+      if ((existing.description ?? null) !== (perm.description ?? null) || ((existing as any).category ?? null) !== ((perm as any).category ?? null)) {
+        await storage.updatePermissionText(existing.id, perm.description ?? null, (perm as any).category ?? null);
+      }
     } else {
       const created = await storage.createPermission(perm);
       permMap.set(perm.name, created.id);
@@ -36,15 +40,32 @@ export async function seedPermissions(): Promise<Map<string, string>> {
 }
 
 /**
- * Resets all system roles for the given org to match the current ROLE_PERMISSION_MAP.
- * Creates missing roles, then clears and re-applies permissions for each role.
- * Pass a pre-built permMap to avoid redundant DB calls when calling after seedPermissions().
+ * Keeps the built-in roles in step with ROLE_PERMISSION_MAP: creates missing roles, and applies
+ * only what changed in each template since the last sync (roles.template_permissions), so edits
+ * made in the role matrix survive restarts. { resetToDefaults: true } puts every built-in role back
+ * to exactly its template. Pass a pre-built permMap to avoid redundant DB calls after seedPermissions().
  */
-export async function seedOrgRoles(orgId: string, permMap?: Map<string, string>): Promise<void> {
+/** Pure — what the role sync changes on one built-in role.
+ *  - New role: the whole template.
+ *  - Never synced this way before (no snapshot): only add what the template has and the role lacks;
+ *    nothing is taken away, so any hand edit made before this change survives.
+ *  - Otherwise: only what changed in the template since the last sync — newly added permissions are
+ *    added, newly dropped ones removed. Anything else (hand edits in the role matrix) is left alone. */
+export function roleSyncChanges(template: readonly string[], current: ReadonlySet<string>, snapshot: readonly string[] | null, isNew: boolean): { add: string[]; remove: string[] } {
+  if (isNew) return { add: [...template], remove: [] };
+  if (!snapshot) return { add: template.filter((p) => !current.has(p)), remove: [] };
+  return {
+    add: template.filter((p) => !snapshot.includes(p) && !current.has(p)),
+    remove: snapshot.filter((p) => !template.includes(p) && current.has(p)),
+  };
+}
+
+export async function seedOrgRoles(orgId: string, permMap?: Map<string, string>, opts: { resetToDefaults?: boolean } = {}): Promise<void> {
   const map = permMap ?? await seedPermissions();
 
   for (const [roleName, permNames] of Object.entries(ROLE_PERMISSION_MAP)) {
     let role = await storage.getRoleByName(roleName, orgId);
+    const isNew = !role;
     if (!role) {
       role = await storage.createRole({
         name: roleName,
@@ -57,12 +78,28 @@ export async function seedOrgRoles(orgId: string, permMap?: Map<string, string>)
 
     if (roleName === "superuser") continue;
 
-    // Reset to system defaults: clear existing permissions then apply the current map.
-    await storage.clearRolePermissions(role.id, orgId);
-    for (const permName of permNames) {
-      const permId = map.get(permName);
-      if (permId) await storage.addRolePermission(role.id, permId, orgId);
+    if (opts.resetToDefaults) {
+      // Explicit reset (Settings → Sync with "reset"): back to exactly the template.
+      await storage.clearRolePermissions(role.id, orgId);
+      for (const permName of permNames) {
+        const permId = map.get(permName);
+        if (permId) await storage.addRolePermission(role.id, permId, orgId);
+      }
+    } else {
+      // Apply only what changed in the template, keeping hand edits made in the role matrix.
+      const current = new Set((await storage.getRolePermissions(role.id, orgId)).map((p) => p.name));
+      const snapshot = Array.isArray((role as any).templatePermissions) ? ((role as any).templatePermissions as string[]) : null;
+      const { add, remove } = roleSyncChanges(permNames, current, snapshot, isNew);
+      for (const permName of add) {
+        const permId = map.get(permName);
+        if (permId) await storage.addRolePermission(role.id, permId, orgId);
+      }
+      for (const permName of remove) {
+        const permId = map.get(permName);
+        if (permId) await storage.removeRolePermission(role.id, permId, orgId);
+      }
     }
+    await storage.setRoleTemplatePermissions(role.id, orgId, [...permNames]);
   }
 
   structuredLog("info", `Roles seeded for org ${orgId}`);

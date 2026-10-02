@@ -25,7 +25,7 @@ export const PLATFORM_OWNER_EMAIL = getPlatformOwnerEmail();
 export const PLATFORM_SUPERUSER_EMAIL = PLATFORM_OWNER_EMAIL;
 
 export const SYSTEM_PERMISSIONS = [
-  { name: "read:organization", description: "View organization settings", category: "organization" },
+  { name: "read:organization", description: "No effect — everyone signed in can see the company's name and branding. Kept so older roles still load.", category: "organization" },
   { name: "write:organization", description: "Edit organization settings", category: "organization" },
   { name: "read:branch", description: "View branches", category: "organization" },
   { name: "write:branch", description: "Create/edit branches", category: "organization" },
@@ -45,8 +45,8 @@ export const SYSTEM_PERMISSIONS = [
   { name: "approve:claim", description: "Approve/reject claims (maker-checker)", category: "claims" },
   { name: "read:client", description: "View clients", category: "clients" },
   { name: "write:client", description: "Create/edit clients", category: "clients" },
-  { name: "view:own_clients", description: "View only own assigned clients", category: "clients" },
-  { name: "view:all_clients", description: "View all clients in organization", category: "clients" },
+  { name: "view:own_clients", description: "No effect on its own — someone with the Agent role already sees only their own clients. Kept so older roles still load.", category: "clients" },
+  { name: "view:all_clients", description: "See every client and policy. Without it, someone with the Agent role sees only the clients and policies they sold.", category: "clients" },
   { name: "read:product", description: "View products", category: "product" },
   { name: "write:product", description: "Create/edit products", category: "product" },
   { name: "manage:settings", description: "Manage tenant settings", category: "settings" },

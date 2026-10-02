@@ -1618,6 +1618,7 @@ export function requirePermission(...requiredPerms: string[]) {
 
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
+    (req as any).effectivePermissions = effectivePerms;
     if (effectiveOrgId) {
       // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
       user.organizationId = effectiveOrgId;
@@ -1658,6 +1659,7 @@ export function requireAnyPermission(...anyOfPerms: string[]) {
 
     const effectiveOrgId = getEffectiveOrgId(req, user);
     const effectivePerms = await storage.getUserEffectivePermissions(user.id, effectiveOrgId);
+    (req as any).effectivePermissions = effectivePerms;
     if (effectiveOrgId) {
       // Keep downstream handlers tenant-scoped even if they read user.organizationId directly.
       user.organizationId = effectiveOrgId;

@@ -251,7 +251,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
   }, [location]);
 
   const safeRoles = Array.isArray(roles) ? roles : [];
-  const isAgent = isAgentScoped(safeRoles);
+  const isAgent = isAgentScoped(safeRoles, Array.isArray(permissions) ? permissions : null);
   // Bottom tab bar is a native-app affordance for agents specifically — never shown to
   // non-agent staff or in a mobile browser/PWA, where the hamburger+Sheet nav still applies.
   const showAgentBottomNav = isAgent && isNativeMobile();

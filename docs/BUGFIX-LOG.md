@@ -10,6 +10,47 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Permission audit: role edits wiped on every restart; "see all clients" not editable
+
+- **Symptom** (from a full audit of every permission):
+  - Changes made in Settings → Role permissions lasted only until the next deploy or restart.
+  - `view:all_clients` / `view:own_clients` could be switched in the per-user editor but did
+    nothing.
+  - `read:organization` did nothing.
+  - Changing a permission's description in code never reached the editors.
+- **Root cause:**
+  - `seedOrgRoles` (run at every startup and by the Sync button) did
+    `clearRolePermissions` + re-applied `ROLE_PERMISSION_MAP` for every built-in role.
+  - Agent data scoping (`isAgentScoped`) was decided by role names only, so the permission
+    meant to control it was never read.
+  - `seedPermissions` only inserted missing rows and never updated existing ones.
+- **Fix:**
+  - Migration `0136_role_template_snapshot.sql` adds `roles.template_permissions`.
+    `seedOrgRoles` + `roleSyncChanges` now apply only what changed in the template since the
+    last sync, so hand edits survive. Sync with `{ reset: true }` restores defaults.
+  - `isAgentScoped(roles, permissions?)`: with permissions, "sees all clients" =
+    `view:all_clients`. Every scope-lifting role already carries it, so nobody's access changed.
+  - The permission middleware keeps `req.effectivePermissions`, and `effectivePermissionsOf(req)`
+    reuses it. All data-visibility checks pass it: 31 route sites, the central guard,
+    `enforceAgentScope`, `enforceAgentPolicyAccess` and the policy document.
+  - The cash and agent-login rules stay role-based on purpose: agents never handle cash.
+  - Client pages pass `permissions` too.
+  - `seedPermissions` updates description/category. Honest descriptions for the two no-effect
+    permissions.
+- **Audit result:** all 61 permissions checked in code and all role-template permissions are in
+  `SYSTEM_PERMISSIONS`. The database list matches the code exactly (no stale rows);
+  `create:requisition` is added on deploy. The role matrix, per-user editor and Access Profiles
+  show every permission with no filtering.
+- **Verified:** typecheck and all tests. New `tests/unit/permission-catalogue.test.ts` fails the
+  build if code checks a permission the editors can't grant, if a template uses an unknown one,
+  or if a role sync would wipe hand edits.
+- **Lesson for next time:**
+  - A "sync to defaults" that runs on every boot silently makes every admin setting it touches
+    read-only. Sync deltas against a stored snapshot instead.
+  - If a permission exists in the editor, something must read it. Add it to the catalogue test.
+
+---
+
 ## 2026-10-02 — Agent portfolio: premium with no currency, names split wrongly, no view of who's behind
 
 - **Symptom:** Reports → Agents → Agent portfolio listed 820 policies flat.
