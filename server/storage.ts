@@ -4867,6 +4867,24 @@ export class DatabaseStorage implements IStorage {
       gte(notificationLogs.createdAt, notBefore),
     )).orderBy(asc(notificationLogs.nextRetryAt)).limit(limit);
   }
+  /** A client's phone number was just added: queue the texts skipped for want of one (since
+   *  `since`) so the retry sweep sends them — e.g. the welcome text when a policy is captured
+   *  before the number is typed in. Returns how many were queued. */
+  async requeueSmsSkippedForNoPhone(orgId: string, clientId: string, since: Date, now: Date = new Date()): Promise<number> {
+    const tdb = await getDbForOrg(orgId);
+    const rows = await tdb.update(notificationLogs).set({
+      status: "failed", nextRetryAt: now, failureReason: "Phone number added — sending now",
+    }).where(and(
+      eq(notificationLogs.organizationId, orgId),
+      eq(notificationLogs.channel, "sms"),
+      eq(notificationLogs.recipientType, "client"),
+      eq(notificationLogs.recipientId, clientId),
+      eq(notificationLogs.status, "skipped"),
+      eq(notificationLogs.failureReason, "Client has no phone number on file"),
+      gte(notificationLogs.createdAt, since),
+    )).returning({ id: notificationLogs.id });
+    return rows.length;
+  }
   async expireStaleSmsNotificationRetries(orgId: string, notBefore: Date): Promise<number> {
     const tdb = await getDbForOrg(orgId);
     const rows = await tdb.update(notificationLogs).set({

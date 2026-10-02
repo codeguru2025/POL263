@@ -10,6 +10,25 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Welcome text lost when the phone number is typed in after the policy is captured
+
+- **Symptom:** FLK00996 (Naomi Dube) got her receipt text but never the welcome text.
+- **Root cause:** the legacy-group capture form lets the phone be left blank. The policy was
+  created at 09:34 and its welcome SMS was logged as "skipped — Client has no phone number on
+  file". The number was added at 09:36. Skipped texts are never retried; the retry sweep only
+  picks up `failed` rows that have a `next_retry_at`.
+- **Fix:** new `storage.requeueSmsSkippedForNoPhone` (sms, client, status skipped for a missing
+  phone, within the last 24 hours) sets those rows to `failed` with `next_retry_at = now`, so the
+  existing retry sweep sends them using the client's new number. It's called by
+  `sendTextsHeldForPhone` in `server/routes.ts` from PATCH /api/clients/:id and the policy-member
+  edit, only when the client goes from no phone to a phone. It never throws.
+- **Verified:** typecheck and all tests. Naomi's own welcome is queued the same way by
+  `script/.tmp/requeue-welcome-flk00996.ts`, which Augustus runs.
+- **Lesson for next time:** a "skipped — missing contact detail" notification is a debt to be
+  paid when the detail arrives. Hand it to the retry path, not a manual resend.
+
+---
+
 ## 2026-10-02 — Payments to POL263 counted as a second expense; a consultation fee booked as a POL263 payment
 
 - **Symptom:** Falakhe pays POL263's 2.5% fees through requisitions to "MR SIZIBA", categorised

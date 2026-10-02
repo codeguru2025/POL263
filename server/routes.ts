@@ -3140,6 +3140,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.status(201).json(safeNewClient);
   });
 
+  /** First phone number on a client: send the texts that were skipped for want of one in the last
+   *  24 hours (the retry sweep's window) — typically the welcome text, when a policy is captured
+   *  before the number is typed in. Never throws: the client update itself has already saved. */
+  async function sendTextsHeldForPhone(orgId: string, before: { id: string; phone?: string | null } | undefined, after: { phone?: string | null } | undefined) {
+    if (!before || before.phone?.trim() || !after?.phone?.trim()) return;
+    try {
+      const queued = await storage.requeueSmsSkippedForNoPhone(orgId, before.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+      if (queued > 0) structuredLog("info", "Queued texts held for a missing phone number", { orgId, clientId: before.id, queued });
+    } catch (err: any) {
+      structuredLog("error", "Could not queue texts held for a missing phone number", { orgId, clientId: before.id, error: err?.message });
+    }
+  }
+
   app.patch("/api/clients/:id", requireAuth, requireTenantScope, requirePermission("write:client"), async (req, res) => {
     const user = req.user as any;
     const before = await storage.getClient(req.params.id as string, user.organizationId);
@@ -3156,6 +3169,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const sanitizedClient = nullifyEmptyFields(req.body, ["dateOfBirth", "branchId", "agentId"]);
     const updated = await storage.updateClient(req.params.id as string, sanitizedClient, user.organizationId);
     await auditLog(req, "UPDATE_CLIENT", "Client", req.params.id as string, before, updated);
+    await sendTextsHeldForPhone(user.organizationId, before, updated);
     const { passwordHash: _ucph, securityAnswerHash: _ucsah, activationCode: _ucac, ...safeUpdatedClient } = (updated || {}) as any;
     return res.json(safeUpdatedClient);
   });
@@ -3826,6 +3840,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (Object.keys(data).length === 0) return res.json(before);
       const updated = await storage.updateClient(member.clientId, data, user.organizationId);
       await auditLog(req, "UPDATE_CLIENT", "Client", member.clientId, before, updated);
+      await sendTextsHeldForPhone(user.organizationId, before, updated);
       return res.json(updated);
     }
     return res.status(400).json({ message: "Member has no associated person record" });
