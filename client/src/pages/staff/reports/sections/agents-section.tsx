@@ -109,46 +109,25 @@ const commissionPlansColumns: EdtColumn<any>[] = [
 ];
 
 const commissionPaymentsColumns: EdtColumn<any>[] = [
-  { id: "receiptNumber", header: "Receipt #", accessor: (r) => r.receiptNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.receiptNumber}</span> },
-  { id: "firstName", header: "First Name", accessor: (r) => r.clientFirstName || "", cell: (r) => <span className="whitespace-nowrap">{r.clientFirstName || "—"}</span> },
-  { id: "surname", header: "Surname", accessor: (r) => r.clientLastName || "", cell: (r) => <span className="whitespace-nowrap">{r.clientLastName || "—"}</span> },
-  { id: "nationalId", header: "National ID", accessor: (r) => r.clientNationalId || "", cell: (r) => <span className="font-mono text-sm">{r.clientNationalId || "—"}</span> },
-  { id: "phone", header: "Phone", accessor: (r) => r.clientPhone || "" },
-  { id: "policyNumber", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
-  { id: "policyStatus", header: "Policy Status", accessor: (r) => r.policyStatus, cell: (r) => <StatusBadge status={r.policyStatus} variant="policy" /> },
-  { id: "policyPremium", header: "Policy Premium", accessor: (r) => parseFloat(r.policyPremium || 0), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {r.policyPremium}</span> },
-  { id: "amountDue", header: "Amount Due", accessor: (r) => parseFloat(r.amountDue || 0), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {r.amountDue}</span> },
-  {
-    id: "amountPaid",
-    header: "Amount Paid",
-    accessor: (r) => parseFloat(String(r.amountPaid ?? 0)),
-    cell: (r) => <span className="font-medium tabular-nums whitespace-nowrap">{r.currency} {parseFloat(String(r.amountPaid ?? 0)).toFixed(2)}</span>,
-  },
-  {
-    id: "commissionPayable",
-    header: "Commission Payable",
-    accessor: (r) => r.commissionPayable != null ? parseFloat(String(r.commissionPayable)) : "",
-    cell: (r) => (
-      <span className="tabular-nums whitespace-nowrap text-emerald-700 font-medium">
-        {r.commissionPayable != null ? `${r.commissionCurrency || r.currency} ${parseFloat(String(r.commissionPayable)).toFixed(2)}` : "—"}
-      </span>
-    ),
-  },
-  { id: "commType", header: "Comm. Type", accessor: (r) => r.commissionType || "", cell: (r) => <span className="text-xs">{r.commissionType ? <Badge variant="outline" className="text-xs">{r.commissionType}</Badge> : "—"}</span> },
-  { id: "agent", header: "Agent", accessor: (r) => r.agentName || "Walk-in", cell: (r) => <span className="text-sm whitespace-nowrap">{r.agentName || "Walk-in"}</span> },
-  { id: "monthsPaid", header: "Months Paid", accessor: (r) => r.monthsPaidFor, cell: (r) => <span className="tabular-nums text-center block">{r.monthsPaidFor}</span> },
-  { id: "receiptCount", header: "Receipt Count", accessor: (r) => r.receiptCount, cell: (r) => <span className="tabular-nums text-center block">{r.receiptCount}</span> },
-  { id: "policyBranch", header: "Policy Branch", accessor: (r) => r.policyBranch || "" },
-  { id: "paymentBranch", header: "Payment Branch", accessor: (r) => r.paymentBranch || "" },
-  { id: "periodFrom", header: "Period From", accessor: (r) => r.periodFrom || "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.periodFrom || "—"}</span> },
-  { id: "periodTo", header: "Period To", accessor: (r) => r.periodTo || "", cell: (r) => <span className="text-sm whitespace-nowrap">{r.periodTo || "—"}</span> },
-  { id: "channel", header: "Channel", accessor: (r) => r.paymentChannel || "", cell: (r) => <span className="text-xs"><Badge variant="outline" className="text-[10px]">{r.paymentChannel || "—"}</Badge></span> },
-  {
-    id: "issuedAt",
-    header: "Issued At",
-    accessor: (r) => r.issuedAt ? new Date(r.issuedAt) : "",
-    cell: (r) => <span className="text-sm text-muted-foreground whitespace-nowrap">{r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : "—"}</span>,
-  },
+  { id: "date", header: "Date", accessor: (l) => l.date, cell: (l) => <span className="text-xs whitespace-nowrap">{fmtDay(l.date)}</span> },
+  { id: "agent", header: "Agent", accessor: (l) => l.agent, cell: (l) => <span className="text-xs whitespace-nowrap">{l.agent}</span> },
+  { id: "policy", header: "Policy #", accessor: (l) => l.policyNumber, cell: (l) => <span className="font-mono text-xs whitespace-nowrap">{l.policyNumber || "—"}</span> },
+  { id: "client", header: "Client", accessor: (l) => l.client, cell: (l) => <span className="text-xs whitespace-nowrap">{l.client || "—"}</span> },
+  { id: "receipt", header: "Receipt #", accessor: (l) => l.receiptNumber, cell: (l) => <span className="font-mono text-xs">{l.receiptNumber || "—"}</span> },
+  { id: "description", header: "Line", accessor: (l) => l.description, cell: (l) => <span className={`text-xs ${l.kind === "other" ? "italic" : ""} ${/clawback(?!_reversal)/i.test(l.entryType) ? "text-rose-700" : ""}`}>{l.description}</span> },
+  { id: "payment", header: "Payment", align: "right", accessor: (l) => (l.payment == null ? -1 : Number(l.payment)), cell: (l) => <span className="tabular-nums text-xs whitespace-nowrap">{l.payment == null ? "—" : `${l.paymentCurrency} ${l.payment}`}</span> },
+  { id: "months", header: "Months paid", align: "right", accessor: (l) => l.monthsPaid ?? -1, cell: (l) => <span className="tabular-nums text-xs">{l.monthsPaid ?? "—"}</span> },
+  { id: "commission", header: "Commission", align: "right", accessor: (l) => (l.commission == null ? -9999 : Number(l.commission)), cell: (l) => l.commission == null ? <span className="text-xs text-muted-foreground">none</span> : <span className={`tabular-nums text-xs whitespace-nowrap ${Number(l.commission) < 0 ? "text-rose-700" : ""}`}>{l.commissionCurrency} {l.commission}</span> },
+  { id: "pct", header: "% of payment", align: "right", accessor: (l) => l.commissionPct ?? -1, cell: (l) => l.commissionPct == null ? <span className="text-muted-foreground text-xs">—</span> : <span className={`tabular-nums text-xs ${[10, 50].includes(l.commissionPct) ? "" : "text-amber-700 font-medium"}`} title="First months earn 50%, later months 10% — anything else is a mix of both or worth checking">{l.commissionPct}%</span> },
+];
+
+const commissionSubtotalColumns: EdtColumn<any>[] = [
+  { id: "agent", header: "Agent", accessor: (s) => s.agent, cell: (s) => <span className="text-sm whitespace-nowrap font-medium">{s.agent}</span> },
+  { id: "currency", header: "Currency", accessor: (s) => s.currency, cell: (s) => <span className="font-mono text-xs">{s.currency}</span> },
+  { id: "receipts", header: "Receipts", align: "right", accessor: (s) => s.receipts },
+  { id: "earned", header: "Earned", align: "right", accessor: (s) => Number(s.earned), cell: (s) => <span className="tabular-nums">{money2(s.earned)}</span> },
+  { id: "clawedBack", header: "Clawed back", align: "right", accessor: (s) => Number(s.clawedBack), cell: (s) => <span className={`tabular-nums ${Number(s.clawedBack) ? "text-rose-700" : ""}`}>{money2(s.clawedBack)}</span> },
+  { id: "net", header: "Net for the period", align: "right", accessor: (s) => Number(s.net), cell: (s) => <span className={`tabular-nums font-semibold ${Number(s.net) < 0 ? "text-rose-700" : ""}`}>{money2(s.net)}</span> },
 ];
 
 export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate, toDate, agentId, canReadCommission }: AgentsSectionProps) {
@@ -188,11 +167,11 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
     },
     enabled: need("commissionSummary") && canReadCommission,
   });
-  const { data: commissionPayments = [], isLoading: loadingCommissionPayments } = useQuery<any[]>({
+  const { data: commissionPayments, isLoading: loadingCommissionPayments } = useQuery<{ lines: any[]; subtotals: any[]; receiptsWithoutCommission: number }>({
     queryKey: ["reports", "commission-payments", runKey, ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/commission-payments?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
+      const res = await fetch(getApiBase() + "/api/reports/commission-payments" + q, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load commission by payment");
       return res.json();
     },
     enabled: need("commissionPayments") && canReadCommission,
@@ -377,7 +356,7 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
       <TabsContent value="commission-payments">
         <CardSection
           title="Commission by payment"
-          description="One row per receipt. Shows client, policy premium, amount paid, commission earned by the agent, and branch info. Filter by date range, agent, or branch."
+          description="Every commission line in the period: each receipt and what its payment earned, plus clawbacks, reversals and society commission. Each agent's lines add up to the Commissions statement. % of payment flags rates other than 50% (first months) or 10% (after)."
           icon={Percent}
           headerRight={<ExportButton reportType="commission-payments" filters={filters} />}
           flush
@@ -385,14 +364,29 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
           {loadingCommissionPayments ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (
+            <>
+            <div className="px-4 pt-3 text-xs font-semibold uppercase text-muted-foreground">By agent</div>
+            <EnhancedDataTable
+              columns={commissionSubtotalColumns}
+              rows={commissionPayments?.subtotals ?? []}
+              getRowKey={(s) => `${s.agentId ?? "company"}-${s.currency}`}
+              exportFilename="commission-by-agent"
+              storageKey="reports-commission-by-agent"
+              emptyMessage="No commission in this period."
+            />
+            {(commissionPayments?.receiptsWithoutCommission ?? 0) > 0 && (
+              <p className="px-4 pt-2 text-xs text-muted-foreground">{commissionPayments!.receiptsWithoutCommission} receipts in the period earned no commission (policies with no agent before walk-in commission started, or typed-in policies).</p>
+            )}
+            <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Every line</div>
             <EnhancedDataTable
               columns={commissionPaymentsColumns}
-              rows={commissionPayments}
-              getRowKey={(r) => r.receiptId}
+              rows={commissionPayments?.lines ?? []}
+              getRowKey={(l) => `${l.kind}-${l.id}`}
               exportFilename="commission-payments"
-              storageKey="reports-commission-payments"
-              emptyMessage="No payment receipts match the filters. Set a date range and click Run report."
+              storageKey="reports-commission-payments-v2"
+              emptyMessage="No commission lines in this period."
             />
+            </>
           )}
         </CardSection>
       </TabsContent>

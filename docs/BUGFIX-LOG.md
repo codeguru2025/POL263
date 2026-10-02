@@ -10,6 +10,36 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Commission by payment didn't add up to what agents earned; "months paid" wrong on 9 in 10 receipts
+
+- **Symptom:** Falakhe, September.
+  - The report listed 64 receipts with USD 207.90 of commission, but left out the 9 clawbacks
+    (−47.00) and 2 reversals (+10.50), so an agent's lines never matched their net commission.
+  - "Months paid for" defaulted to 1 on 236 of 264 receipts.
+  - It had no per-agent totals and listed receipts still waiting for approval.
+- **Root cause:**
+  - `getCommissionPaymentReportByOrg` only joined ledger rows that carry a `transaction_id`.
+    Clawbacks, reversals and society commission have none.
+  - Months came from `period_from`/`period_to`, which most receipts don't stamp.
+  - There was no approval filter.
+- **Fix:**
+  - New `server/commission-by-payment.ts` (`buildCommissionByPayment`, `subtotalByAgent`,
+    `commissionPct`). It adds the ledger rows with no receipt as "other" lines, subtotals per
+    agent and currency (receipts, earned, clawed back, net), and shows commission % of payment,
+    which flags anything other than 50% or 10%.
+  - Storage: counting receipts only. Months use `periodsPaidByReceipt`, the same amount ÷ premium
+    rule as the Finance report. `agentId` is exposed.
+  - The route, CSV and tab use it, and the unused `calcMonths` / `monthsFromPeriod` import was
+    removed.
+- **Verified:** every agent's September subtotal equals the Commissions statement's earned and
+  clawed back to the cent. Only FLK00595 falls outside 50% / 10%: a 5-month payment spanning
+  both tiers. Tests in `tests/unit/commission-by-payment.test.ts`.
+- **Lesson for next time:** a per-transaction report and a balance report over the same ledger
+  must include the same rows. Rows with no transaction (adjustments, clawbacks) are the ones
+  that get dropped.
+
+---
+
 ## 2026-10-02 — Falakhe's fallback database address was a password: a control-plane blip could take Falakhe down
 
 - **Symptom:** while running scripts, a control-plane timeout made `getPoolForOrg` fall back to

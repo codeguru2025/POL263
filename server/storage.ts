@@ -17,7 +17,7 @@ import type { NewJoiningReportRow } from "./new-joinings";
 import { paymentPosition, periodsPaidByReceipt } from "./payment-position";
 import { reconcileBankAccounts, goesThroughBank, type AccountInput, type AccountReconciliation, type CurrencyFlows } from "./bank-reconciliation";
 import { classifyActivation, type ActivationType, type ActivationReportRow } from "./activations-report";
-import { monthsFromPeriod, advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
+import { advancePolicyCycle, applyPolicyStatusForClearedPayment } from "./policy-status-on-payment";
 import { WALK_IN_COMMISSION_NAME } from "./commission-calc";
 import {
   organizations, branches, users, roles, permissions, rolePermissions,
@@ -4583,6 +4583,8 @@ export class DatabaseStorage implements IStorage {
       eq(paymentReceipts.organizationId, orgId),
       eq(paymentReceipts.status, "issued"),
       isNull(paymentReceipts.deletedAt),
+      // Only receipts that count: a receipt waiting for approval (or rejected) earns nothing yet.
+      sql`(${paymentReceipts.approvalStatus} IS NULL OR ${paymentReceipts.approvalStatus} = 'approved')`,
     ];
     const { start: cpStart, endExclusive: cpEnd } = await dayRangeForOrg(orgId, filters?.fromDate, filters?.toDate);
     if (cpStart) conditions.push(gte(paymentReceipts.issuedAt, cpStart));
@@ -4615,6 +4617,7 @@ export class DatabaseStorage implements IStorage {
         policyPremium: policies.premiumAmount,
         policyStatus: policies.status,
         paymentSchedule: policies.paymentSchedule,
+        agentId: policies.agentId,
         agentDisplayName: users.displayName,
         agentEmail: users.email,
         policyBranchName: policyBranches.name,
@@ -4648,9 +4651,6 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    const calcMonths = (from: string | null, to: string | null, paymentSchedule: string | null): number =>
-      from && to ? monthsFromPeriod(from, to, paymentSchedule || "monthly") : 1;
-
     return rows.map((r) => ({
       receiptId: r.receiptId,
       receiptNumber: r.receiptNumber,
@@ -4668,7 +4668,9 @@ export class DatabaseStorage implements IStorage {
       commissionType: r.commissionType ?? null,
       // No agent but commission recorded = the company Walk-in account (route-helpers.ts).
       agentName: (r.agentDisplayName || r.agentEmail || "").trim() || (r.commissionAmount != null ? WALK_IN_COMMISSION_NAME : ""),
-      monthsPaidFor: calcMonths(r.periodFrom, r.periodTo, r.paymentSchedule),
+      // Periods recorded on the receipt, else amount ÷ premium (same rule as the Finance report).
+      monthsPaidFor: periodsPaidByReceipt({ periodFrom: r.periodFrom, periodTo: r.periodTo, amount: r.amountPaid, premium: r.policyPremium, schedule: r.paymentSchedule }),
+      agentId: r.agentId ?? null,
       receiptCount: totalReceiptCounts[r.policyId] ?? 0,
       policyBranch: r.policyBranchName || "",
       paymentBranch: r.paymentBranchName || "",

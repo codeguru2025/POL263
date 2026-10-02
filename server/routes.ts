@@ -15055,8 +15055,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/commission-payments", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    return res.json(await storage.getCommissionPaymentReportByOrg(user.organizationId, limit, 0, filters));
+    // Every commission line in the period, subtotalled per agent (server/commission-by-payment.ts).
+    const orgToday = await todayForOrg(user.organizationId);
+    const { buildCommissionByPayment } = await import("./commission-by-payment");
+    return res.json(await buildCommissionByPayment(user.organizationId, {
+      fromDate: filters.fromDate || `${orgToday.slice(0, 7)}-01`, toDate: filters.toDate || orgToday,
+      agentId: filters.agentId, branchId: filters.branchId, productId: filters.productId,
+    }, REPORT_EXPORT_MAX_ROWS));
   });
 
   app.get("/api/reports/agent-portfolio", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -15759,20 +15764,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "commission-payments": {
-          const cpRows = await storage.getCommissionPaymentReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Receipt #", "First Name", "Surname", "National ID", "Phone", "Policy #", "Policy Status", "Policy Premium", "Amount Due", "Amount Paid", "Currency", "Commission Payable", "Commission Type", "Agent", "Months Paid For", "Receipt Count", "Policy Branch", "Payment Branch", "Period From", "Period To", "Payment Channel", "Issued At"];
-          currencyTotals = { "Amount Paid": {}, "Commission Payable": {} };
-          rows = cpRows.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const cc = (r.commissionCurrency || r.currency || "USD").toUpperCase();
-            currencyTotals!["Amount Paid"][c] = (currencyTotals!["Amount Paid"][c] || 0) + (parseFloat(String(r.amountPaid ?? 0)) || 0);
-            currencyTotals!["Commission Payable"][cc] = (currencyTotals!["Commission Payable"][cc] || 0) + (parseFloat(String(r.commissionPayable ?? 0)) || 0);
-            return [
-              r.receiptNumber, r.clientFirstName ?? "", r.clientLastName ?? "", r.clientNationalId ?? "", r.clientPhone ?? "",
-              r.policyNumber, r.policyStatus ?? "", r.policyPremium ?? "", r.amountDue ?? "", r.amountPaid ?? "", r.currency,
-              r.commissionPayable ?? "", r.commissionType ?? "", r.agentName ?? "", r.monthsPaidFor, r.receiptCount,
-              r.policyBranch, r.paymentBranch, r.periodFrom || "", r.periodTo || "", r.paymentChannel, r.issuedAt,
-            ];
+          // Every commission line in the period (server/commission-by-payment.ts).
+          const orgTodayCp = await todayForOrg(user.organizationId);
+          const { buildCommissionByPayment } = await import("./commission-by-payment");
+          const cbp = await buildCommissionByPayment(user.organizationId, {
+            fromDate: reportFilters.fromDate || `${orgTodayCp.slice(0, 7)}-01`, toDate: reportFilters.toDate || orgTodayCp,
+            agentId: reportFilters.agentId, branchId: reportFilters.branchId, productId: reportFilters.productId,
+          }, REPORT_EXPORT_MAX_ROWS);
+          headers = ["Date", "Agent", "Line", "Policy #", "Client", "Receipt #", "Description", "Payment Currency", "Payment", "Months Paid",
+            "Commission Currency", "Commission", ...currencyHeaders("Commission"), "Commission % of Payment"];
+          currencyTotals = { Commission: {} };
+          rows = cbp.lines.map((l) => {
+            if (l.commission != null) currencyTotals!.Commission[l.commissionCurrency] = (currencyTotals!.Commission[l.commissionCurrency] || 0) + Number(l.commission);
+            return [l.date, l.agent, l.kind === "receipt" ? "Receipt" : "Other", l.policyNumber, l.client, l.receiptNumber, l.description, l.paymentCurrency,
+              l.payment ?? "", l.monthsPaid ?? "", l.commissionCurrency, l.commission ?? "", ...currencyAmounts(l.commission ?? 0, l.commissionCurrency), l.commissionPct ?? ""];
           });
           break;
         }
