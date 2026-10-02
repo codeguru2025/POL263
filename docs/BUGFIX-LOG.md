@@ -10,6 +10,42 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Collection efficiency: 33% / 160% figures that meant nothing; 6 duplicate societies
+
+- **Symptom:** Falakhe's August collection efficiency read USD 33–54% and ZAR 120–160%.
+- **Root cause:** `getCollectionEfficiencyReport` had four problems:
+  - It expected one premium per *currently* active/grace policy whatever the period length or
+    schedule.
+  - It expected society members' premiums but never counted the society lump sums they're paid
+    through.
+  - It matched receipts by receipt currency, so a ZAR receipt on a USD policy was ZAR collected
+    against nothing expected.
+  - It counted receipts waiting for approval.
+- **Fix:** new `server/collection-efficiency.ts`, built policy by policy:
+  - **Due:** `dueDatesInWindow` by schedule, counted only while the policy was in force
+    (`statusAt` from the status history), in the policy's currency.
+  - **Collected:** receipts that count in the window, other currencies converted at org rates and
+    flagged.
+  - **Societies:** a section of their own, with lump sums converted to the members' currency.
+    Societies that paid but have no members captured are listed apart as not measurable.
+  - Totals, by branch, by agent, and a furthest-behind list.
+  - Data integrity gains a "Duplicate society / group" check, since same-named groups split
+    members from payments.
+  - Route, export and tab rewritten; the old query was removed.
+- **Verified on Falakhe, September:**
+  - Individual policies USD 48.9% (2,284 / 4,675).
+  - Society members USD 12.1%. Only 22 of 86 societies have members captured, and 48 societies
+    that paid can't be measured.
+  - 6 duplicate societies, e.g. SIYABONGAINKOSI B/S: 17 members on one record, its payments on the
+    other.
+  - Tests in `tests/unit/collection-efficiency.test.ts`.
+- **Lesson for next time:** "expected" must be built from what actually fell due per policy
+  (schedule × time in force), and "collected" must be matched to the same policy in the same
+  currency. When payments arrive through a different channel (society lump sums), measure that
+  channel separately.
+
+---
+
 ## 2026-10-02 — Lapse analysis: guessed lapse rate, counted events not policies, ignored grace
 
 - **Symptom:** the Lapse analysis showed an "approximate" 7.5% lapse rate, with in-force *today*

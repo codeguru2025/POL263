@@ -15233,7 +15233,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : def.from;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
-    return res.json(await storage.getCollectionEfficiencyReport(user.organizationId, from, to));
+    // Policy by policy, societies apart (server/collection-efficiency.ts).
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const { buildCollectionEfficiency } = await import("./collection-efficiency");
+    return res.json(await buildCollectionEfficiency(user.organizationId, { fromDate: from, toDate: to, branchId: filters.branchId, agentId: filters.agentId }));
   });
 
   app.get("/api/reports/persistency", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -16513,15 +16516,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
         case "collection-efficiency": {
           const def = { from: `${(await todayForOrg(user.organizationId)).slice(0, 7)}-01`, to: await todayForOrg(user.organizationId) };
-          const ce = await storage.getCollectionEfficiencyReport(user.organizationId, reportFilters.fromDate || def.from, reportFilters.toDate || def.to);
-          headers = ["Branch", "Currency", "Policies", "Expected Premium", "Collected", "Collection Rate %"];
-          currencyTotals = { "Expected Premium": {}, "Collected": {} };
-          rows = ce.map((r) => {
-            const c = (r.currency || "USD").toUpperCase();
-            currencyTotals!["Expected Premium"][c] = (currencyTotals!["Expected Premium"][c] || 0) + r.expected;
-            currencyTotals!["Collected"][c] = (currencyTotals!["Collected"][c] || 0) + r.collected;
-            return [r.branch, c, r.policyCount, r.expected.toFixed(2), r.collected.toFixed(2), `${r.collectionRate}%`];
-          });
+          const { buildCollectionEfficiency } = await import("./collection-efficiency");
+          const ce = await buildCollectionEfficiency(user.organizationId, { fromDate: reportFilters.fromDate || def.from, toDate: reportFilters.toDate || def.to, branchId: reportFilters.branchId, agentId: reportFilters.agentId });
+          headers = ["Section", "Name", "Currency", "Policies / Members", "Expected", "Collected", "Collection Rate %"];
+          currencyTotals = null;
+          const line = (section: string) => (x: any) => [section, x.key ?? x.group, x.currency, x.policies ?? x.members, x.expected, x.collected, x.ratePct ?? ""];
+          rows = [
+            ...ce.totals.map(line("Total")),
+            ...ce.byBranch.map(line("By branch")),
+            ...ce.byAgent.map(line("By agent")),
+            ...ce.societies.map(line("Society")),
+            ...ce.societiesNotMeasured.map((s: any) => ["Society — no members captured", s.group, Object.keys(s.received).join(" + "), "", "", Object.entries(s.received).map(([c, v]) => `${c} ${v}`).join(" + "), ""]),
+            ...ce.behind.map((p) => ["Behind", `${p.policyNumber} ${p.client} ${p.phone}`, p.currency, p.due, p.expected, p.collected, ""]),
+          ];
           break;
         }
         case "persistency": {

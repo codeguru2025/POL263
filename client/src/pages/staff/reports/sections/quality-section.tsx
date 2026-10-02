@@ -8,7 +8,10 @@ import { ExportButton } from "../export-button";
 import type { ReportSectionBaseProps } from "../use-report-filters";
 
 type IntegrityIssue = { category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string };
-type CollectionRow = { branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number };
+type CollectionLine = { key: string; currency: string; policies: number; expected: string; collected: string; ratePct: number | null };
+type SocietyLine = { group: string; currency: string; members: number; expected: string; collected: string; ratePct: number | null };
+type BehindPolicy = { policyNumber: string; client: string; phone: string; agent: string; currency: string; premium: string; due: number; expected: string; collected: string; shortfall: string; otherCurrency: boolean };
+type CollectionData = { totals: CollectionLine[]; byBranch: CollectionLine[]; byAgent: CollectionLine[]; societies: SocietyLine[]; societiesNotMeasured: { group: string; received: Record<string, string> }[]; behind: BehindPolicy[]; otherCurrencyReceipts: number };
 type PersistencyRow = { cohort: string; monthsSinceSale: number | null; sold: number; neverPaid: number; notTakenUpPct: number | null; startedPaying: number; inForce: number; lapsed: number; cancelled: number; persistencyPct: number | null };
 type PersistencyData = { cohorts: PersistencyRow[]; typedIn: PersistencyRow };
 type LapseMonth = { month: string; inForceAtStart: number; intoGrace: number; recovered: number; lapsed: number; reinstated: number; lapseRatePct: number | null };
@@ -32,13 +35,32 @@ const integrityColumns: EdtColumn<IntegrityIssue>[] = [
   { id: "detail", header: "What's wrong", sortable: false, accessor: (r) => r.detail, cell: (r) => <span className="text-sm text-muted-foreground max-w-[420px] block">{r.detail}</span> },
 ];
 
-const collectionColumns: EdtColumn<CollectionRow>[] = [
-  { id: "branch", header: "Branch", accessor: (r) => r.branch, cell: (r) => <span className="whitespace-nowrap font-medium">{r.branch}</span> },
+const m2 = (v: string) => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const rateCell = (v: number | null) => v == null ? <span className="text-muted-foreground">—</span> : <span className={`tabular-nums font-semibold ${rateColor(v)}`}>{v}%</span>;
+const collectionColumns: EdtColumn<CollectionLine>[] = [
+  { id: "key", header: "", accessor: (r) => r.key, cell: (r) => <span className="whitespace-nowrap font-medium">{r.key}</span> },
   { id: "currency", header: "Currency", accessor: (r) => r.currency },
-  { id: "policyCount", header: "Policies", align: "right", accessor: (r) => r.policyCount, cell: (r) => <span className="tabular-nums">{r.policyCount}</span> },
-  { id: "expected", header: "Expected premium", align: "right", accessor: (r) => r.expected, cell: (r) => <span className="tabular-nums">{money(r.expected, r.currency)}</span> },
-  { id: "collected", header: "Collected", align: "right", accessor: (r) => r.collected, cell: (r) => <span className="tabular-nums">{money(r.collected, r.currency)}</span> },
-  { id: "rate", header: "Collection rate", align: "right", accessor: (r) => r.collectionRate, cell: (r) => <span className={`tabular-nums font-semibold ${rateColor(r.collectionRate)}`}>{r.collectionRate}%</span> },
+  { id: "policies", header: "Policies", align: "right", accessor: (r) => r.policies, cell: (r) => <span className="tabular-nums">{r.policies}</span> },
+  { id: "expected", header: "Due", align: "right", accessor: (r) => Number(r.expected), cell: (r) => <span className="tabular-nums">{m2(r.expected)}</span> },
+  { id: "collected", header: "Collected", align: "right", accessor: (r) => Number(r.collected), cell: (r) => <span className="tabular-nums">{m2(r.collected)}</span> },
+  { id: "rate", header: "Collection rate", align: "right", accessor: (r) => r.ratePct ?? -1, cell: (r) => rateCell(r.ratePct) },
+];
+const societyColumns: EdtColumn<SocietyLine>[] = [
+  { id: "group", header: "Society", accessor: (r) => r.group, cell: (r) => <span className="whitespace-nowrap">{r.group}</span> },
+  { id: "members", header: "Members", align: "right", accessor: (r) => r.members },
+  { id: "expected", header: "Members' premiums due", align: "right", accessor: (r) => Number(r.expected), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {m2(r.expected)}</span> },
+  { id: "collected", header: "Lump sums received", align: "right", accessor: (r) => Number(r.collected), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {m2(r.collected)}</span> },
+  { id: "rate", header: "Rate", align: "right", accessor: (r) => r.ratePct ?? -1, cell: (r) => rateCell(r.ratePct) },
+];
+const behindColumns: EdtColumn<BehindPolicy>[] = [
+  { id: "policy", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-sm whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "client", header: "Client", accessor: (r) => r.client, cell: (r) => <span className="whitespace-nowrap">{r.client}</span> },
+  { id: "phone", header: "Phone", accessor: (r) => r.phone },
+  { id: "agent", header: "Agent", accessor: (r) => r.agent },
+  { id: "due", header: "Premiums due", align: "right", accessor: (r) => r.due },
+  { id: "expected", header: "Due", align: "right", accessor: (r) => Number(r.expected), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {m2(r.expected)}</span> },
+  { id: "collected", header: "Paid", align: "right", accessor: (r) => Number(r.collected), cell: (r) => <span className="tabular-nums whitespace-nowrap">{r.currency} {m2(r.collected)}{r.otherCurrency && <span className="text-[10px] text-amber-700 block">part paid in another currency</span>}</span> },
+  { id: "shortfall", header: "Short by", align: "right", accessor: (r) => Number(r.shortfall), cell: (r) => <span className="tabular-nums whitespace-nowrap text-destructive font-medium">{r.currency} {m2(r.shortfall)}</span> },
 ];
 
 const pctCell = (v: number | null, goodHigh: boolean) => v == null ? <span className="text-muted-foreground">—</span>
@@ -115,7 +137,7 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
     },
     enabled: need("lapseAnalysis"),
   });
-  const { data: collection = [], isLoading: loadingCollection } = useQuery<CollectionRow[]>({
+  const { data: collection, isLoading: loadingCollection } = useQuery<CollectionData>({
     queryKey: ["reports", "collection-efficiency", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/collection-efficiency" + q, { credentials: "include" });
@@ -221,17 +243,43 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
       <TabsContent value="collection-efficiency">
         <CardSection
           title="Premium collection efficiency"
-          description="Expected premium (one billing cycle per active/grace policy) vs premium actually collected (issued receipts) in the selected period, and the collection rate, by branch and currency. Cash basis."
+          description="Policy by policy: the premiums that fell due in the period (by each policy's schedule, while it was in force) against what was paid on it in the period, in the policy's currency. Society members are paid through the society's lump sums, so societies are measured on their own."
           icon={TrendingUp}
           headerRight={<ExportButton reportType="collection-efficiency" filters={filters} />}
           flush
         >
           {loadingCollection ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : collection.length === 0 ? (
-            <EmptyState title="No data for the selected period" className="border-0 rounded-none bg-transparent py-8" />
+          ) : !collection || collection.totals.length === 0 ? (
+            <EmptyState title="Nothing fell due in this period" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
-            <EnhancedDataTable columns={collectionColumns} rows={collection.map((r, i) => ({ ...r, _k: i }))} getRowKey={(r: any) => String(r._k)} exportFilename="collection-efficiency" storageKey="reports-collection-efficiency" emptyMessage="No data for the selected period." />
+            <>
+              <EnhancedDataTable columns={collectionColumns} rows={collection.totals} getRowKey={(r) => `${r.key}-${r.currency}`} exportFilename="collection-totals" storageKey="reports-collection-totals" emptyMessage="—" />
+              {collection.otherCurrencyReceipts > 0 && <p className="px-4 pt-1 text-xs text-muted-foreground">{collection.otherCurrencyReceipts} receipt{collection.otherCurrencyReceipts === 1 ? " was" : "s were"} paid in a different currency from the policy and converted at your exchange rates.</p>}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                <div>
+                  <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Individual policies by branch</div>
+                  <EnhancedDataTable columns={collectionColumns} rows={collection.byBranch} getRowKey={(r) => `${r.key}-${r.currency}`} exportFilename="collection-by-branch" storageKey="reports-collection-branch" emptyMessage="—" />
+                </div>
+                <div>
+                  <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Individual policies by agent</div>
+                  <EnhancedDataTable columns={collectionColumns} rows={collection.byAgent} getRowKey={(r) => `${r.key}-${r.currency}`} exportFilename="collection-by-agent" storageKey="reports-collection-agent" emptyMessage="—" />
+                </div>
+              </div>
+              {collection.societies.length > 0 && (
+                <>
+                  <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Societies with members captured</div>
+                  <EnhancedDataTable columns={societyColumns} rows={collection.societies} getRowKey={(r) => `${r.group}-${r.currency}`} exportFilename="collection-societies" storageKey="reports-collection-societies" emptyMessage="—" />
+                </>
+              )}
+              {collection.societiesNotMeasured.length > 0 && (
+                <p className="px-4 pt-2 text-xs text-amber-700">
+                  {collection.societiesNotMeasured.length} societ{collection.societiesNotMeasured.length === 1 ? "y" : "ies"} paid in this period but {collection.societiesNotMeasured.length === 1 ? "has" : "have"} no members captured as policies, so {collection.societiesNotMeasured.length === 1 ? "its" : "their"} collection can&apos;t be measured: {collection.societiesNotMeasured.slice(0, 8).map((s) => s.group).join(", ")}{collection.societiesNotMeasured.length > 8 ? "…" : ""}. Capture their members to include them.
+                </p>
+              )}
+              <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Furthest behind — paid least against what fell due</div>
+              <EnhancedDataTable columns={behindColumns} rows={collection.behind} getRowKey={(r) => r.policyNumber} exportFilename="collection-behind" storageKey="reports-collection-behind" emptyMessage="Everyone paid what fell due." />
+            </>
           )}
         </CardSection>
       </TabsContent>

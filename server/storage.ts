@@ -449,8 +449,6 @@ export interface IStorage {
   }>>;
   /** Records that are internally inconsistent and need a human — the data-integrity exception report. */
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
-  /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
-  getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
   /** Member / dependant additions and removals over a period, from the audit trail. */
   getMemberMovementReport(organizationId: string, from: string, to: string): Promise<{ date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string }[]>;
   /** Active/grace policies whose inception anniversary falls within the next `withinDays` days. */
@@ -2489,6 +2487,18 @@ export class DatabaseStorage implements IStorage {
         detail: `Funeral ${r.case_number} (${died}) was done under a policy, but no policy is linked — open the case, find the policy and pick the member, then raise the claim.${r.name_matches ? ` Same name on: ${r.name_matches}.` : ""}`,
       });
     }
+    // Two groups with the same name split one society: payments land on one record while its
+    // members sit on the other, so neither shows the truth (SIYABONGAINKOSI B/S, Oct 2026).
+    const dupGroups = await tdb.execute(sql`
+      SELECT upper(trim(g.name)) AS name, COUNT(*)::int AS n,
+        string_agg(g.name || ' — ' || (SELECT COUNT(*) FROM policies p WHERE p.group_id = g.id AND p.deleted_at IS NULL) || ' members, '
+          || (SELECT COUNT(*) FROM legacy_group_receipts l WHERE l.group_id = g.id) || ' lump-sum receipts', '; ') AS detail
+      FROM groups g WHERE g.organization_id = ${organizationId}
+      GROUP BY upper(trim(g.name)) HAVING COUNT(*) > 1`);
+    for (const r of rowsOf(dupGroups)) {
+      out.push({ category: "Duplicate society / group", severity: "medium", policyNumber: "—", client: r.name,
+        detail: `${r.n} groups share this name (${r.detail}). Members and payments are split between them — merge into one so its balance and collection are right.` });
+    }
     for (const r of rowsOf(livesNoAge)) {
       const parts = [r.no_dob ? `${r.no_dob} with no date of birth` : "", r.no_gender ? `${r.no_gender} with no gender` : ""].filter(Boolean).join(" and ");
       out.push({ category: "Covered lives missing date of birth / gender", severity: "low", policyNumber: r.policy_number, client: name(r), detail: `${parts} — these lives can't be age-rated for the actuary or the IPEC return.` });
@@ -2496,50 +2506,6 @@ export class DatabaseStorage implements IStorage {
 
     const sevRank = { high: 0, medium: 1, low: 2 };
     return out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity] || a.category.localeCompare(b.category));
-  }
-
-  /**
-   * Premium-collection efficiency for a period: expected premium (active + grace policies whose
-   * cycle falls in the window) vs collected (issued receipts in the window), and the collection
-   * rate, grouped by branch. Cash basis, per currency.
-   */
-  async getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]> {
-    const tdb = await getDbForOrg(organizationId);
-    const fromTs = new Date(from + "T00:00:00.000Z");
-    const toTs = new Date(to + "T23:59:59.999Z");
-    const rowsOf = (r: any): any[] => r.rows ?? r;
-
-    const [expectedRows, collectedRows] = await Promise.all([
-      // Expected = one premium per active/grace policy in the period (a single billing cycle).
-      tdb.execute(sql`
-        SELECT COALESCE(b.name, '(No branch)') AS branch, p.currency,
-               COALESCE(SUM(p.premium_amount::numeric), 0) AS expected, COUNT(*) AS policy_count
-        FROM policies p LEFT JOIN branches b ON b.id = p.branch_id
-        WHERE p.organization_id = ${organizationId} AND p.deleted_at IS NULL AND p.status IN ('active','grace')
-        GROUP BY COALESCE(b.name, '(No branch)'), p.currency`),
-      tdb.execute(sql`
-        SELECT COALESCE(b.name, '(No branch)') AS branch, pr.currency,
-               COALESCE(SUM(pr.amount::numeric), 0) AS collected
-        FROM payment_receipts pr LEFT JOIN branches b ON b.id = pr.branch_id
-        WHERE pr.organization_id = ${organizationId} AND pr.status = 'issued'
-          AND pr.issued_at >= ${fromTs} AND pr.issued_at <= ${toTs}
-        GROUP BY COALESCE(b.name, '(No branch)'), pr.currency`),
-    ]);
-
-    const map = new Map<string, { branch: string; currency: string; expected: number; collected: number; policyCount: number }>();
-    for (const r of rowsOf(expectedRows)) {
-      const k = `${r.branch}|${r.currency}`;
-      map.set(k, { branch: r.branch, currency: r.currency, expected: parseFloat(r.expected), collected: 0, policyCount: parseInt(r.policy_count) });
-    }
-    for (const r of rowsOf(collectedRows)) {
-      const k = `${r.branch}|${r.currency}`;
-      const e = map.get(k) ?? { branch: r.branch, currency: r.currency, expected: 0, collected: 0, policyCount: 0 };
-      e.collected += parseFloat(r.collected);
-      map.set(k, e);
-    }
-    return Array.from(map.values())
-      .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
-      .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
   }
 
   /**
