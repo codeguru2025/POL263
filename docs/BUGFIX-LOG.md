@@ -10,6 +10,41 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Agent productivity counted typed-in policies as sales and duplicated New joinings
+
+- **Symptom:** for Falakhe, September, the report showed 57 "productive" policies. Only 29 were
+  new sales; 28 were existing policies typed in that month that happened to get a receipt,
+  inflating "Walk-in" from 12 to 40. For real agents it matched New joinings' "paid" count, but
+  it never showed the policies that didn't convert, so there was no conversion rate. It had no
+  per-agent totals, premium without currency, UTC days, and society-paid members counted as
+  unpaid.
+- **Root cause:** `getAgentProductivityReportByOrg` selected every policy created in the
+  window that had any receipt in the window. It had no `is_legacy` filter and ignored group
+  lump sums.
+- **Fix:** new `server/agent-productivity.ts` (`buildAgentProductivity`, `rankScorecard`). It is a
+  scorecard per agent:
+  - **Sales**, built on New joinings: sold, paid (including through the society), conversion %,
+    new monthly premium per currency, average premium and lives covered. Typed-in policies are
+    counted separately.
+  - **Their book:** collected on it (premium receipts plus their societies' lump sums), lapses in
+    the period, persistency.
+  - **Quality:** of what they sold in the last 6 months, how much never paid or lapsed.
+  - **Cost:** commission earned, clawed back, and commission as % of collected.
+  - **Rank** by new premium sold (USD equivalent).
+
+  The route, the CSV and `agents-section.tsx` use it, with a list of new policies sold (unpaid
+  first) below. The old query was removed.
+- **Verified on Falakhe, September:**
+  - Gugulethu Moyo is ranked 1: 12 sold, 12 paid, USD 111/month new, 5.2 lives per policy,
+    persistency 87.5%.
+  - Pesuate Mhlanga: 8 sold, 3 paid (37.5%); 32 of 51 recent sales didn't stick.
+  - No agent: 12 sold, 135 typed in (not counted as sales).
+  - Test in `tests/unit/agent-productivity.test.ts`.
+- **Lesson for next time:** any "sales" figure must exclude `is_legacy` captures. Two reports
+  measuring the same thing should share one definition (here, New joinings').
+
+---
+
 ## 2026-10-02 — Permission audit: role edits wiped on every restart; "see all clients" not editable
 
 - **Symptom** (from a full audit of every permission):

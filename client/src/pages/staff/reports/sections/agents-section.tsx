@@ -46,17 +46,35 @@ const agentPortfolioColumns: EdtColumn<any>[] = [
   { id: "effectiveDate", header: "Effective date", accessor: (p) => p.inceptionDate ?? "", cell: (p) => <span className="text-sm whitespace-nowrap">{fmtDay(p.inceptionDate)}</span> },
 ];
 
+const pctCell = (v: number | null, goodHigh = true) => v == null ? <span className="text-muted-foreground">—</span>
+  : <span className={`tabular-nums ${goodHigh ? (v >= 70 ? "text-emerald-700" : v < 40 ? "text-rose-700" : "") : ""}`}>{v}%</span>;
+
 const agentProductivityColumns: EdtColumn<any>[] = [
-  { id: "agentsName", header: "Agent", accessor: (r) => r.AgentsName || "Walk-in", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[140px] truncate block" title={r.AgentsName}>{r.AgentsName || "Walk-in"}</span> },
-  { id: "inceptionDate", header: "Inception Date", accessor: (r) => r.Inception_Date || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.Inception_Date || "—"}</span> },
-  { id: "policyNumber", header: "Policy #", accessor: (r) => r.Policy_Number, cell: (r) => <span className="text-xs font-mono whitespace-nowrap">{r.Policy_Number}</span> },
-  { id: "fullName", header: "Member", accessor: (r) => r.FullName || "", cell: (r) => <span className="text-xs max-w-[160px] truncate block" title={r.FullName}>{r.FullName || "—"}</span> },
-  { id: "productName", header: "Product", accessor: (r) => r.Product_Name || "", cell: (r) => <span className="text-xs max-w-[160px] truncate block" title={r.Product_Name}>{r.Product_Name || "—"}</span> },
-  { id: "usualPremium", header: "Premium", accessor: (r) => r.UsualPremium || "", cell: (r) => <span className="text-xs whitespace-nowrap tabular-nums">{r.UsualPremium || "—"}</span> },
-  { id: "statusDesc", header: "Status", accessor: (r) => r.StatusDesc, cell: (r) => <span className="text-xs whitespace-nowrap">{r.StatusDesc}</span> },
-  { id: "receiptsCollected", header: "Receipts Collected", accessor: (r) => r.ReceiptsCollected, cell: (r) => <span className="text-xs tabular-nums">{r.ReceiptsCollected}</span> },
-  { id: "membersBranch", header: "Member Branch", accessor: (r) => r.MembersBranch || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[120px] truncate block" title={r.MembersBranch}>{r.MembersBranch || "—"}</span> },
-  { id: "agentsBranch", header: "Agent Branch", accessor: (r) => r.AgentsBranch || "", cell: (r) => <span className="text-xs whitespace-nowrap max-w-[120px] truncate block" title={r.AgentsBranch}>{r.AgentsBranch || "—"}</span> },
+  { id: "rank", header: "#", align: "right", accessor: (r) => r.rank ?? 999, cell: (r) => <span className="tabular-nums text-muted-foreground">{r.rank ?? "—"}</span> },
+  { id: "agent", header: "Agent", accessor: (r) => r.agent, cell: (r) => <span className="text-sm whitespace-nowrap">{r.agent}</span> },
+  { id: "newSold", header: "Sold", align: "right", accessor: (r) => r.newSold },
+  { id: "paid", header: "Paid", align: "right", accessor: (r) => r.paid },
+  { id: "conversion", header: "Conversion", align: "right", accessor: (r) => r.conversionPct ?? -1, cell: (r) => pctCell(r.conversionPct) },
+  { id: "premium", header: "New monthly premium", align: "right", accessor: (r) => Object.values(r.newMonthlyPremium ?? {}).reduce((a: number, v: any) => a + Number(v), 0), cell: (r) => <span className="tabular-nums whitespace-nowrap">{byCur(r.newMonthlyPremium)}</span> },
+  { id: "avg", header: "Avg premium / lives", align: "right", accessor: (r) => r.avgPremiumUsd ?? -1, cell: (r) => <span className="tabular-nums whitespace-nowrap text-xs">{r.avgPremiumUsd != null ? `USD ${r.avgPremiumUsd.toFixed(2)}` : "—"} · {r.avgLives ?? "—"} lives</span> },
+  { id: "collected", header: "Collected on their book", align: "right", accessor: (r) => Object.values(r.collected ?? {}).reduce((a: number, v: any) => a + Number(v), 0), cell: (r) => <span className="tabular-nums whitespace-nowrap">{byCur(r.collected)}</span> },
+  { id: "lapses", header: "Lapses", align: "right", accessor: (r) => r.lapses, cell: (r) => <span className={`tabular-nums ${r.lapses ? "text-rose-700" : ""}`}>{r.lapses}</span> },
+  { id: "persistency", header: "Persistency", align: "right", accessor: (r) => r.persistencyPct ?? -1, cell: (r) => pctCell(r.persistencyPct) },
+  { id: "stuck", header: "Didn't stick (6 mo)", align: "right", accessor: (r) => (r.recentSold ? r.recentNotStuck / r.recentSold : -1), cell: (r) => r.recentSold ? <span className={`tabular-nums whitespace-nowrap ${r.recentNotStuck / r.recentSold > 0.5 ? "text-rose-700" : ""}`} title="Sold in the 6 months to the period end that never paid (30+ days on) or have lapsed">{r.recentNotStuck} of {r.recentSold}</span> : <span className="text-muted-foreground">—</span> },
+  { id: "commission", header: "Commission / clawed back", align: "right", accessor: (r) => Object.values(r.commissionEarned ?? {}).reduce((a: number, v: any) => a + Number(v), 0), cell: (r) => <span className="tabular-nums whitespace-nowrap text-xs">{byCur(r.commissionEarned)}{byCur(r.clawedBack) !== "—" && <span className="text-rose-700"> · {byCur(r.clawedBack)}</span>}</span> },
+  { id: "commPct", header: "Commission % of collected", align: "right", accessor: (r) => r.commissionPctOfCollected ?? -1, cell: (r) => pctCell(r.commissionPctOfCollected, false) },
+  { id: "typedIn", header: "Typed in (not sales)", align: "right", accessor: (r) => r.typedIn, cell: (r) => <span className="tabular-nums text-muted-foreground">{r.typedIn || "—"}</span> },
+];
+
+const newSaleColumns: EdtColumn<any>[] = [
+  { id: "agent", header: "Agent", accessor: (r) => r.agent, cell: (r) => <span className="text-xs whitespace-nowrap">{r.agent}</span> },
+  { id: "policy", header: "Policy #", accessor: (r) => r.policyNumber, cell: (r) => <span className="font-mono text-xs whitespace-nowrap">{r.policyNumber}</span> },
+  { id: "client", header: "Client", accessor: (r) => r.client, cell: (r) => <span className="text-xs whitespace-nowrap">{r.client}</span> },
+  { id: "product", header: "Product", accessor: (r) => r.product },
+  { id: "captured", header: "Captured", accessor: (r) => r.capturedOn, cell: (r) => <span className="text-xs whitespace-nowrap">{fmtDay(r.capturedOn)}</span> },
+  { id: "premium", header: "Premium", align: "right", accessor: (r) => Number(r.premium), cell: (r) => <span className="tabular-nums whitespace-nowrap text-xs">{r.currency} {r.premium}</span> },
+  { id: "paid", header: "Paid?", accessor: (r) => r.paid, cell: (r) => r.paid === "unpaid" ? <span className="text-xs text-rose-700 font-medium">Not yet</span> : <span className="text-xs text-emerald-700">{r.paid === "group" ? "Through society" : "Yes"}</span> },
+  { id: "first", header: "First payment", accessor: (r) => r.firstPaymentDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.firstPaymentDate ? `${fmtDay(r.firstPaymentDate)} · ${r.firstPaymentCurrency || r.currency} ${r.firstPaymentAmount}` : "—"}</span> },
 ];
 
 const commissionSummaryColumns: EdtColumn<any>[] = [
@@ -156,11 +174,11 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
     },
     enabled: need("agentPortfolio"),
   });
-  const { data: agentProductivity = [], isLoading: loadingAgentProductivity } = useQuery<any[]>({
+  const { data: agentProductivity, isLoading: loadingAgentProductivity } = useQuery<{ scorecard: any[]; newSales: any[] }>({
     queryKey: ["reports", "agent-productivity", runKey, ...fk],
     queryFn: async () => {
-      const res = await fetch(getApiBase() + "/api/reports/agent-productivity?limit=500" + qAppend, { credentials: "include" });
-      if (!res.ok) return [];
+      const res = await fetch(getApiBase() + "/api/reports/agent-productivity" + q, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load agent productivity");
       return res.json();
     },
     enabled: need("agentProductivity"),
@@ -249,20 +267,35 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
       </TabsContent>
 
       <TabsContent value="agent-productivity">
-        <CardSection title="Agent productivity" icon={TrendingUp} description="Policies captured and issued at least one receipt in the same from/to window. Set both dates; branch, product, and agent filters apply." headerRight={<ExportButton reportType="agent-productivity" filters={filters} />} flush>
-          {!fromDate || !toDate ? (
-            <EmptyState title="Set date range" description="Choose a from date and to date to run this report." className="border-0 rounded-none bg-transparent py-8" />
-          ) : loadingAgentProductivity ? (
+        <CardSection
+          title="Agent productivity"
+          icon={TrendingUp}
+          description="A scorecard per agent for the period: what they sold and how much of it paid, what came in on their book, how their sales hold up, and what their commission costs. New business only — existing policies typed in are counted separately. Ranked by new monthly premium sold."
+          headerRight={<ExportButton reportType="agent-productivity" filters={filters} />}
+          flush
+        >
+          {loadingAgentProductivity ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (
-            <EnhancedDataTable
-              columns={agentProductivityColumns}
-              rows={agentProductivity}
-              getRowKey={(r) => r.policyId}
-              exportFilename="agent-productivity"
-              storageKey="reports-agent-productivity"
-              emptyMessage="No policies registered and receipt-issued in range."
-            />
+            <>
+              <EnhancedDataTable
+                columns={agentProductivityColumns}
+                rows={agentProductivity?.scorecard ?? []}
+                getRowKey={(r) => r.agentId ?? "none"}
+                exportFilename="agent-productivity"
+                storageKey="reports-agent-productivity-v2"
+                emptyMessage="No agent activity in this period."
+              />
+              <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">New policies sold in the period — unpaid first</div>
+              <EnhancedDataTable
+                columns={newSaleColumns}
+                rows={agentProductivity?.newSales ?? []}
+                getRowKey={(r) => r.policyNumber}
+                exportFilename="agent-new-sales"
+                storageKey="reports-agent-new-sales"
+                emptyMessage="No new policies sold in this period."
+              />
+            </>
           )}
         </CardSection>
       </TabsContent>

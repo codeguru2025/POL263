@@ -14985,9 +14985,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/agent-productivity", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    const offset = parseInt(String(req.query.offset)) || 0;
-    return res.json(await storage.getAgentProductivityReportByOrg(user.organizationId, limit, offset, filters));
+    // Scorecard per agent for the period (server/agent-productivity.ts); month to date by default.
+    const orgToday = await todayForOrg(user.organizationId);
+    const { buildAgentProductivity } = await import("./agent-productivity");
+    return res.json(await buildAgentProductivity(user.organizationId, {
+      fromDate: filters.fromDate || `${orgToday.slice(0, 7)}-01`, toDate: filters.toDate || orgToday,
+      branchId: filters.branchId, agentId: filters.agentId, productId: filters.productId,
+    }));
   });
   app.get("/api/reports/cashups", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
@@ -15954,41 +15958,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "agent-productivity": {
-          const prod = await storage.getAgentProductivityReportByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = [
-            "agent_id",
-            "AgentsName",
-            "Inception_Date",
-            "Policy_Number",
-            "FullName",
-            "Product_Name",
-            "UsualPremium",
-            "StatusDesc",
-            "ReceiptsCollected",
-            "Colour",
-            "MembersBranch",
-            "AgentsBranch",
-            "Active",
-            "fdate",
-            "tdate",
-          ];
+          // Scorecard per agent for the period (server/agent-productivity.ts).
+          const orgTodayP = await todayForOrg(user.organizationId);
+          const { buildAgentProductivity } = await import("./agent-productivity");
+          const ap = await buildAgentProductivity(user.organizationId, {
+            fromDate: reportFilters.fromDate || `${orgTodayP.slice(0, 7)}-01`, toDate: reportFilters.toDate || orgTodayP,
+            branchId: reportFilters.branchId, agentId: reportFilters.agentId, productId: reportFilters.productId,
+          });
+          const m = (x: Record<string, string>) => Object.entries(x).map(([c, v]) => `${c} ${v}`).join(" + ");
+          headers = ["Rank", "Agent", "New policies sold", "Paid", "Not paid", "Conversion %", "New monthly premium", "Avg premium (USD)", "Avg lives per policy",
+            "Existing policies typed in", "Collected on their book", "Lapses", "Persistency %", "Sold last 6 months", "…of which never paid or lapsed",
+            "Commission earned", "Clawed back", "Commission % of collected"];
           currencyTotals = null;
-          rows = prod.map((r: any) => [
-            r.agent_id ?? "",
-            r.AgentsName ?? "",
-            r.Inception_Date ?? "",
-            r.Policy_Number ?? "",
-            r.FullName ?? "",
-            r.Product_Name ?? "",
-            r.UsualPremium ?? "",
-            r.StatusDesc ?? "",
-            r.ReceiptsCollected ?? "",
-            r.Colour ?? "",
-            r.MembersBranch ?? "",
-            r.AgentsBranch ?? "",
-            r.Active ?? "",
-            r.fdate ?? "",
-            r.tdate ?? "",
+          rows = ap.scorecard.map((s) => [
+            s.rank ?? "", s.agent, s.newSold, s.paid, s.notPaid, s.conversionPct ?? "", m(s.newMonthlyPremium), s.avgPremiumUsd ?? "", s.avgLives ?? "",
+            s.typedIn, m(s.collected), s.lapses, s.persistencyPct ?? "", s.recentSold, s.recentNotStuck, m(s.commissionEarned), m(s.clawedBack), s.commissionPctOfCollected ?? "",
           ]);
           break;
         }
