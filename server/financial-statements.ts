@@ -262,12 +262,16 @@ async function queryClaimsPaid(tdb: any, orgId: string, from: string, to: string
 }
 
 /** Falakhe (and anyone without a commission-payout screen) pays agents through a requisition
- *  categorised "Commission". That is the commission being paid, not a new cost: the income
- *  statement already counts commission as it is earned, and the cash-flow statement shows these
- *  as commission paid out. */
-export function isCommissionPayoutCategory(category: string | null | undefined): boolean {
-  return /commission/i.test(category ?? "");
+ *  categorised "Commission" that names the agent (requisitions.agent_id). That is the commission
+ *  being paid, not a new cost: the income statement already counts commission as it is earned, and
+ *  the cash-flow statement shows these as commission paid out. A "Commission" requisition with no
+ *  agent (a referral fee to someone who isn't an agent) is an ordinary expense — nothing earned it
+ *  in the commission ledger (Augustus, 2 Oct 2026). */
+export function isCommissionPayoutCategory(category: string | null | undefined, agentId: string | null | undefined): boolean {
+  return !!agentId && /commission/i.test(category ?? "");
 }
+/** Category label disbursementCategories gives commission paid to an agent. */
+export const COMMISSION_PAYOUT_CATEGORY = "Commission paid to agents";
 
 /** A requisition paying POL263 its 2.5% fees (Falakhe records these as "PLATFORM FEE", or
  *  "FEES"/"PAYMENT" with a "2.5% platform fee" description). That pays off what is owed to
@@ -278,13 +282,13 @@ export function isPol263Payment(category: string | null | undefined, description
   return re.test(category ?? "") || re.test(description ?? "");
 }
 /** The same two rules in SQL, for queries that total payouts without loading each one: a payout
- *  that is agents' commission or a payment to POL263 settles a cost counted elsewhere. Keep in
+ *  that is an agent's commission or a payment to POL263 settles a cost counted elsewhere. Keep in
  *  step with isCommissionPayoutCategory / isPol263Payment. */
 /** POSIX form of isPol263Payment's pattern (\m \M are Postgres word boundaries). Bound as a
  *  parameter so no escaping is lost in the SQL template. */
 const POL263_PAYMENT_PG_RE = String.raw`2\.5\s*%\s*platf|platfor?m\s*fee|\mpol\s*263\M`;
-const settlesCountedCostSql = (category: any, description: any) => sql`(
-  COALESCE(${category}, '') ~* 'commission'
+const settlesCountedCostSql = (category: any, description: any, agentId: any) => sql`(
+  (${agentId} IS NOT NULL AND COALESCE(${category}, '') ~* 'commission')
   OR COALESCE(${category}, '') ~* ${POL263_PAYMENT_PG_RE}
   OR COALESCE(${description}, '') ~* ${POL263_PAYMENT_PG_RE})`;
 
@@ -297,8 +301,10 @@ async function disbursementCategories(tdb: any, disbRows: { entityType: string; 
   const expIds = disbRows.filter((d) => d.entityType === "expenditure").map((d) => d.entityId);
   const out: Record<string, string> = {};
   if (reqIds.length) {
-    for (const r of await tdb.select({ id: requisitions.id, category: requisitions.category, description: requisitions.description }).from(requisitions).where(inArray(requisitions.id, reqIds))) {
-      out[r.id] = isPol263Payment(r.category, r.description) ? POL263_PAYMENT_CATEGORY : (r.category || "Uncategorised");
+    for (const r of await tdb.select({ id: requisitions.id, category: requisitions.category, description: requisitions.description, agentId: requisitions.agentId }).from(requisitions).where(inArray(requisitions.id, reqIds))) {
+      out[r.id] = isCommissionPayoutCategory(r.category, r.agentId) ? COMMISSION_PAYOUT_CATEGORY
+        : isPol263Payment(r.category, r.description) ? POL263_PAYMENT_CATEGORY
+        : (r.category || "Uncategorised");
     }
   }
   if (expIds.length) {
@@ -437,7 +443,7 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     const type = d.entityType as "requisition" | "expenditure";
     const cat = categories[d.entityId] || "Uncategorised";
     // Paying an agent through a requisition settles commission already counted as earned below.
-    if (isCommissionPayoutCategory(cat)) continue;
+    if (cat === COMMISSION_PAYOUT_CATEGORY) continue;
     // Paying POL263 settles the POL263 bills / fees already counted below.
     if (cat === POL263_PAYMENT_CATEGORY) continue;
     pushExpense(cat, type, d.currency, parseFloat(d.total));
@@ -533,8 +539,7 @@ export async function buildIncomeTimeSeries(
       LEFT JOIN requisitions rq ON d.entity_type = 'requisition' AND rq.id = d.entity_id
       LEFT JOIN expenditures ex ON d.entity_type = 'expenditure' AND ex.id = d.entity_id
       WHERE d.organization_id = ${orgId} AND d.paid_date >= ${from} AND d.paid_date <= ${to} ${br(sql`d.branch_id`)}
-        AND NOT (d.entity_type = 'requisition' AND ${settlesCountedCostSql(sql`rq.category`, sql`rq.description`)})
-        AND NOT (d.entity_type = 'expenditure' AND COALESCE(ex.category, '') ~* 'commission')
+        AND NOT (d.entity_type = 'requisition' AND ${settlesCountedCostSql(sql`rq.category`, sql`rq.description`, sql`rq.agent_id`)})
       GROUP BY 1, 2`),
     q(sql`SELECT ${local(sql`e.created_at`)} AS bucket, e.currency, COALESCE(SUM(e.amount), 0) AS total
       FROM commission_ledger_entries e LEFT JOIN policies p ON p.id = e.policy_id
@@ -647,7 +652,7 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
   for (const d of disbRows) {
     const amt = parseFloat(d.total);
     // A "Commission" requisition is agents being paid their commission.
-    if (isCommissionPayoutCategory(categories[d.entityId])) add(commissionsOut, d.currency, amt);
+    if (categories[d.entityId] === COMMISSION_PAYOUT_CATEGORY) add(commissionsOut, d.currency, amt);
     // Paying POL263 its fees: the POL263 line, not a general requisition.
     else if (categories[d.entityId] === POL263_PAYMENT_CATEGORY) add(pol263Bills, d.currency, amt);
     else if (d.entityType === "requisition") add(requisitionsOut, d.currency, amt);
@@ -859,9 +864,9 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
     .where(and(...disbConds));
   const reqIds = disbRows.filter((d: any) => d.entityType === "requisition").map((d: any) => d.entityId as string);
   const expIds = disbRows.filter((d: any) => d.entityType === "expenditure").map((d: any) => d.entityId as string);
-  const info: Record<string, { description: string | null; category: string | null; department: string | null; number: string | null }> = {};
+  const info: Record<string, { description: string | null; category: string | null; department: string | null; number: string | null; agentId?: string | null }> = {};
   if (reqIds.length) {
-    for (const r of await tdb.select({ id: requisitions.id, description: requisitions.description, category: requisitions.category, department: requisitions.department, number: requisitions.requisitionNumber })
+    for (const r of await tdb.select({ id: requisitions.id, description: requisitions.description, category: requisitions.category, department: requisitions.department, number: requisitions.requisitionNumber, agentId: requisitions.agentId })
       .from(requisitions).where(inArray(requisitions.id, reqIds))) info[r.id] = r as any;
   }
   if (expIds.length) {
@@ -871,7 +876,7 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
   for (const d of disbRows) {
     const isReq = d.entityType === "requisition";
     const i = info[d.entityId];
-    const commissionPayout = isCommissionPayoutCategory(i?.category);
+    const commissionPayout = isReq && isCommissionPayoutCategory(i?.category, i?.agentId);
     const pol263Payment = isReq && !commissionPayout && isPol263Payment(i?.category, i?.description);
     push({
       date: plainDate(d.paidDate),

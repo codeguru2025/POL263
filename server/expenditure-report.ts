@@ -2,7 +2,7 @@
  * Reports → Finance → Expenditure: all money spent in the period, one line per payout —
  * requisitions paid, expenditures paid and petty cash spent — the same money out as the
  * cash-flow statement. A requisition categorised "Commission" is agents being paid their
- * commission (isCommissionPayoutCategory), labelled as such. Dates are the payout's own
+ * commission when it names the agent (isCommissionPayoutCategory), labelled as such. Dates are the payout's own
  * (calendar) date; money stays in the currency it was paid in.
  */
 import { sql } from "drizzle-orm";
@@ -55,7 +55,7 @@ export async function buildExpenditureReport(orgId: string, f: SpendFilters, max
     const payouts = rowsOf<any>(await tdb.execute(sql`
       SELECT d.id, d.entity_type, d.paid_date, d.voucher_number, d.amount, d.currency, d.payment_method, d.reference AS d_ref, d.received_by,
              COALESCE(rq.category, ex.category) AS category, COALESCE(rq.description, ex.description) AS description,
-             rq.requisition_number, rq.payee, rq.department, b.name AS branch, u.display_name AS paid_by
+             rq.requisition_number, rq.payee, rq.department, rq.agent_id, b.name AS branch, u.display_name AS paid_by
       FROM payment_disbursements d
       LEFT JOIN requisitions rq ON d.entity_type = 'requisition' AND rq.id = d.entity_id
       LEFT JOIN expenditures ex ON d.entity_type = 'expenditure' AND ex.id = d.entity_id
@@ -67,7 +67,7 @@ export async function buildExpenditureReport(orgId: string, f: SpendFilters, max
       ORDER BY d.paid_date DESC
       LIMIT ${maxRows + 1}`));
     for (const r of payouts) {
-      const commission = r.entity_type === "requisition" && isCommissionPayoutCategory(r.category);
+      const commission = r.entity_type === "requisition" && isCommissionPayoutCategory(r.category, r.agent_id);
       rows.push({
         kind: r.entity_type, id: r.id, date: day(r.paid_date), voucher: r.voucher_number ?? "", reference: r.requisition_number ?? r.d_ref ?? "",
         // Paying POL263 its fees, however the requisition was categorised ("PAYMENT", "FEES"…).

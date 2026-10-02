@@ -100,12 +100,14 @@ describe("buildIncomeTimeSeries", () => {
 
 describe("isCommissionPayoutCategory — agents paid through a requisition", () => {
   it("recognises commission requisitions whatever the capitalisation", () => {
-    expect(isCommissionPayoutCategory("COMMISSION")).toBe(true);
-    expect(isCommissionPayoutCategory("Agent commission Sept")).toBe(true);
+    expect(isCommissionPayoutCategory("COMMISSION", "agent-1")).toBe(true);
+    expect(isCommissionPayoutCategory("Agent commission Sept", "agent-1")).toBe(true);
+    // No agent named: a referral fee or similar — an ordinary expense.
+    expect(isCommissionPayoutCategory("COMMISSION", null)).toBe(false);
   });
   it("leaves every other spending category alone", () => {
-    expect(isCommissionPayoutCategory("FUEL")).toBe(false);
-    expect(isCommissionPayoutCategory(null)).toBe(false);
+    expect(isCommissionPayoutCategory("FUEL", "agent-1")).toBe(false);
+    expect(isCommissionPayoutCategory(null, "agent-1")).toBe(false);
   });
 });
 

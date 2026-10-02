@@ -59,10 +59,10 @@ const addTo = (m: AmountMap, c: string, v: number) => { m[c] = (m[c] || 0) + v; 
 
 /** Pure — split funeral-linked spending into policy funerals (the claim) and cash funerals
  *  (non-insurance), ignoring payments that are commission or POL263 (already handled elsewhere). */
-export function splitFuneralCosts(rows: Array<{ serviceType: string | null; category: string | null; description: string | null; currency: string; amount: number }>) {
+export function splitFuneralCosts(rows: Array<{ serviceType: string | null; category: string | null; description: string | null; agentId?: string | null; currency: string; amount: number }>) {
   const policy: AmountMap = {}, cash: AmountMap = {};
   for (const r of rows) {
-    if (isCommissionPayoutCategory(r.category) || isPol263Payment(r.category, r.description)) continue;
+    if (isCommissionPayoutCategory(r.category, r.agentId) || isPol263Payment(r.category, r.description)) continue;
     addTo(r.serviceType === "claim" ? policy : cash, (r.currency || "USD").toUpperCase(), r.amount);
   }
   return { policy, cash };
@@ -114,14 +114,14 @@ export async function buildIpecReturn(orgId: string, params: IpecReturnParams) {
 
   // Spending linked to a funeral case, paid in the period (same payouts the income statement counts).
   const funeralSpend = rowsOf<any>(await tdb.execute(sql`
-    SELECT f.service_type, rq.category, rq.description, d.currency, SUM(d.amount)::text AS total
+    SELECT f.service_type, rq.category, rq.description, rq.agent_id, d.currency, SUM(d.amount)::text AS total
     FROM payment_disbursements d
     JOIN requisitions rq ON d.entity_type = 'requisition' AND rq.id = d.entity_id
     JOIN funeral_cases f ON f.id = rq.funeral_case_id
     WHERE d.organization_id = ${orgId} AND d.paid_date >= ${from}::date AND d.paid_date <= ${to}::date
       ${branchId ? sql`AND d.branch_id = ${branchId}` : sql``}
-    GROUP BY f.service_type, rq.category, rq.description, d.currency`));
-  const funeralCosts = splitFuneralCosts(funeralSpend.map((r) => ({ serviceType: r.service_type, category: r.category, description: r.description, currency: r.currency, amount: parseFloat(r.total) })));
+    GROUP BY f.service_type, rq.category, rq.description, rq.agent_id, d.currency`));
+  const funeralCosts = splitFuneralCosts(funeralSpend.map((r) => ({ serviceType: r.service_type, category: r.category, description: r.description, agentId: r.agent_id, currency: r.currency, amount: parseFloat(r.total) })));
 
   // Cash-in-lieu claims decided in the period (approved or later), and policy funerals.
   const [cil] = rowsOf<any>(await tdb.execute(sql`

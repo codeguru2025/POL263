@@ -10,6 +10,43 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Commissions: nobody could see what agents are owed; referral fees left out of expenses
+
+- **Symptom:**
+  - Reports → Agents → Commissions summary copied an Easipol payroll layout with 24 columns.
+    11 were always empty, "Cash settlement" equalled "Basic" and "Net pay" equalled "Total".
+  - Negative months (clawbacks greater than earnings) didn't carry forward.
+  - Nothing showed what had been paid to agents or what they're still owed: all 216 ledger
+    entries stayed "earned".
+  - Separately, every requisition categorised "Commission" was treated as an agent payout and
+    kept out of expenses. That included referral and cash-service fees to people who aren't
+    agents (REQ-00554/00893/00908/00928), so those costs were missing from the Income Statement.
+- **Root cause:** Falakhe pays commission through "Commission" requisitions whose payee is free
+  text, so no payout was tied to an agent. The payout rule was category-only
+  (`isCommissionPayoutCategory(category)`).
+- **Fix:**
+  - Migration `0137_requisition_agent.sql` adds `requisitions.agent_id`, set through
+    `resolveRequisitionAgent` to the tenant-DB id, which matches commission ledger rows.
+  - The requisition form shows an "Agent being paid" picker on Commission lines, with a plain
+    note when none is chosen. `/api/agents` is open to finance staff.
+  - `isCommissionPayoutCategory(category, agentId)` and `COMMISSION_PAYOUT_CATEGORY` are applied
+    in the Income Statement, Cash Flow, ledger, Expenditure, the monthly series
+    (`settlesCountedCostSql`) and the IPEC return. A Commission requisition with no agent is now
+    an ordinary expense.
+  - New `server/commission-statement.ts`: per agent and currency, owed at start + earned on
+    policies + earned on societies − clawed back − paid = still owed. The company walk-in
+    commission is a separate line. The route, export and tab use it.
+  - `script/.tmp/link-commission-payouts.ts` links the 5 past payouts that clearly paid agents.
+- **Verified on Falakhe:** before payouts are linked, agents are owed USD 619.80 + ZAR 288 year to
+  date. Pesuate's September: 85.60 + 35.10 − 6.00 = 114.70. Ayanda carries a −12.00 clawback
+  forward (still owed 11.60). Tests in `tests/unit/commission-statement.test.ts` and the updated
+  `financial-statements` / `ipec-return` tests.
+- **Lesson for next time:** a money flow you need to reconcile (paid vs owed) must be linked by
+  id, not inferred from a category or a free-text payee. A category rule that excludes a cost
+  must be narrow enough not to swallow look-alike spending.
+
+---
+
 ## 2026-10-02 — Agent productivity counted typed-in policies as sales and duplicated New joinings
 
 - **Symptom:** for Falakhe, September, the report showed 57 "productive" policies. Only 29 were

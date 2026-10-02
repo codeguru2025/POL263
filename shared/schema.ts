@@ -3404,6 +3404,9 @@ export const requisitions = pgTable(
     department: text("department"), // classification for departmental spend reporting
     costFlag: text("cost_flag"), // e.g. 'CEO_PERSONAL' | 'SOUTH_AFRICA' — special cost-center tagging
     funeralCaseId: uuid("funeral_case_id").references(() => funeralCases.id), // ties the spend to a case for per-case profit/loss
+    /** The agent a "Commission" requisition pays (0137). Set = commission paid to that agent;
+     *  unset = an ordinary expense (referral fee etc.). */
+    agentId: uuid("agent_id").references(() => users.id),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [

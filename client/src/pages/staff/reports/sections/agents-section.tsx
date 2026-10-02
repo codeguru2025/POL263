@@ -77,30 +77,17 @@ const newSaleColumns: EdtColumn<any>[] = [
   { id: "first", header: "First payment", accessor: (r) => r.firstPaymentDate || "", cell: (r) => <span className="text-xs whitespace-nowrap">{r.firstPaymentDate ? `${fmtDay(r.firstPaymentDate)} · ${r.firstPaymentCurrency || r.currency} ${r.firstPaymentAmount}` : "—"}</span> },
 ];
 
+const money2 = (v: string) => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const commissionSummaryColumns: EdtColumn<any>[] = [
-  { id: "agentName", header: "Agent Name", accessor: (row) => row.agentName, cell: (row) => <span className="font-medium whitespace-nowrap">{row.agentName}</span> },
-  { id: "currency", header: "Currency", accessor: (row) => row.currency, cell: (row) => <span className="font-mono text-xs">{row.currency}</span> },
-  { id: "numberOfPolicies", header: "Number of Policies", accessor: (row) => row.numberOfPolicies },
-  { id: "groupsCount", header: "Groups Count", accessor: (row) => row.groupsCount },
-  { id: "groupsCommission", header: "Groups Commission", accessor: (row) => row.groupsCommission, cell: (row) => <span className="font-mono text-xs">{row.groupsCommission}</span> },
-  { id: "individualsCount", header: "Individuals Count", accessor: (row) => row.individualsCount },
-  { id: "individualsCommission", header: "Individuals Commission", accessor: (row) => row.individualsCommission, cell: (row) => <span className="font-mono text-xs">{row.individualsCommission}</span> },
-  { id: "investment", header: "Investment", accessor: (row) => row.investment, cell: (row) => <span className="font-mono text-xs">{row.investment}</span> },
-  { id: "clawback", header: "Clawback", accessor: (row) => row.clawback, cell: (row) => <span className="font-mono text-xs">{row.clawback}</span> },
-  { id: "callCenter", header: "Call Centre", accessor: (row) => row.callCenter, cell: (row) => <span className="font-mono text-xs">{row.callCenter}</span> },
-  { id: "trips", header: "Trips", accessor: (row) => row.trips, cell: (row) => <span className="font-mono text-xs">{row.trips}</span> },
-  { id: "cashSettlement", header: "Cash Settlement", accessor: (row) => row.cashSettlement, cell: (row) => <span className="font-mono text-xs">{row.cashSettlement}</span> },
-  { id: "basic", header: "Basic", accessor: (row) => row.basic, cell: (row) => <span className="font-mono text-xs">{row.basic}</span> },
-  { id: "overtime", header: "Overtime", accessor: (row) => row.overtime, cell: (row) => <span className="font-mono text-xs">{row.overtime}</span> },
-  { id: "total", header: "Total", accessor: (row) => row.total, cell: (row) => <span className="font-mono text-xs font-semibold">{row.total}</span> },
-  { id: "paye", header: "PAYE", accessor: (row) => row.paye, cell: (row) => <span className="text-xs">{row.paye}</span> },
-  { id: "taxLevy", header: "Tax Levy", accessor: (row) => row.taxLevy, cell: (row) => <span className="text-xs">{row.taxLevy}</span> },
-  { id: "credit", header: "Credit", accessor: (row) => row.credit, cell: (row) => <span className="text-xs">{row.credit}</span> },
-  { id: "advance", header: "Advance", accessor: (row) => row.advance, cell: (row) => <span className="text-xs">{row.advance}</span> },
-  { id: "policyDeduction", header: "Policy Deduction", accessor: (row) => row.policyDeduction, cell: (row) => <span className="text-xs">{row.policyDeduction}</span> },
-  { id: "medicalAidDeduction", header: "Medical Aid Deduction", accessor: (row) => row.medicalAidDeduction, cell: (row) => <span className="text-xs">{row.medicalAidDeduction}</span> },
-  { id: "unpaidMonths", header: "Unpaid Months", accessor: (row) => row.unpaidMonths, cell: (row) => <span className="text-xs">{row.unpaidMonths}</span> },
-  { id: "netPay", header: "Net Pay", accessor: (row) => row.netPay, cell: (row) => <span className="font-mono text-xs font-semibold">{row.netPay}</span> },
+  { id: "agent", header: "Agent", accessor: (r) => r.agent, cell: (r) => <span className={`whitespace-nowrap ${r.agentId ? "font-medium" : "text-muted-foreground italic"}`}>{r.agent}</span> },
+  { id: "currency", header: "Currency", accessor: (r) => r.currency, cell: (r) => <span className="font-mono text-xs">{r.currency}</span> },
+  { id: "opening", header: "Owed at start", align: "right", accessor: (r) => Number(r.opening), cell: (r) => <span className="tabular-nums">{money2(r.opening)}</span> },
+  { id: "earnedPolicies", header: "Earned on policies", align: "right", accessor: (r) => Number(r.earnedPolicies), cell: (r) => <span className="tabular-nums">{money2(r.earnedPolicies)}</span> },
+  { id: "earnedSocieties", header: "Earned on societies", align: "right", accessor: (r) => Number(r.earnedSocieties), cell: (r) => <span className="tabular-nums">{money2(r.earnedSocieties)}</span> },
+  { id: "clawedBack", header: "Clawed back", align: "right", accessor: (r) => Number(r.clawedBack), cell: (r) => <span className={`tabular-nums ${Number(r.clawedBack) ? "text-rose-700" : ""}`}>{money2(r.clawedBack)}</span> },
+  { id: "paid", header: "Paid to agent", align: "right", accessor: (r) => Number(r.paid), cell: (r) => <span className="tabular-nums">{money2(r.paid)}</span> },
+  { id: "closing", header: "Still owed", align: "right", accessor: (r) => Number(r.closing), cell: (r) => <span className={`tabular-nums font-semibold ${Number(r.closing) < 0 ? "text-rose-700" : ""}`}>{money2(r.closing)}</span> },
+  { id: "policies", header: "Policies that earned", align: "right", accessor: (r) => r.policies },
 ];
 
 const commissionPlansColumns: EdtColumn<any>[] = [
@@ -192,11 +179,11 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
     },
     enabled: need("commissionPlans") && canReadCommission,
   });
-  const { data: commissionSummary = [], isLoading: loadingCommissionSummary } = useQuery<any[]>({
+  const { data: commissionStatement, isLoading: loadingCommissionSummary } = useQuery<{ rows: any[]; totals: Record<string, { earned: string; clawedBack: string; paid: string; owed: string }> }>({
     queryKey: ["reports", "commissions-summary", runKey, ...fk],
     queryFn: async () => {
       const res = await fetch(getApiBase() + "/api/reports/commissions-summary" + q, { credentials: "include" });
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error("Could not load commissions");
       return res.json();
     },
     enabled: need("commissionSummary") && canReadCommission,
@@ -302,9 +289,9 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
 
       <TabsContent value="commissions" className="space-y-6">
         <CardSection
-          title="Commissions report"
+          title="Commissions — what agents are owed"
           icon={Percent}
-          description={<>Per-agent totals from the commission ledger for the selected date range and filters. Payroll columns without a system source (PAYE, advances, etc.) are left blank.{!agentId ? <span className="block mt-1">Select an agent above to download that agent&apos;s detailed ledger lines (optional).</span> : null}</>}
+          description={<>What each agent is owed: owed at the start of the period, plus commission earned, less clawbacks and less what was paid to them (Commission requisitions that name the agent) = still owed. A month of clawbacks carries forward as a lower balance. The company&apos;s own walk-in commission is shown separately — it isn&apos;t owed to anyone.{!agentId ? <span className="block mt-1">Select an agent above to download that agent&apos;s detailed ledger lines (optional).</span> : null}</>}
           headerRight={
             <div className="flex flex-wrap items-center gap-2">
               <ExportButton reportType="commissions" filters={filters} />
@@ -349,15 +336,24 @@ export function AgentsSection({ filters, q, qAppend, fk, runKey, need, fromDate,
           {loadingCommissionSummary ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : (
+            <>
+            {commissionStatement && Object.keys(commissionStatement.totals).length > 0 && (
+              <div className="px-4 py-3 border-b text-sm">
+                Still owed to agents{" "}
+                <span className="font-semibold tabular-nums">{Object.entries(commissionStatement.totals).map(([cur, t]) => `${cur} ${money2(t.owed)}`).join(" · ")}</span>
+                <span className="text-xs text-muted-foreground"> · this period earned {Object.entries(commissionStatement.totals).map(([cur, t]) => `${cur} ${money2(t.earned)}`).join(" · ")}, clawed back {Object.entries(commissionStatement.totals).map(([cur, t]) => `${cur} ${money2(t.clawedBack)}`).join(" · ")}, paid {Object.entries(commissionStatement.totals).map(([cur, t]) => `${cur} ${money2(t.paid)}`).join(" · ")}</span>
+              </div>
+            )}
             <EnhancedDataTable
               columns={commissionSummaryColumns}
-              rows={commissionSummary}
-              getRowKey={(row) => `${row.agentId}-${row.currency}`}
-              rowTestId={(row) => `row-commission-summary-${row.agentId}-${row.currency}`}
+              rows={commissionStatement?.rows ?? []}
+              getRowKey={(row) => `${row.agentId ?? "company"}-${row.currency}`}
+              rowTestId={(row) => `row-commission-summary-${row.agentId ?? "company"}-${row.currency}`}
               exportFilename="commissions-summary"
-              storageKey="reports-commissions-summary"
-              emptyMessage="No commission ledger activity in this period."
+              storageKey="reports-commissions-summary-v2"
+              emptyMessage="No commission activity in this period."
             />
+            </>
           )}
         </CardSection>
 

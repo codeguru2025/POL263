@@ -2568,7 +2568,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(usersWithRoles);
   });
 
-  app.get("/api/agents", requireAuth, requireTenantScope, requirePermission("read:user"), async (req, res) => {
+  app.get("/api/agents", requireAuth, requireTenantScope, requireAnyPermission("read:user", "write:finance", "create:requisition"), async (req, res) => {
     const user = req.user as any;
     const usersList = await storage.getUsersByOrg(user.organizationId, 500, 0);
     const rolesByUser = await storage.getUserRolesBatch(usersList.map(u => u.id), user.organizationId);
@@ -10033,6 +10033,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }));
   });
 
+  /** The tenant-DB id of the agent a commission requisition pays (commission ledger rows use the
+   *  same id); null when none is given, false when the id isn't a user of this org. */
+  async function resolveRequisitionAgent(orgId: string, raw: unknown): Promise<string | null | false> {
+    if (typeof raw !== "string" || !raw) return null;
+    const u = await storage.getUser(raw, orgId);
+    if (!u || u.organizationId !== orgId) return false;
+    return resolveOrSyncTenantUserId(orgId, raw);
+  }
+
   app.post("/api/requisitions", requireAuth, requireTenantScope, requireAnyPermission("write:finance", "create:requisition"), async (req, res) => {
     const user = req.user as any;
     const requisitionNumber = await storage.generateRequisitionNumber(user.organizationId);
@@ -10068,6 +10077,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const linkedCase = await storage.getFuneralCase(req.body.funeralCaseId, user.organizationId);
         if (linkedCase) funeralCaseId = linkedCase.id;
       }
+      const agentId = await resolveRequisitionAgent(user.organizationId, req.body.agentId);
+      if (agentId === false) return res.status(400).json({ message: "That agent wasn't found." });
       const parsed = insertRequisitionSchema.parse({
         ...req.body,
         amount,
@@ -10076,6 +10087,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         raisedDate: req.body.raisedDate || await todayForOrg(user.organizationId),
         requestedBy,
         funeralCaseId,
+        agentId,
         status: submit ? "submitted" : "draft",
         neededByDate: req.body.neededByDate || null,
         approvedBy: null, approvedAt: null, paidBy: null, paidAt: null,
@@ -10316,6 +10328,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // history and shouldn't be silently overwritten by an amount correction.
       if (patch.amount !== undefined && existing.status === "paid" && Number(existing.amountPaid) === Number(existing.amount)) {
         patch.amountPaid = patch.amount;
+      }
+      if (req.body.agentId !== undefined) {
+        const agentId = await resolveRequisitionAgent(user.organizationId, req.body.agentId);
+        if (agentId === false) return res.status(400).json({ message: "That agent wasn't found." });
+        patch.agentId = agentId;
       }
       if (req.body.funeralCaseId !== undefined) {
         if (!req.body.funeralCaseId) {
@@ -15023,7 +15040,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/commissions-summary", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    return res.json(await storage.getCommissionReportByOrg(user.organizationId, filters));
+    // What each agent is owed: start + earned − clawed back − paid (server/commission-statement.ts).
+    const orgToday = await todayForOrg(user.organizationId);
+    const { buildCommissionStatement } = await import("./commission-statement");
+    return res.json(await buildCommissionStatement(user.organizationId, {
+      fromDate: filters.fromDate || `${orgToday.slice(0, 7)}-01`, toDate: filters.toDate || orgToday,
+      agentId: filters.agentId, branchId: filters.branchId,
+    }));
   });
   app.get("/api/reports/commission-payments", requireAuth, requireTenantScope, requirePermission("read:commission"), async (req, res) => {
     const user = req.user as any;
@@ -15718,58 +15741,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               return [r.agentId, r.entryType, r.amount, r.currency, ...currencyAmounts(r.amount, r.currency), r.description || "", r.periodStart || "", r.periodEnd || "", r.status, r.createdAt];
             });
           } else {
-            const payrollRows = await storage.getCommissionReportByOrg(user.organizationId, reportFilters);
-            headers = [
-              "Agent Name",
-              "Currency",
-              "Number Of Policies",
-              "Groups Count",
-              "Groups Commission",
-              "Individuals Count",
-              "Individuals Commission",
-              "Investment Commission",
-              "Clawback",
-              "Call Centre",
-              "Trips",
-              "Cash Settlement",
-              "Basic",
-              "Overtime",
-              "Total",
-              "PAYE",
-              "Tax Levy",
-              "Credit",
-              "Advance",
-              "Policy Deduction",
-              "Medical Aid Deduction",
-              "Unpaid Months",
-              "Net Pay",
-            ];
+            // What each agent is owed for the period (server/commission-statement.ts).
+            const orgTodayC = await todayForOrg(user.organizationId);
+            const { buildCommissionStatement } = await import("./commission-statement");
+            const cs = await buildCommissionStatement(user.organizationId, {
+              fromDate: reportFilters.fromDate || `${orgTodayC.slice(0, 7)}-01`, toDate: reportFilters.toDate || orgTodayC,
+              agentId: reportFilters.agentId, branchId: reportFilters.branchId,
+            });
+            headers = ["Agent", "Currency", "Owed at start", "Earned on policies", "Earned on societies", "Clawed back", "Paid to agent", "Still owed", "Policies that earned"];
             currencyTotals = null;
-            rows = payrollRows.map((r: any) => [
-              r.agentName,
-              r.currency,
-              r.numberOfPolicies,
-              r.groupsCount,
-              r.groupsCommission,
-              r.individualsCount,
-              r.individualsCommission,
-              r.investment,
-              r.clawback,
-              r.callCenter,
-              r.trips,
-              r.cashSettlement,
-              r.basic,
-              r.overtime,
-              r.total,
-              r.paye,
-              r.taxLevy,
-              r.credit,
-              r.advance,
-              r.policyDeduction,
-              r.medicalAidDeduction,
-              r.unpaidMonths,
-              r.netPay,
-            ]);
+            rows = cs.rows.map((x) => [x.agent, x.currency, x.opening, x.earnedPolicies, x.earnedSocieties, x.clawedBack, x.paid, x.closing, x.policies]);
           }
           break;
         }

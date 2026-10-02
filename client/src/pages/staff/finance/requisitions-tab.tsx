@@ -47,7 +47,7 @@ export function RequisitionsTab({
   const requisitions = Array.isArray(rawRequisitions) ? rawRequisitions : [];
 
   const [showRequisitionDialog, setShowRequisitionDialog] = useState(false);
-  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "", funeralCaseId: "" });
+  const [reqHeader, setReqHeader] = useState({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "", funeralCaseId: "", agentId: "" });
   const [reqItems, setReqItems] = useState<ReqItem[]>([blankItem()]);
   // Approve/reject dialog
   const [approveTarget, setApproveTarget] = useState<any>(null);
@@ -60,7 +60,7 @@ export function RequisitionsTab({
     setReqItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: val } : it));
   const addReqItem = () => setReqItems(prev => [...prev, blankItem()]);
   const removeReqItem = (idx: number) => setReqItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
-  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "", funeralCaseId: "" }); setReqItems([blankItem()]); };
+  const resetRequisitionForm = () => { setReqHeader({ payee: "", currency: "USD", notes: "", neededByDate: "", raisedDate: new Date().toISOString().slice(0, 10), requestedByUserId: authUser?.id || "", funeralCaseId: "", agentId: "" }); setReqItems([blankItem()]); };
   const openApproveDialog = (r: any, action: "approve" | "reject") => {
     setApproveTarget(r);
     setApproveAction(action);
@@ -84,6 +84,7 @@ export function RequisitionsTab({
         category: items[0]?.category || "",
         description: items.length === 1 ? items[0].description : `${items.length} items`,
         amount: reqTotal.toFixed(2),
+        agentId: isCommissionReq ? (reqHeader.agentId || null) : null,
         items,
         submit,
       });
@@ -156,6 +157,11 @@ export function RequisitionsTab({
 
   const [expandedReqId, setExpandedReqId] = useState<string | null>(null);
   const { data: funeralCasesForLinking = [] } = useQuery<any[]>({ queryKey: ["/api/funeral-cases"], enabled: canCreateRequisition });
+  // A "Commission" requisition names the agent it pays, so it comes off what that agent is owed.
+  const { data: agentsForCommission = [] } = useQuery<any[]>({ queryKey: ["/api/agents"], enabled: canCreateRequisition });
+  const agentOptions: SearchableOption[] = (agentsForCommission as any[]).map((a: any) => ({ value: a.id, label: a.displayName || a.email, hint: a.email || undefined }));
+  const agentNameById = (id?: string | null) => (agentsForCommission as any[]).find((a: any) => a.id === id)?.displayName;
+  const isCommissionReq = reqItems.some((it) => /commission/i.test(it.category));
   const funeralCaseOptions: SearchableOption[] = (funeralCasesForLinking as any[])
     .map((c: any) => ({ value: c.id, label: `${c.caseNumber} — ${c.deceasedName}`, hint: c.status || undefined }));
 
@@ -208,6 +214,9 @@ export function RequisitionsTab({
                     <div className="text-xs font-medium leading-tight">{r.requesterName || "—"}</div>
                     {r.requesterDepartment && <div className="text-[10px] text-muted-foreground">{r.requesterDepartment}</div>}
                     {r.payee && <div className="text-[10px] text-muted-foreground">To: {r.payee}</div>}
+                    {r.agentId && (
+                      <span className="block text-[11px] text-muted-foreground">Agent: {agentNameById(r.agentId) || "agent"}</span>
+                    )}
                     {r.funeralCaseId && (
                       <div className="text-[10px] text-muted-foreground">
                         Case: {(funeralCasesForLinking as any[]).find((c: any) => c.id === r.funeralCaseId)?.caseNumber || r.funeralCaseId}
@@ -341,6 +350,23 @@ export function RequisitionsTab({
               <Label className="text-xs">Payee</Label>
               <Input value={reqHeader.payee} onChange={(e) => setReqHeader({ ...reqHeader, payee: e.target.value })} placeholder="Who will be paid? (if not a system user, type their name)" />
             </div>
+            {isCommissionReq && (
+              <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-500/5 p-2 space-y-1">
+                <Label className="text-xs">Agent being paid</Label>
+                <SearchableSelect
+                  options={[{ value: "__none__", label: "Not an agent (referral fee or other)" }, ...agentOptions]}
+                  value={reqHeader.agentId || "__none__"}
+                  onChange={(v) => setReqHeader({ ...reqHeader, agentId: v === "__none__" ? "" : v })}
+                  placeholder="Choose the agent…"
+                  searchPlaceholder="Search agents…"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {reqHeader.agentId
+                    ? "This pays the agent's commission — it comes off what they're owed and isn't counted as a new expense."
+                    : "No agent chosen, so this counts as an ordinary expense (for example a referral fee to someone who isn't an agent)."}
+                </p>
+              </div>
+            )}
             <div>
               <Label className="text-xs">Funeral Case (optional)</Label>
               <SearchableSelect
