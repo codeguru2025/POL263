@@ -7,7 +7,7 @@
  */
 import { sql } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
-import { isCommissionPayoutCategory } from "./financial-statements";
+import { isCommissionPayoutCategory, isPol263Payment, POL263_PAYMENT_CATEGORY } from "./financial-statements";
 import { toCents, fromCents } from "@shared/money";
 
 export type SpendKind = "requisition" | "expenditure" | "petty_cash";
@@ -70,7 +70,9 @@ export async function buildExpenditureReport(orgId: string, f: SpendFilters, max
       const commission = r.entity_type === "requisition" && isCommissionPayoutCategory(r.category);
       rows.push({
         kind: r.entity_type, id: r.id, date: day(r.paid_date), voucher: r.voucher_number ?? "", reference: r.requisition_number ?? r.d_ref ?? "",
-        category: r.category || "Uncategorised", description: r.description ?? "", payee: r.payee || r.received_by || "",
+        // Paying POL263 its fees, however the requisition was categorised ("PAYMENT", "FEES"…).
+        category: r.entity_type === "requisition" && !commission && isPol263Payment(r.category, r.description) ? POL263_PAYMENT_CATEGORY : (r.category || "Uncategorised"),
+        description: r.description ?? "", payee: r.payee || r.received_by || "",
         currency: (r.currency || "USD").toUpperCase(), amount: fromCents(toCents(r.amount)), method: r.payment_method ?? "",
         paidBy: r.paid_by ?? "", branch: r.branch ?? "", department: r.department ?? "", commissionPayout: commission,
       });

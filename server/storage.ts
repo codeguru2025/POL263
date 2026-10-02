@@ -7591,7 +7591,8 @@ export class DatabaseStorage implements IStorage {
           id: platformReceivables.id,
           amount: platformReceivables.amount,
           currency: platformReceivables.currency,
-          alreadyAllocated: sql<string>`COALESCE((SELECT SUM(sa.amount) FROM settlement_allocations sa WHERE sa.receivable_id = ${platformReceivables.id}), 0)`,
+          // Only approved settlements count — a settlement reversed because the money never arrived frees its fees.
+          alreadyAllocated: sql<string>`COALESCE((SELECT SUM(sa.amount) FROM settlement_allocations sa JOIN settlements st ON st.id = sa.settlement_id WHERE sa.receivable_id = ${platformReceivables.id} AND st.status = 'approved'), 0)`,
         })
         .from(platformReceivables)
         .where(and(

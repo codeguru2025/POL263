@@ -14,7 +14,7 @@
  * converts to USD using fx_rates; currencies without a rate are listed as
  * unconvertible and excluded from that total.
  */
-import { and, eq, gte, lte, lt, sql, inArray, desc } from "drizzle-orm";
+import { and, eq, gte, lte, lt, sql, inArray, desc, isNull } from "drizzle-orm";
 import { getDbForOrg } from "./tenant-db";
 import { storage } from "./storage";
 import { todayForOrg, dayRangeForOrg, getOrgTimezone, dateInTimezone } from "./date-utils";
@@ -189,21 +189,26 @@ async function queryCommissionsEarned(tdb: any, orgId: string, from: string, to:
     GROUP BY e.currency`));
 }
 
-/** POL263 per-payment fees charged in the period and not yet billed. Once billed (is_settled) the
- *  fee is represented by the POL263 bill instead — Falakhe owes what POL263 actually bills
- *  (Augustus, 1 Oct 2026); fees marked settled that never reached a bill are written off. */
+/** A 2.5% fee that is not on a POL263 bill: still waiting for one (unsettled), or paid straight
+ *  off by a settlement the tenant recorded (an approved settlement allocation). Fees a bill picked
+ *  up are counted through that bill: Falakhe owes what POL263 bills (Augustus, 1 Oct 2026). */
+export const feeNotOnBill = (f: any) => sql`(${f}.is_settled = false OR EXISTS (
+  SELECT 1 FROM settlement_allocations sa JOIN settlements st ON st.id = sa.settlement_id
+  WHERE sa.receivable_id = ${f}.id AND st.status = 'approved'))`;
+
+/** POL263 per-payment fees charged in the period that are not on a POL263 bill. */
 async function queryPlatformFees(tdb: any, orgId: string, from: string, to: string, branchId?: string) {
   const { start, end } = await periodBounds(orgId, from, to);
-  return rowsOf<{ currency: string; total: string }>(await tdb.execute(sql`
-    SELECT f.currency, COALESCE(SUM(f.amount), 0)::text AS total
+  return rowsOf<{ currency: string; total: string; billed_later: boolean }>(await tdb.execute(sql`
+    SELECT f.currency, f.is_settled = false AS billed_later, COALESCE(SUM(f.amount), 0)::text AS total
     FROM platform_receivables f
     LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
     LEFT JOIN policies p ON p.id = t.policy_id
     LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
-    WHERE f.organization_id = ${orgId} AND f.is_settled = false
+    WHERE f.organization_id = ${orgId} AND ${feeNotOnBill(sql`f`)}
       AND f.created_at >= ${start} AND f.created_at < ${end}
       ${branchId ? sql`AND COALESCE(p.branch_id, s.branch_id) = ${branchId}` : sql``}
-    GROUP BY f.currency`));
+    GROUP BY f.currency, f.is_settled`));
 }
 
 /** POL263 bills issued to the tenant in the period (any status but void) — the cost of POL263,
@@ -264,14 +269,25 @@ export function isCommissionPayoutCategory(category: string | null | undefined):
   return /commission/i.test(category ?? "");
 }
 
+/** A requisition paying POL263 its 2.5% fees (Falakhe records these as "PLATFORM FEE", or
+ *  "FEES"/"PAYMENT" with a "2.5% platform fee" description). That pays off what is owed to
+ *  POL263 (the cost is the POL263 bills and fees), so it is cash out, never a second expense
+ *  (Augustus, 2 Oct 2026). */
+export function isPol263Payment(category: string | null | undefined, description?: string | null): boolean {
+  const re = /2\.5\s*%\s*platf|platfor?m\s*fee|\bpol\s*263\b/i;
+  return re.test(category ?? "") || re.test(description ?? "");
+}
+/** Category label disbursementCategories gives a POL263 fee payment. */
+export const POL263_PAYMENT_CATEGORY = "Paid to POL263 (2.5% fees)";
+
 /** Category of each requisition / expenditure behind a set of disbursement rows. */
 async function disbursementCategories(tdb: any, disbRows: { entityType: string; entityId: string }[]) {
   const reqIds = disbRows.filter((d) => d.entityType === "requisition").map((d) => d.entityId);
   const expIds = disbRows.filter((d) => d.entityType === "expenditure").map((d) => d.entityId);
   const out: Record<string, string> = {};
   if (reqIds.length) {
-    for (const r of await tdb.select({ id: requisitions.id, category: requisitions.category }).from(requisitions).where(inArray(requisitions.id, reqIds))) {
-      out[r.id] = r.category || "Uncategorised";
+    for (const r of await tdb.select({ id: requisitions.id, category: requisitions.category, description: requisitions.description }).from(requisitions).where(inArray(requisitions.id, reqIds))) {
+      out[r.id] = isPol263Payment(r.category, r.description) ? POL263_PAYMENT_CATEGORY : (r.category || "Uncategorised");
     }
   }
   if (expIds.length) {
@@ -334,7 +350,7 @@ async function queryPol263BillsPaid(orgId: string, from: string, to: string): Pr
     const [{ cpDb }, { tenantInvoices }] = await Promise.all([import("./control-plane-db"), import("@shared/control-plane-schema")]);
     const rows = await cpDb.select({ currency: tenantInvoices.currency, total: sql<string>`COALESCE(SUM(${tenantInvoices.amount}), 0)::text` })
       .from(tenantInvoices)
-      .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)))
+      .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), isNull(tenantInvoices.markedPaidBy), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)))
       .groupBy(tenantInvoices.currency);
     for (const r of rows) add(out, r.currency || "USD", parseFloat(r.total));
   } catch {
@@ -411,11 +427,13 @@ export async function buildIncomeStatement(orgId: string, params: StatementParam
     const cat = categories[d.entityId] || "Uncategorised";
     // Paying an agent through a requisition settles commission already counted as earned below.
     if (isCommissionPayoutCategory(cat)) continue;
+    // Paying POL263 settles the POL263 bills / fees already counted below.
+    if (cat === POL263_PAYMENT_CATEGORY) continue;
     pushExpense(cat, type, d.currency, parseFloat(d.total));
   }
   for (const r of pettyRows) pushExpense(`Petty cash — ${r.category || "Uncategorised"}`, "petty_cash", r.currency, parseFloat(r.total));
   for (const r of commRows) pushExpense("Agent commissions (earned)", "commission", r.currency, parseFloat(r.total));
-  for (const r of feeRows) pushExpense("POL263 fees (not yet billed)", "platform_fee", r.currency, parseFloat(r.total));
+  for (const r of feeRows) pushExpense(r.billed_later ? "POL263 fees (not yet billed)" : "POL263 fees (paid without a bill)", "platform_fee", r.currency, parseFloat(r.total));
   for (const b of billsIssued) pushExpense("POL263 bills", "platform_fee", b.currency || "USD", parseFloat(String(b.amount)));
   for (const r of payrollRows) pushExpense("Salaries and wages (approved payroll)", "payroll", "USD", parseFloat(r.total));
   for (const r of claimRows) pushExpense("Claims paid (cash in lieu)", "claims", r.currency, parseFloat(r.total));
@@ -507,7 +525,7 @@ export async function buildIncomeTimeSeries(
     q(sql`SELECT ${local(sql`f.created_at`)} AS bucket, f.currency, COALESCE(SUM(f.amount), 0) AS total
       FROM platform_receivables f LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
         LEFT JOIN policies p ON p.id = t.policy_id LEFT JOIN service_receipts s ON s.id = f.source_service_receipt_id
-      WHERE f.organization_id = ${orgId} AND f.is_settled = false AND f.created_at >= ${start} AND f.created_at < ${end} ${br(sql`COALESCE(p.branch_id, s.branch_id)`)} GROUP BY 1, 2`),
+      WHERE f.organization_id = ${orgId} AND ${feeNotOnBill(sql`f`)} AND f.created_at >= ${start} AND f.created_at < ${end} ${br(sql`COALESCE(p.branch_id, s.branch_id)`)} GROUP BY 1, 2`),
     branchId ? Promise.resolve([]) : q(sql`SELECT ${onDate(sql`period_end`)} AS bucket, 'USD' AS currency, COALESCE(SUM(total_gross), 0) AS total FROM payroll_runs
       WHERE organization_id = ${orgId} AND status IN ('approved', 'processed', 'paid') AND period_end >= ${from}::date AND period_end <= ${to}::date GROUP BY 1, 2`),
     q(sql`SELECT ${onDate(sql`t.transaction_date`)} AS bucket, f.currency, COALESCE(SUM(t.amount), 0) AS total
@@ -613,6 +631,8 @@ export async function buildCashFlowStatement(orgId: string, params: StatementPar
     const amt = parseFloat(d.total);
     // A "Commission" requisition is agents being paid their commission.
     if (isCommissionPayoutCategory(categories[d.entityId])) add(commissionsOut, d.currency, amt);
+    // Paying POL263 its fees: the POL263 line, not a general requisition.
+    else if (categories[d.entityId] === POL263_PAYMENT_CATEGORY) add(pol263Bills, d.currency, amt);
     else if (d.entityType === "requisition") add(requisitionsOut, d.currency, amt);
     else add(expendituresOut, d.currency, amt);
   }
@@ -835,11 +855,12 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
     const isReq = d.entityType === "requisition";
     const i = info[d.entityId];
     const commissionPayout = isCommissionPayoutCategory(i?.category);
+    const pol263Payment = isReq && !commissionPayout && isPol263Payment(i?.category, i?.description);
     push({
       date: plainDate(d.paidDate),
-      type: commissionPayout ? "payment" : "expense",
-      source: commissionPayout ? "commission_paid" : isReq ? "requisition" : "expenditure",
-      description: `${commissionPayout ? "Commission paid to agent — " : ""}${i?.description || i?.category || (isReq ? "Requisition" : "Expenditure")}${i?.number ? ` (${i.number})` : ""}`,
+      type: commissionPayout || pol263Payment ? "payment" : "expense",
+      source: commissionPayout ? "commission_paid" : pol263Payment ? "pol263_bill" : isReq ? "requisition" : "expenditure",
+      description: `${commissionPayout ? "Commission paid to agent — " : pol263Payment ? "Paid to POL263 — " : ""}${i?.description || i?.category || (isReq ? "Requisition" : "Expenditure")}${i?.number ? ` (${i.number})` : ""}`,
       reference: d.voucherNumber ?? null, person: d.payerName ?? null,
       department: i?.department || i?.category || "Uncategorised",
       amount: num(d.amount), currency: d.currency,
@@ -892,7 +913,7 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
 
   // ── POL263 fees charged (owed until the bill is paid) ──
   const feeRows = rowsOf<{ created_at: string; amount: string; currency: string; description: string | null }>(await tdb.execute(sql`
-    SELECT f.created_at, f.amount, f.currency, f.description
+    SELECT f.created_at, f.amount, f.currency, f.description, f.is_settled
     FROM platform_receivables f
     LEFT JOIN payment_transactions t ON t.id = f.source_transaction_id
     LEFT JOIN policies p ON p.id = t.policy_id
@@ -902,7 +923,7 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
   for (const r of feeRows) {
     push({
       date: day(r.created_at), type: "expense", source: "platform_fee", cash: false,
-      description: `POL263 fee, not yet billed${r.description ? ` — ${r.description}` : ""}`, reference: null, person: null,
+      description: `POL263 fee, ${(r as any).is_settled ? "paid without a bill" : "not yet billed"}${r.description ? ` — ${r.description}` : ""}`, reference: null, person: null,
       department: "POL263", amount: num(r.amount), currency: r.currency,
     });
   }
@@ -923,7 +944,7 @@ export async function buildTransactionLedger(orgId: string, params: LedgerParams
       const [{ cpDb }, { tenantInvoices }] = await Promise.all([import("./control-plane-db"), import("@shared/control-plane-schema")]);
       const bills = await cpDb.select({ paidAt: tenantInvoices.paidAt, amount: tenantInvoices.amount, currency: tenantInvoices.currency, id: tenantInvoices.id, kind: tenantInvoices.kind })
         .from(tenantInvoices)
-        .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)));
+        .where(and(eq(tenantInvoices.tenantId, orgId), eq(tenantInvoices.status, "paid"), isNull(tenantInvoices.markedPaidBy), gte(tenantInvoices.paidAt, start), lt(tenantInvoices.paidAt, end)));
       for (const b of bills) {
         push({
           date: day(b.paidAt as Date), type: "payment", source: "pol263_bill",

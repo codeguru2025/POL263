@@ -10,6 +10,53 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Payments to POL263 counted as a second expense; a consultation fee booked as a POL263 payment
+
+- **Symptom:** Falakhe pays POL263's 2.5% fees through requisitions to "MR SIZIBA", categorised
+  as "PLATFORM FEE", "FEES" or "PAYMENT", with a "2.5% platform fee" description. The Income
+  Statement counted these as expenses on top of the POL263 bills and fees, so the cost was
+  counted twice. The Cash Flow counted the same money twice too: once as the requisition, and
+  again as a POL263 bill marked paid by hand. Separately, Falakhe's two records of paying POL263
+  (requisitions, and "settlements") disagreed:
+  - Five settlements had no matching payment, including USD 250 on 31 Aug. Augustus confirmed
+    that USD 250 was a consultation fee.
+  - Those settlements had marked fees as paid, so the fees vanished from cost and from the next
+    bill.
+- **Root cause:**
+  - No rule recognised a requisition paying POL263. Only "Commission" requisitions were treated
+    as settling a liability.
+  - Control-plane bills marked paid manually were counted as cash, in addition to the tenant's
+    own requisition.
+  - Settlement allocations counted regardless of the settlement's status, so a wrong settlement
+    couldn't be undone without deleting rows.
+- **Fix:**
+  - `server/financial-statements.ts`:
+    - `isPol263Payment` (category or description) and `POL263_PAYMENT_CATEGORY`. Such
+      requisitions are no longer an expense; in Cash Flow they are the POL263 line, and in the
+      ledger they become "Paid to POL263", posted to POL263 payable.
+    - Paid bills count as cash only when paid online (`markedPaidBy IS NULL`).
+    - `feeNotOnBill`: cost now includes fees paid straight off by an approved settlement
+      ("paid without a bill"), as well as unbilled ones.
+  - `server/expenditure-report.ts` labels these requisitions.
+  - `server/pol263-fees-report.ts` gains a Payments list, and its fees show their status.
+  - `storage.approveSettlementWithAllocation` counts only allocations from approved settlements.
+  - Data: `script/.tmp/fix-pol263-payments.ts`, which Augustus runs with --apply:
+    - REQ-00926 becomes CONSULTATION FEE.
+    - The 5 settlements are reversed (kept, not deleted); their 214 fees go back to "waiting for
+      the next bill".
+    - Yesterday's paid USD 250 bill is voided.
+    - The August USD 617.60 bill: requisition money not already used on earlier fees
+      (ZAR 4,175.25 + USD 50 = USD 258.76 at 0.05) is recorded as a paid part. USD 358.84 stays
+      owed.
+- **Verified:** typecheck and tests (`isPol263Payment` cases, fees report summary). The dry run
+  shows the figures above.
+- **Lesson for next time:** when a tenant pays the platform, find out which record is the money
+  leaving the tenant (here, the requisition) and count only that as cash. Treat every other
+  record of the same payment (settlements, bills marked paid by hand) as an acknowledgement, not
+  cash. Before "fixing" a bill to match a payment, confirm what the payment was for.
+
+---
+
 ## 2026-10-02 — 81 funerals done under a policy were never linked to it: deaths invisible to claims and the actuary
 
 - **Symptom:** Falakhe had 128 funeral cases, and 83 of them were marked "Policy Claim". None had

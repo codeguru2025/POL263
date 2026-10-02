@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../../server/tenant-db", () => ({ getDbForOrg: vi.fn() }));
+vi.mock("../../server/storage", () => ({ storage: {} }));
 
 import { billState, feeSource, summarizePol263Fees, type Pol263Bill } from "../../server/pol263-fees-report";
 
@@ -32,8 +33,8 @@ describe("summarizePol263Fees", () => {
   it("cost = billed + fees not yet billed, currencies kept apart", () => {
     const s = summarizePol263Fees(
       [bill({})],
-      [{ id: "f1", date: "2026-08-15", source: "Receipt #1", policyNumber: null, currency: "USD", fee: "0.30" }, { id: "f2", date: "2026-08-16", source: "Receipt #2", policyNumber: null, currency: "ZAR", fee: "3.50" }],
-      [bill({ id: "p", amount: "250.00", state: "paid", paid: "2026-08-31" })],
+      [{ id: "f1", date: "2026-08-15", source: "Receipt #1", policyNumber: null, currency: "USD", fee: "0.30", paidWithoutBill: false }, { id: "f2", date: "2026-08-16", source: "Receipt #2", policyNumber: null, currency: "ZAR", fee: "3.50", paidWithoutBill: true }],
+      [{ id: "p", date: "2026-08-31", reference: "PV-1 · REQ-1", description: "2.5% platform fee", via: "requisition", currency: "USD", amount: "250.00" }],
       [bill({})],
       [{ currency: "USD", fee: "526.52" }],
     );

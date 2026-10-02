@@ -14,7 +14,7 @@ const STATE: Record<BillState, { label: string; cls: string }> = {
 
 interface FeesResponse {
   bills: any[];
-  paidBills: any[];
+  payments: any[];
   openBills: any[];
   fees: any[];
   billsUnavailable: boolean;
@@ -43,6 +43,15 @@ const feeColumns: EdtColumn<any>[] = [
   { id: "source", header: "Charged on", accessor: (f) => f.source, cell: (f) => <span className="text-xs">{f.source}</span> },
   { id: "policy", header: "Policy", accessor: (f) => f.policyNumber ?? "", cell: (f) => <span className="text-xs font-mono">{f.policyNumber ?? "—"}</span> },
   { id: "fee", header: "Fee", align: "right", accessor: (f) => Number(f.fee), cell: (f) => <span className="text-xs tabular-nums whitespace-nowrap">{money(f.currency, f.fee)}</span> },
+  { id: "state", header: "Status", accessor: (f) => (f.paidWithoutBill ? "Paid without a bill" : "Waiting for next bill"), cell: (f) => <span className="text-xs text-muted-foreground whitespace-nowrap">{f.paidWithoutBill ? "Paid without a bill" : "Waiting for next bill"}</span> },
+];
+
+const paymentColumns: EdtColumn<any>[] = [
+  { id: "date", header: "Paid on", accessor: (p) => p.date, cell: (p) => <span className="text-xs whitespace-nowrap">{fmtDay(p.date)}</span> },
+  { id: "reference", header: "Reference", accessor: (p) => p.reference, cell: (p) => <span className="text-xs font-mono whitespace-nowrap">{p.reference || "—"}</span> },
+  { id: "description", header: "Description", accessor: (p) => p.description, cell: (p) => <span className="text-xs">{p.description}</span> },
+  { id: "via", header: "How", accessor: (p) => p.via, cell: (p) => <span className="text-xs">{p.via === "online" ? "Online" : "Requisition"}</span> },
+  { id: "amount", header: "Amount", align: "right", accessor: (p) => Number(p.amount), cell: (p) => <span className="text-xs tabular-nums font-medium whitespace-nowrap">{money(p.currency, p.amount)}</span> },
 ];
 
 export function Pol263FeesPanel({ filters, runKey, fk, enabled }: { filters: ReportFiltersState; runKey: number; fk: string[]; enabled: boolean }) {
@@ -80,7 +89,7 @@ export function Pol263FeesPanel({ filters, runKey, fk, enabled }: { filters: Rep
               {" "}· fees waiting for the next bill <span className="font-semibold tabular-nums">{byCur(s.buildingUp)}</span>
             </div>
             <div className="text-xs text-muted-foreground">
-              This period: billed {byCur(s.billed)} · fees not yet billed {byCur(s.feesNotBilled)} · <span className="font-medium text-foreground">cost {byCur(s.cost)}</span> · paid to POL263 {byCur(s.paid)}
+              This period: billed {byCur(s.billed)} · fees not on a bill {byCur(s.feesNotBilled)} · <span className="font-medium text-foreground">cost {byCur(s.cost)}</span> · paid to POL263 {byCur(s.paid)}
             </div>
             {d.billsUnavailable && <p className="text-xs text-amber-700">POL263 bills couldn't be loaded just now — only the fees are shown. Try again shortly.</p>}
           </div>
@@ -98,7 +107,16 @@ export function Pol263FeesPanel({ filters, runKey, fk, enabled }: { filters: Rep
               Still unpaid from before this period: {d.openBills.filter((b) => !d.bills.find((x) => x.id === b.id)).map((b) => `${b.reference} ${money(b.currency, b.amount)} (due ${fmtDay(b.due)})`).join(", ")}.
             </p>
           )}
-          <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Fees not yet on a bill ({d.fees.length})</div>
+          <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Paid to POL263 this period ({d.payments.length})</div>
+          <EnhancedDataTable
+            columns={paymentColumns}
+            rows={d.payments}
+            getRowKey={(p) => p.id}
+            exportFilename="pol263-payments"
+            storageKey="reports-pol263-payments"
+            emptyMessage="Nothing was paid to POL263 in this period."
+          />
+          <div className="px-4 pt-4 text-xs font-semibold uppercase text-muted-foreground">Fees not on a bill ({d.fees.length})</div>
           <EnhancedDataTable
             columns={feeColumns}
             rows={d.fees}

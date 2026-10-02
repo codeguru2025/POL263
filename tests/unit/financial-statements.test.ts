@@ -9,7 +9,7 @@ vi.mock("../../server/date-utils", () => ({
   dayRangeForOrg: vi.fn(async (_o: string, from: string, to: string) => ({ start: new Date(from + "T00:00:00+02:00"), endExclusive: new Date(Date.parse(to + "T00:00:00+02:00") + 86_400_000) })),
 }));
 
-import { consolidateToUsd, buildIncomeTimeSeries, isCommissionPayoutCategory } from "../../server/financial-statements";
+import { consolidateToUsd, buildIncomeTimeSeries, isCommissionPayoutCategory, isPol263Payment } from "../../server/financial-statements";
 import { getDbForOrg } from "../../server/tenant-db";
 
 describe("consolidateToUsd", () => {
@@ -106,5 +106,20 @@ describe("isCommissionPayoutCategory — agents paid through a requisition", () 
   it("leaves every other spending category alone", () => {
     expect(isCommissionPayoutCategory("FUEL")).toBe(false);
     expect(isCommissionPayoutCategory(null)).toBe(false);
+  });
+});
+
+describe("isPol263Payment — POL263's 2.5% fees paid through a requisition", () => {
+  it("recognises the ways Falakhe records it", () => {
+    expect(isPol263Payment("PLATFORM FEE")).toBe(true);
+    expect(isPol263Payment("PLATFORM FEE 2.5%")).toBe(true);
+    expect(isPol263Payment("PAYMENT", "2.5% PLATFORM FEE")).toBe(true);
+    expect(isPol263Payment("FEES", "2.5% PLATFORM")).toBe(true);
+    expect(isPol263Payment("PLATFORM FEE", "BALANCE, 2.5% PLATFOM FEE")).toBe(true);
+  });
+  it("leaves other spending alone", () => {
+    expect(isPol263Payment("CONSULTATION FEE", "CONSULTATION FEE")).toBe(false);
+    expect(isPol263Payment("FEES", "GRAVE FEE")).toBe(false);
+    expect(isPol263Payment("FUEL")).toBe(false);
   });
 });

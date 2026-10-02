@@ -15774,8 +15774,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             }),
             ...pf.fees.map((x) => {
               currencyTotals!.Amount[x.currency] = (currencyTotals!.Amount[x.currency] || 0) + Number(x.fee);
-              return ["2.5% fee, not yet billed", x.date, x.source, x.policyNumber ?? "", "", "Waiting for next bill", x.currency, x.fee, ...currencyAmounts(x.fee, x.currency)];
+              return [x.paidWithoutBill ? "2.5% fee, paid without a bill" : "2.5% fee, not yet billed", x.date, x.source, x.policyNumber ?? "", "", x.paidWithoutBill ? "Paid" : "Waiting for next bill", x.currency, x.fee, ...currencyAmounts(x.fee, x.currency)];
             }),
+            // Payments are money out, not cost — listed for reference, kept out of the total.
+            ...pf.payments.map((x) => [x.via === "online" ? "Paid to POL263 online" : "Paid to POL263 (requisition)", x.date, `${x.reference} — ${x.description}`, "", "", "Payment (not in total)", x.currency, `-${x.amount}`, ...CURRENCIES.map(() => "")]),
           ];
           break;
         }
