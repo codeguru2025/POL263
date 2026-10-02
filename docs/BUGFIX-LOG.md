@@ -69,8 +69,18 @@ convention" note in `CLAUDE.md`.
       owed.
 - **Verified:** typecheck and tests (`isPol263Payment` cases, fees report summary). The dry run
   shows the figures above.
+- **Follow-up, same day:** the first split under-counted what the kept settlements had used,
+  because `settlement_allocations.amount` is in the **fee's** currency, not the payment's. To get
+  the amount in the settlement's currency, multiply by `fx_rate_applied`. The 11 Aug ZAR 2,000
+  paid USD 100 of fees, so all ZAR 2,000 was used, not ZAR 100. Also, the 18 Jul ZAR 2,000
+  settlement used only ZAR 344.75. The rest was never banked as a credit: Falakhe has no
+  `platform_fee_credits` row, because that code postdates the settlement. Corrected by
+  `script/.tmp/fix-pol263-bill-split.ts`: paid part USD 163.76, still owed **USD 453.84**.
+  About USD 11.51 between the Balance Sheet and the bill-side figure is left in old allocation
+  data (partial allocations on two unbilled fees, and one ZAR fee over-allocated by ZAR 80.75).
 - **Lesson for next time:** when a tenant pays the platform, find out which record is the money
-  leaving the tenant (here, the requisition) and count only that as cash. Treat every other
+  leaving the tenant (here, the requisition) and count only that as cash. Never add up a
+  settlement's allocations by the settlement's currency: convert with `fx_rate_applied`. Treat every other
   record of the same payment (settlements, bills marked paid by hand) as an acknowledgement, not
   cash. Before "fixing" a bill to match a payment, confirm what the payment was for.
 
