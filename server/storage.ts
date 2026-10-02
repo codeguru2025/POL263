@@ -451,8 +451,6 @@ export interface IStorage {
   getDataIntegrityReport(organizationId: string): Promise<{ category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string }[]>;
   /** Expected vs collected premium and collection rate for a period, grouped by branch, per currency. */
   getCollectionEfficiencyReport(organizationId: string, from: string, to: string): Promise<{ branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number }[]>;
-  /** Persistency by inception-month cohort (as-of-now survivorship). */
-  getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]>;
   /** Lapse & reinstatement analysis for a period, by month, from policy_status_history. */
   getLapseAnalysisReport(organizationId: string, from: string, to: string): Promise<{ months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number }>;
   /** Member / dependant additions and removals over a period, from the audit trail. */
@@ -2544,39 +2542,6 @@ export class DatabaseStorage implements IStorage {
     return Array.from(map.values())
       .map((e) => ({ ...e, collectionRate: e.expected > 0 ? Number(((e.collected / e.expected) * 100).toFixed(1)) : 0 }))
       .sort((a, b) => a.branch.localeCompare(b.branch) || a.currency.localeCompare(b.currency));
-  }
-
-  /**
-   * Persistency by inception-month cohort. "Persistency %" here is as-of-now survivorship
-   * ((active + grace) / incepted) rather than a snapshot at exactly month 13/25 — the system
-   * doesn't retain enough status history to reconstruct the latter. Cohorts <2 months old are
-   * dropped as not yet meaningful.
-   */
-  async getPersistencyReport(organizationId: string): Promise<{ cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number }[]> {
-    const tdb = await getDbForOrg(organizationId);
-    const rowsOf = (r: any): any[] => r.rows ?? r;
-    const res = await tdb.execute(sql`
-      SELECT to_char(inception_date, 'YYYY-MM') AS cohort,
-             COUNT(*) AS incepted,
-             COUNT(*) FILTER (WHERE status = 'active') AS active,
-             COUNT(*) FILTER (WHERE status = 'grace') AS grace,
-             COUNT(*) FILTER (WHERE status = 'lapsed') AS lapsed,
-             COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
-      FROM policies
-      WHERE organization_id = ${organizationId} AND deleted_at IS NULL AND inception_date IS NOT NULL
-      GROUP BY cohort ORDER BY cohort DESC`);
-    const now = new Date();
-    return rowsOf(res).map((r: any) => {
-      const [y, m] = String(r.cohort).split("-").map(Number);
-      const monthsElapsed = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
-      const incepted = parseInt(r.incepted);
-      const active = parseInt(r.active), grace = parseInt(r.grace);
-      return {
-        cohort: r.cohort, monthsElapsed, incepted, active, grace,
-        lapsed: parseInt(r.lapsed), cancelled: parseInt(r.cancelled),
-        persistency: incepted > 0 ? Number((((active + grace) / incepted) * 100).toFixed(1)) : 0,
-      };
-    }).filter((r) => r.monthsElapsed >= 2);
   }
 
   /**

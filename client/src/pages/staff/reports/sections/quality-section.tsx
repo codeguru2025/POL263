@@ -9,7 +9,8 @@ import type { ReportSectionBaseProps } from "../use-report-filters";
 
 type IntegrityIssue = { category: string; severity: "high" | "medium" | "low"; policyNumber: string; client: string; detail: string };
 type CollectionRow = { branch: string; currency: string; expected: number; collected: number; collectionRate: number; policyCount: number };
-type PersistencyRow = { cohort: string; monthsElapsed: number; incepted: number; active: number; grace: number; lapsed: number; cancelled: number; persistency: number };
+type PersistencyRow = { cohort: string; monthsSinceSale: number | null; sold: number; neverPaid: number; notTakenUpPct: number | null; startedPaying: number; inForce: number; lapsed: number; cancelled: number; persistencyPct: number | null };
+type PersistencyData = { cohorts: PersistencyRow[]; typedIn: PersistencyRow };
 type LapseAnalysis = { months: { month: string; lapses: number; reinstatements: number }[]; totalLapses: number; totalReinstatements: number; inForceNow: number; approxLapseRate: number };
 type MovementRow = { date: string; action: "Added" | "Removed"; policyNumber: string; member: string; actor: string };
 type AnnivRow = { policyNumber: string; client: string; phone: string; product: string; branch: string; currency: string; premium: string; inceptionDate: string; nextAnniversary: string; daysUntil: number; yearsInForce: number };
@@ -35,15 +36,20 @@ const collectionColumns: EdtColumn<CollectionRow>[] = [
   { id: "rate", header: "Collection rate", align: "right", accessor: (r) => r.collectionRate, cell: (r) => <span className={`tabular-nums font-semibold ${rateColor(r.collectionRate)}`}>{r.collectionRate}%</span> },
 ];
 
+const pctCell = (v: number | null, goodHigh: boolean) => v == null ? <span className="text-muted-foreground">—</span>
+  : <span className={`tabular-nums font-semibold ${goodHigh ? rateColor(v) : v > 40 ? "text-destructive" : v > 20 ? "text-amber-600" : "text-emerald-600"}`}>{v}%</span>;
+const monthLabel = (c: string) => (c === "typed-in" ? "Existing policies typed in" : new Date(c + "-01T00:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" }));
 const persistencyColumns: EdtColumn<PersistencyRow>[] = [
-  { id: "cohort", header: "Inception cohort", accessor: (r) => r.cohort, cell: (r) => <span className="font-mono text-sm">{r.cohort}</span> },
-  { id: "months", header: "Months elapsed", align: "right", accessor: (r) => r.monthsElapsed, cell: (r) => <span className="tabular-nums">{r.monthsElapsed}</span> },
-  { id: "incepted", header: "Incepted", align: "right", accessor: (r) => r.incepted, cell: (r) => <span className="tabular-nums">{r.incepted}</span> },
-  { id: "active", header: "Active", align: "right", accessor: (r) => r.active, cell: (r) => <span className="tabular-nums">{r.active}</span> },
-  { id: "grace", header: "In grace", align: "right", accessor: (r) => r.grace, cell: (r) => <span className="tabular-nums">{r.grace}</span> },
+  { id: "cohort", header: "Month sold", accessor: (r) => r.cohort, cell: (r) => <span className={`whitespace-nowrap ${r.cohort === "typed-in" ? "italic text-muted-foreground" : "font-medium"}`}>{monthLabel(r.cohort)}</span> },
+  { id: "months", header: "Months since", align: "right", accessor: (r) => r.monthsSinceSale ?? -1, cell: (r) => <span className="tabular-nums">{r.monthsSinceSale ?? "—"}</span> },
+  { id: "sold", header: "Sold", align: "right", accessor: (r) => r.sold, cell: (r) => <span className="tabular-nums">{r.sold}</span> },
+  { id: "neverPaid", header: "Never paid", align: "right", accessor: (r) => r.neverPaid, cell: (r) => <span className="tabular-nums">{r.neverPaid}</span> },
+  { id: "ntu", header: "Not taken up", align: "right", accessor: (r) => r.notTakenUpPct ?? -1, cell: (r) => pctCell(r.notTakenUpPct, false) },
+  { id: "started", header: "Started paying", align: "right", accessor: (r) => r.startedPaying, cell: (r) => <span className="tabular-nums">{r.startedPaying}</span> },
+  { id: "inForce", header: "Still in force", align: "right", accessor: (r) => r.inForce, cell: (r) => <span className="tabular-nums">{r.inForce}</span> },
   { id: "lapsed", header: "Lapsed", align: "right", accessor: (r) => r.lapsed, cell: (r) => <span className="tabular-nums">{r.lapsed}</span> },
   { id: "cancelled", header: "Cancelled", align: "right", accessor: (r) => r.cancelled, cell: (r) => <span className="tabular-nums">{r.cancelled}</span> },
-  { id: "persistency", header: "Persistency", align: "right", accessor: (r) => r.persistency, cell: (r) => <span className={`tabular-nums font-semibold ${rateColor(r.persistency)}`}>{r.persistency}%</span> },
+  { id: "persistency", header: "Persistency", align: "right", accessor: (r) => r.persistencyPct ?? -1, cell: (r) => pctCell(r.persistencyPct, true) },
 ];
 
 const movementColumns: EdtColumn<MovementRow>[] = [
@@ -73,9 +79,13 @@ const lapseColumns: EdtColumn<{ month: string; lapses: number; reinstatements: n
 ];
 
 export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBaseProps) {
-  const { data: persistency = [], isLoading: loadingPersistency } = useQuery<PersistencyRow[]>({
-    queryKey: ["reports", "persistency", runKey],
-    queryFn: async () => (await fetch(getApiBase() + "/api/reports/persistency", { credentials: "include" })).json().catch(() => []),
+  const { data: persistencyData, isLoading: loadingPersistency } = useQuery<PersistencyData>({
+    queryKey: ["reports", "persistency", runKey, ...fk],
+    queryFn: async () => {
+      const res = await fetch(getApiBase() + "/api/reports/persistency" + q, { credentials: "include" });
+      if (!res.ok) throw new Error("Could not load persistency");
+      return res.json();
+    },
     enabled: need("persistency"),
   });
   const { data: lapse, isLoading: loadingLapse } = useQuery<LapseAnalysis | null>({
@@ -114,15 +124,18 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
   });
 
   const highCount = integrity.filter((i) => i.severity === "high").length;
-  const p13 = persistency.find((r) => r.monthsElapsed >= 13 && r.monthsElapsed < 16);
-  const p25 = persistency.find((r) => r.monthsElapsed >= 25 && r.monthsElapsed < 28);
+  const persistency = persistencyData?.cohorts ?? [];
+  const p13 = persistency.find((r) => r.monthsSinceSale === 13);
+  const p25 = persistency.find((r) => r.monthsSinceSale === 25);
+  const soldLast6 = persistency.filter((r) => (r.monthsSinceSale ?? 99) >= 1 && (r.monthsSinceSale ?? 99) <= 6);
+  const ntu6 = (() => { const s = soldLast6.reduce((a, r) => a + r.sold, 0); const n = soldLast6.reduce((a, r) => a + r.neverPaid, 0); return s ? Number(((n / s) * 100).toFixed(1)) : null; })();
 
   return (
     <>
       <TabsContent value="persistency">
         <CardSection
-          title="Persistency by inception cohort"
-          description="For each month's intake of policies, how many are still on the books today. “Persistency %” is (active + in-grace) ÷ incepted — as-of-now survivorship, not a snapshot at exactly month 13/25. The 13- and 25-month cohorts are the ones the industry watches."
+          title="Persistency — how each month's sales are holding up"
+          description="New sales grouped by the month they were sold. “Not taken up” = sold but never paid. “Persistency” = still in force today ÷ those that started paying. Existing policies typed in are shown on their own line — they're not sales. The 13- and 25-month figures are the ones the industry watches."
           icon={Activity}
           headerRight={<ExportButton reportType="persistency" filters={filters} />}
           flush
@@ -130,15 +143,15 @@ export function QualitySection({ filters, q, fk, runKey, need }: ReportSectionBa
           {loadingPersistency ? (
             <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
           ) : persistency.length === 0 ? (
-            <EmptyState title="No cohorts yet" description="No policies with an inception date at least two months ago." className="border-0 rounded-none bg-transparent py-8" />
+            <EmptyState title="No sales yet" className="border-0 rounded-none bg-transparent py-8" />
           ) : (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 p-4">
-                <KpiStatCard label="13-month persistency" value={p13 ? <span className={rateColor(p13.persistency)}>{p13.persistency}%</span> : "—"} icon={Activity} />
-                <KpiStatCard label="25-month persistency" value={p25 ? <span className={rateColor(p25.persistency)}>{p25.persistency}%</span> : "—"} icon={Activity} />
-                <KpiStatCard label="Cohorts tracked" value={persistency.length} icon={Activity} />
+                <KpiStatCard label="Not taken up (sold in last 6 months)" value={ntu6 == null ? "—" : <span className={ntu6 > 40 ? "text-destructive" : ntu6 > 20 ? "text-amber-600" : ""}>{ntu6}%</span>} icon={Activity} />
+                <KpiStatCard label="13-month persistency" value={p13?.persistencyPct != null ? <span className={rateColor(p13.persistencyPct)}>{p13.persistencyPct}%</span> : "not yet (no 13-month-old sales)"} icon={Activity} />
+                <KpiStatCard label="25-month persistency" value={p25?.persistencyPct != null ? <span className={rateColor(p25.persistencyPct)}>{p25.persistencyPct}%</span> : "not yet"} icon={Activity} />
               </div>
-              <EnhancedDataTable columns={persistencyColumns} rows={persistency.map((r, i) => ({ ...r, _k: i }))} getRowKey={(r: any) => String(r._k)} exportFilename="persistency" storageKey="reports-persistency" emptyMessage="No cohorts." />
+              <EnhancedDataTable columns={persistencyColumns} rows={[...persistency, ...(persistencyData?.typedIn?.sold ? [persistencyData.typedIn] : [])]} getRowKey={(r) => r.cohort} exportFilename="persistency" storageKey="reports-persistency-v2" emptyMessage="No sales." />
             </>
           )}
         </CardSection>

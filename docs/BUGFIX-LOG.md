@@ -10,6 +10,31 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Persistency hid never-paid sales and counted typed-in policies as new business
+
+- **Symptom:** Book Health → Persistency showed Falakhe's cohorts at 86–99%.
+  - August's "224 policies, 99.1%" was 191 existing policies typed in plus 33 new sales.
+  - 194 new sales that never paid weren't counted at all, because they have no inception date.
+  - The last two months were hidden, and months were computed in UTC.
+- **Root cause:** `getPersistencyReport` grouped by `inception_date` (only set once a policy
+  pays), had no `is_legacy` filter, and dropped cohorts under 2 months.
+- **Fix:** new `server/persistency.ts`:
+  - `buildPersistency` and `cohortFigures`. Cohort = tenant-local month sold (`created_at`),
+    new business only, with typed-in policies on their own line.
+  - Columns: sold, never paid, not-taken-up %, started paying, in force, lapsed, cancelled, and
+    persistency = in force ÷ started paying.
+  - Route, export and tab updated, with a "not taken up (last 6 months)" headline. The old query
+    was removed.
+- **Verified on Falakhe:**
+  - July: 66 sold, 50% never paid, 75.8% persistency.
+  - June: 117 sold, 73.5% never paid, 90.3% persistency.
+  - Typed in: 484, 96.8% in force.
+  - Test in `tests/unit/persistency.test.ts`.
+- **Lesson for next time:** a survival metric must count the ones that never started (not taken
+  up), or it measures only the survivors. And sales metrics must exclude `is_legacy` captures.
+
+---
+
 ## 2026-10-02 — Claims reports saw 2 claims and a 0% loss ratio; Falakhe did 67 policy funerals in Q3
 
 - **Symptom:** Reports → Claims.

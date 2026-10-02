@@ -15237,7 +15237,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/reports/persistency", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
-    return res.json(await storage.getPersistencyReport((req.user as any).organizationId));
+    // New sales by month sold, typed-in policies apart (server/persistency.ts).
+    const filters = await enforceAgentScope(req, parseReportFilters(req.query));
+    const { buildPersistency } = await import("./persistency");
+    return res.json(await buildPersistency((req.user as any).organizationId, { branchId: filters.branchId, agentId: filters.agentId }));
   });
 
   app.get("/api/reports/lapse-analysis", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -16518,9 +16521,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "persistency": {
-          const pr = await storage.getPersistencyReport(user.organizationId);
-          headers = ["Inception Cohort", "Months Elapsed", "Incepted", "Active", "In Grace", "Lapsed", "Cancelled", "Persistency %"];
-          rows = pr.map((r) => [r.cohort, r.monthsElapsed, r.incepted, r.active, r.grace, r.lapsed, r.cancelled, `${r.persistency}%`]);
+          const { buildPersistency } = await import("./persistency");
+          const pr = await buildPersistency(user.organizationId, { branchId: reportFilters.branchId, agentId: reportFilters.agentId });
+          headers = ["Month Sold", "Months Since Sale", "Sold", "Never Paid", "Not Taken Up %", "Started Paying", "Still In Force", "Lapsed", "Cancelled", "Persistency %"];
+          const line = (c: any) => [c.cohort === "typed-in" ? "Existing policies typed in (not sales)" : c.cohort, c.monthsSinceSale ?? "", c.sold, c.neverPaid, c.notTakenUpPct ?? "", c.startedPaying, c.inForce, c.lapsed, c.cancelled, c.persistencyPct ?? ""];
+          rows = [...pr.cohorts.map(line), line(pr.typedIn)];
           break;
         }
         case "lapse-analysis": {
