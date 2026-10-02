@@ -10,6 +10,47 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Claims reports saw 2 claims and a 0% loss ratio; Falakhe did 67 policy funerals in Q3
+
+- **Symptom:** Reports → Claims.
+  - **Register:** listed only the 2 claim records. The 66 policy funerals in Q3 with no claim
+    raised were missing, and "Approved amount" was always blank.
+  - **Aging:** counted "approved" as open even when the funeral was done, used a 14-day overdue
+    rule against the claims SLA's 5, and showed every amount as 0.
+  - **Loss ratio:** 0%. Premium also left out society lump sums, used UTC days and included
+    receipts waiting for approval.
+- **Root cause:** all three treated a claim as a `claims` row valued by `cash_in_lieu_amount`.
+  At a funeral parlour a claim *is* the funeral: staff often don't raise a claim, it's paid in
+  kind, and its cost is the requisitions linked to the funeral case.
+- **Fix:** new `server/claims-view.ts`, the same definitions as the IPEC return and actuarial
+  export:
+  - `buildClaimRecords`: claims plus policy funerals with no claim. Cost = cash in lieu + linked
+    requisitions (commission and POL263 payments excepted). The society ledger deduction is shown
+    as "charged to society" and never added to cost, because it's the society paying at the agreed
+    rate from premium already counted (Augustus).
+  - `claimState`: settled when paid / completed / closed or the funeral is completed. Overdue
+    uses `CLAIM_SLA_DAYS`.
+  - `buildLossRatio`: cash in lieu decided + policy-funeral spend in the period ÷ income-statement
+    premium, including societies.
+  - `repudiationByType`.
+  - Routes, exports and `claims-section.tsx` rewritten. The unused
+    `getClaimsReportByOrg` / `getClaimsAgingReport` / `getClaimsAnalyticsReport` were removed.
+- **Verified on Falakhe, Q3:**
+  - 67 claims (1 claim record + 66 funerals with no claim raised), 53 settled and 14 open, all 14
+    overdue (funeral cases never marked completed). 23 have no costs linked.
+  - Loss ratio USD 33.3% (8,286.95 / 24,923.05) and ZAR 11.7% (8,750 / 74,585), which equal the
+    IPEC return's claims and gross premium.
+  - Tests in `tests/unit/claims-view.test.ts`.
+- **Lesson for next time:**
+  - Before reporting on "claims", ask how the business actually pays them. Here it's in kind,
+    through funeral cases.
+  - Keep one shared definition so the register, aging, loss ratio, IPEC return and actuarial
+    export can't disagree.
+  - When deleting functions with a script, delete by exact line ranges you've inspected. A "find
+    the next member" regex removed 2,493 lines (caught by typecheck and restored from git).
+
+---
+
 ## 2026-10-02 — Commission by payment didn't add up to what agents earned; "months paid" wrong on 9 in 10 receipts
 
 - **Symptom:** Falakhe, September.

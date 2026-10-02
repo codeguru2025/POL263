@@ -14980,12 +14980,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/reports/claims", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
     const user = req.user as any;
     const filters = await enforceAgentScope(req, parseReportFilters(req.query));
-    const status = req.query.status ? String(req.query.status) : undefined;
-    const limit = Math.min(parseInt(String(req.query.limit)) || 500, REPORT_EXPORT_MAX_ROWS);
-    return res.json(await storage.getClaimsReportByOrg(user.organizationId, limit, 0, { ...filters, status }));
+    // Claims and funerals done under a policy with no claim raised (server/claims-view.ts).
+    const { buildClaimRecords } = await import("./claims-view");
+    return res.json(await buildClaimRecords(user.organizationId, { fromDate: filters.fromDate, toDate: filters.toDate, branchId: filters.branchId }));
   });
   app.get("/api/reports/claims-aging", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
-    return res.json(await storage.getClaimsAgingReport((req.user as any).organizationId));
+    // Every open claim (all time), oldest first; overdue = past the claims SLA.
+    const filters = parseReportFilters(req.query);
+    const { buildClaimRecords } = await import("./claims-view");
+    const { CLAIM_SLA_DAYS } = await import("./claims-sla");
+    const open = (await buildClaimRecords((req.user as any).organizationId, { branchId: filters.branchId })).filter((r) => r.state === "open")
+      .sort((a, b) => (b.daysOpen ?? 0) - (a.daysOpen ?? 0));
+    return res.json({ slaDays: CLAIM_SLA_DAYS, rows: open });
   });
 
   app.get("/api/reports/claims-analytics", requireAuth, requireTenantScope, requirePermission("read:claim"), async (req, res) => {
@@ -14993,7 +14999,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const def = await defaultStatementRange(user.organizationId);
     const from = typeof req.query.fromDate === "string" && req.query.fromDate ? req.query.fromDate : `${(await todayForOrg(user.organizationId)).slice(0, 4)}-01-01`;
     const to = typeof req.query.toDate === "string" && req.query.toDate ? req.query.toDate : def.to;
-    return res.json(await storage.getClaimsAnalyticsReport(user.organizationId, from, to));
+    // Same claims and premium definitions as the IPEC return (server/claims-view.ts).
+    const { buildClaimRecords, buildLossRatio, repudiationByType } = await import("./claims-view");
+    const branchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+    const [lossRatio, records] = await Promise.all([buildLossRatio(user.organizationId, from, to, branchId), buildClaimRecords(user.organizationId, { fromDate: from, toDate: to, branchId })]);
+    return res.json({ lossRatio, repudiation: repudiationByType(records) });
   });
 
   app.get("/api/reports/new-joinings", requireAuth, requireTenantScope, requirePermission("read:policy"), async (req, res) => {
@@ -15674,15 +15684,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "claims": {
-          const claimRaw = await storage.getClaimsByOrg(user.organizationId, REPORT_EXPORT_MAX_ROWS, 0, reportFilters);
-          headers = ["Claim Number", "Type", "Status", "Currency", "Approved Amount", ...currencyHeaders("Approved"), "Deceased Name", "Created"];
-          currencyTotals = { Approved: {} };
-          rows = claimRaw.map((r: any) => {
-            const c = (r.currency || "USD").toUpperCase();
-            const amt = parseFloat(String(r.approvedAmount ?? 0)) || 0;
-            if (amt > 0) currencyTotals!.Approved[c] = (currencyTotals!.Approved[c] || 0) + amt;
-            return [r.claimNumber, r.claimType, r.status, r.currency || "USD", r.approvedAmount ?? "", ...currencyAmounts(r.approvedAmount, r.currency), r.deceasedName || "", r.createdAt];
-          });
+          const { buildClaimRecords } = await import("./claims-view");
+          const recs = await buildClaimRecords(user.organizationId, { fromDate: reportFilters.fromDate, toDate: reportFilters.toDate, branchId: reportFilters.branchId });
+          const fc = (m: Record<string, string>) => Object.entries(m).map(([c, v]) => `${c} ${v}`).join(" + ");
+          headers = ["Claim / Funeral", "Kind", "Funeral Case", "Policy #", "Deceased", "Relationship", "Policyholder", "Phone", "Date of Death", "Reported", "Decided / Done",
+            "Days to Decide", "Status", "Where It Stands", "Claim Type", "Currency", "Cash in Lieu", "Funeral Cost", "Charged to Society", "Decline Reason", "Branch"];
+          currencyTotals = null;
+          rows = recs.map((r) => [r.reference, r.kind === "funeral" ? "Funeral — no claim raised" : "Claim", r.funeralCase, r.policyNumber, r.deceased, r.relationship, r.client, r.clientPhone,
+            r.dateOfDeath ?? "", r.reported, r.decided ?? "", r.daysToDecide ?? "", r.state, r.status, r.claimType, r.currency, r.cashInLieu ?? "", fc(r.funeralCost), r.chargedToSociety ?? "", r.decisionReason, r.branch]);
           break;
         }
         case "payments": {
@@ -16607,24 +16616,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           break;
         }
         case "claims-aging": {
-          const ca = await storage.getClaimsAgingReport(user.organizationId);
-          headers = ["Claim #", "Policy #", "Deceased", "Status", "Branch", "Days Open", "Aging Bucket", "Overdue", "Currency", "Amount"];
-          currencyTotals = { Amount: {} };
-          rows = ca.map((r) => {
-            const c = (r.currency || "USD").toUpperCase();
-            if (r.amount > 0) currencyTotals!.Amount[c] = (currencyTotals!.Amount[c] || 0) + r.amount;
-            return [r.claimNumber, r.policyNumber, r.deceased, r.status, r.branch, r.daysOpen, r.bucket, r.overdue ? "Yes" : "No", c, r.amount.toFixed(2)];
-          });
+          const { buildClaimRecords } = await import("./claims-view");
+          const ca = (await buildClaimRecords(user.organizationId, { branchId: reportFilters.branchId })).filter((r) => r.state === "open").sort((a, b) => (b.daysOpen ?? 0) - (a.daysOpen ?? 0));
+          headers = ["Claim / Funeral", "Kind", "Policy #", "Deceased", "Where It Stands", "Reported", "Days Open", "Overdue", "Spent So Far", "Branch"];
+          currencyTotals = null;
+          rows = ca.map((r) => [r.reference, r.kind === "funeral" ? "Funeral — no claim raised" : "Claim", r.policyNumber, r.deceased, r.status, r.reported, r.daysOpen ?? "", r.overdue ? "Yes" : "No",
+            Object.entries(r.funeralCost).map(([c, v]) => `${c} ${v}`).join(" + "), r.branch]);
           break;
         }
         case "claims-analytics": {
           const orgToday3 = await todayForOrg(user.organizationId);
-          const an = await storage.getClaimsAnalyticsReport(user.organizationId, reportFilters.fromDate || `${orgToday3.slice(0, 4)}-01-01`, reportFilters.toDate || orgToday3);
-          headers = ["Section", "Key", "Submitted / Claims incurred", "Approved / Premium collected", "Rejected", "Ratio %"];
+          const fromA = reportFilters.fromDate || `${orgToday3.slice(0, 4)}-01-01`, toA = reportFilters.toDate || orgToday3;
+          const { buildClaimRecords, buildLossRatio, repudiationByType } = await import("./claims-view");
+          const [lr, recs] = await Promise.all([buildLossRatio(user.organizationId, fromA, toA, reportFilters.branchId), buildClaimRecords(user.organizationId, { fromDate: fromA, toDate: toA, branchId: reportFilters.branchId })]);
+          headers = ["Section", "Key", "Claims / Reported", "Premium / Settled", "Declined", "Still Open", "Ratio %"];
           rows = [
-            ...an.lossRatio.map((l) => ["Loss ratio", l.currency, l.claimsIncurred.toFixed(2), l.premiumCollected.toFixed(2), "", `${l.ratio}%`]),
-            ["", "", "", "", "", ""],
-            ...an.repudiation.map((r) => ["Repudiation", r.claimType, r.submitted, r.approved, r.rejected, `${r.repudiationRate}%`]),
+            ...lr.map((l) => ["Loss ratio", l.currency, l.claimsIncurred.toFixed(2), l.premiumCollected.toFixed(2), "", "", `${l.ratio}%`]),
+            ["", "", "", "", "", "", ""],
+            ...repudiationByType(recs).map((r) => ["By claim type", r.claimType, r.reported, r.settled, r.repudiated, r.open, `${r.repudiationRate}%`]),
           ];
           break;
         }
