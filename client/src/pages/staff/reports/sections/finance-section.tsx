@@ -1016,7 +1016,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
       <TabsContent value="ipec-return">
         <CardSection
           title="IPEC Return — Life / Funeral Assurer (indicative)"
-          description="Assembles the data the system holds into the structure of an IPEC statutory return. Investment income, technical provisions, prescribed-asset holdings and the ZICARP capital requirement are not in the system — enter them below. This is a working draft; the return still needs an actuary's sign-off before submission."
+          description="Assembles the data the system holds into the structure of an IPEC statutory return — insurance business only; cash funerals are shown separately. Investment income, prescribed-asset holdings and the ZICARP capital requirement are not in the system — enter them below. Technical provisions come from the IFRS 17 figures unless you enter an actuary's. This is a working draft; the return still needs an actuary's sign-off before submission."
           icon={Shield}
           headerRight={
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.open(`${getApiBase()}/api/reports/ipec-return/pdf?${ipecQs()}&download=1`, "_blank")}>
@@ -1040,7 +1040,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
               </div>
               {[
                 ["investmentIncome", "Investment income (USD, period)"],
-                ["technicalProvisions", "Technical provisions (USD, as of)"],
+                ["technicalProvisions", "Technical provisions (USD, as of) — blank = IFRS 17 figure"],
                 ["prescribedAssetsHeld", "Prescribed assets held (USD, as of)"],
                 ["otherLiabilities", "Other liabilities (USD, as of) — blank = derived"],
                 ["riskBasedCapitalRequirement", "ZICARP RBC requirement (USD) — blank = flat minimum"],
@@ -1077,6 +1077,7 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                     <p className="text-sm font-semibold mb-1">Business summary</p>
                     <Row l="Policies in force" v={R.businessSummary.policiesInForce} />
                     <Row l="New policies in period" v={R.businessSummary.newPoliciesInPeriod} />
+                    {R.businessSummary.legacyPoliciesCapturedInPeriod > 0 && <Row l="Existing policies typed in (not new business)" v={R.businessSummary.legacyPoliciesCapturedInPeriod} />}
                     <Row l="Lapses in period" v={R.businessSummary.lapsesInPeriod} />
                     <Row l="Lives covered" v={R.businessSummary.livesCovered} />
                   </div>
@@ -1087,14 +1088,28 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                     <Row l="Net premium written" v={u(R.revenueAccount.netPremiumWritten)} />
                     <Row l="Investment income (manual)" v={u(R.revenueAccount.investmentIncome)} />
                     <Row l="Claims incurred" v={u(R.revenueAccount.claimsIncurred)} />
+                    {R.revenueAccount.claimsIncurredBreakdown && (
+                      <p className="text-[11px] text-muted-foreground py-1">
+                        Cash in lieu {u(R.revenueAccount.claimsIncurredBreakdown.cashInLieu)} + cost of {R.revenueAccount.claimsIncurredBreakdown.policyFunerals} funeral{R.revenueAccount.claimsIncurredBreakdown.policyFunerals === 1 ? "" : "s"} done under a policy {u(R.revenueAccount.claimsIncurredBreakdown.policyFuneralCosts)}
+                        {R.revenueAccount.claimsIncurredBreakdown.policyFuneralsNotValued > 0 && <span className="text-amber-700"> — {R.revenueAccount.claimsIncurredBreakdown.policyFuneralsNotValued} have no costs recorded against them, so claims are understated. Link the funeral's requisitions to its case.</span>}
+                      </p>
+                    )}
                     <Row l="Commission" v={u(R.revenueAccount.commission)} />
                     <Row l="Management expenses" v={u(R.revenueAccount.managementExpenses)} />
                     <Row l="Underwriting result" v={<span className={R.revenueAccount.underwritingResult >= 0 ? "text-emerald-600" : "text-destructive"}>{u(R.revenueAccount.underwritingResult)}</span>} />
+                    {R.nonInsuranceBusiness && (
+                      <>
+                        <p className="text-xs font-semibold mt-3 mb-1 text-muted-foreground">Not insurance — cash funerals sold</p>
+                        <Row l="Funeral service income" v={u(R.nonInsuranceBusiness.funeralServiceIncome)} />
+                        <Row l="Costs linked to cash funerals" v={u(R.nonInsuranceBusiness.funeralServiceCosts)} />
+                        <Row l="Result" v={u(R.nonInsuranceBusiness.result)} />
+                      </>
+                    )}
                   </div>
                   <div>
                     <p className="text-sm font-semibold mb-1">Financial position (USD)</p>
                     <Row l="Total assets" v={u(R.financialPosition.totalAssets)} />
-                    <Row l="Technical provisions (manual)" v={u(R.financialPosition.technicalProvisions)} />
+                    <Row l={`Technical provisions (${String(R.financialPosition.technicalProvisionsSource || "").startsWith("manual") ? "actuary" : "IFRS 17"})`} v={u(R.financialPosition.technicalProvisions)} />
                     <Row l="Total liabilities" v={u(R.financialPosition.totalLiabilities)} />
                     <Row l="Shareholders' funds" v={u(R.financialPosition.shareholdersFunds)} />
                   </div>
@@ -1115,6 +1130,9 @@ export function FinanceSection({ filters, q, qAppend, fk, runKey, need, userId, 
                     <Row l="Repudiated" v={R.claimsAnalysis.repudiated} />
                     <Row l="Outstanding" v={R.claimsAnalysis.outstanding} />
                     <Row l="Avg settlement (days)" v={R.claimsAnalysis.averageSettlementDays} />
+                    {R.claimsAnalysis.policyFuneralsWithoutClaim > 0 && (
+                      <p className="text-[11px] text-amber-700 py-1">Includes {R.claimsAnalysis.policyFuneralsWithoutClaim} funeral{R.claimsAnalysis.policyFuneralsWithoutClaim === 1 ? "" : "s"} done under a policy with no claim raised — see Book Health → Data integrity.</p>
+                    )}
                   </div>
                   <div>
                     <p className="text-sm font-semibold mb-1">Complaints</p>

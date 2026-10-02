@@ -10,6 +10,52 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — IPEC return: claims USD 0, cash funerals counted as premium, provisions blank
+
+- **Symptom** (Falakhe, Jul–Sep):
+  - Gross premium written was USD 45,662, which included cash funeral services.
+  - Claims incurred showed USD 0 despite 67 funerals done under a policy.
+  - Management expenses included the POL263 double count and every coffin/casket bought.
+  - Technical provisions showed 0 and had to be typed in.
+  - "New policies" was 555 because legacy migrations were counted.
+  - Claims reported showed 1, and the settlement time was measured to today.
+  - Dates were taken as UTC.
+- **Root cause:**
+  - `buildIpecReturn` took gross premium from income *total*.
+  - Claims were valued only by `cash_in_lieu_amount`, which Falakhe never sets: every claim is
+    a funeral.
+  - Management expenses were every non-commission expense, including cash claims, so claims
+    were counted twice.
+  - Policy counts used `inception_date` with no legacy flag.
+  - Claims statistics ignored funeral cases.
+- **Fix (`server/ipec-return.ts`):**
+  - Gross premium written = premiums + society lump sums. Cash funerals go on a separate
+    `nonInsuranceBusiness` line (income less the costs linked to cash funeral cases).
+  - Claims incurred = cash in lieu decided in the period + the actual cost of policy funerals
+    (paid requisitions linked to the funeral case, via `splitFuneralCosts`). Funerals with no
+    linked costs are counted as "not valued".
+  - Those funeral costs and cash claims come out of management expenses.
+  - Technical provisions default to the IFRS 17 closing LRC + LIC, with a manual override.
+  - New policies come from the New joinings report (legacy shown separately). Lives come from
+    `buildInForceLives`.
+  - Claims analysis adds policy funerals with no claim; settlement days run from reported to
+    decided or completed.
+  - Local-day bounds throughout.
+  - UI and PDF updated.
+- **Verified on Falakhe, Jul–Sep:**
+  - Gross premium written USD 28,652.30, which equals Income Statement premiums + societies.
+  - Claims USD 8,724.45 across 67 policy funerals, 23 of them not valued.
+  - Cash funeral income USD 17,009.50 against costs of USD 2,587.50.
+  - Technical provisions USD 2,782.55, equal to the IFRS 17 closing balance.
+  - Underwriting result +USD 1,446.86. 137 new policies and 477 legacy captured.
+  - Test: `tests/unit/ipec-return.test.ts`.
+- **Lesson for next time:** in a funeral business the claim *is* the service. Value it at what
+  it cost, and keep the parlour's cash-funeral trade out of the insurance return. A regulatory
+  figure that is "manual, default 0" is wrong by default whenever the system already computes
+  it.
+
+---
+
 ## 2026-10-02 — Welcome text lost when the phone number is typed in after the policy is captured
 
 - **Symptom:** FLK00996 (Naomi Dube) got her receipt text but never the welcome text.

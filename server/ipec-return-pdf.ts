@@ -34,6 +34,7 @@ export async function streamIpecReturnPdf(orgId: string, params: IpecReturnParam
   sectionBand(ctx, "1. Business summary");
   kv(ctx, "Policies in force", String(r.businessSummary.policiesInForce));
   kv(ctx, "New policies in period", String(r.businessSummary.newPoliciesInPeriod));
+  if (r.businessSummary.legacyPoliciesCapturedInPeriod > 0) kv(ctx, "  Existing policies typed in (not new business)", String(r.businessSummary.legacyPoliciesCapturedInPeriod));
   kv(ctx, "Lapses in period", String(r.businessSummary.lapsesInPeriod));
   kv(ctx, "Lives covered", String(r.businessSummary.livesCovered));
 
@@ -44,15 +45,18 @@ export async function streamIpecReturnPdf(orgId: string, params: IpecReturnParam
   kv(ctx, "Net premium written", U(ra.netPremiumWritten));
   kv(ctx, "Investment income  (manual)", U(ra.investmentIncome));
   kv(ctx, "Claims incurred", U(ra.claimsIncurred));
+  kv(ctx, "  of which cost of funerals done under a policy", U(ra.claimsIncurredBreakdown.policyFuneralCosts));
+  if (ra.claimsIncurredBreakdown.policyFuneralsNotValued > 0) kv(ctx, `  Policy funerals with no costs recorded (not valued)`, String(ra.claimsIncurredBreakdown.policyFuneralsNotValued), C_BAD);
   kv(ctx, "Commission", U(ra.commission));
   kv(ctx, "Management expenses", U(ra.managementExpenses));
   kv(ctx, "Underwriting result", U(ra.underwritingResult), ra.underwritingResult >= 0 ? C_OK : C_BAD);
+  kv(ctx, "Not insurance: cash funerals — income / costs", `${U(r.nonInsuranceBusiness.funeralServiceIncome)} / ${U(r.nonInsuranceBusiness.funeralServiceCosts)}`);
 
   sectionBand(ctx, "3. Statement of financial position (USD)");
   const fp = r.financialPosition;
   kv(ctx, "Total assets", U(fp.totalAssets));
   kv(ctx, "  of which prescribed assets  (manual)", U(fp.prescribedAssetsHeld));
-  kv(ctx, "Technical provisions  (manual)", U(fp.technicalProvisions));
+  kv(ctx, `Technical provisions  (${fp.technicalProvisionsSource.startsWith("manual") ? "actuary" : "IFRS 17"})`, U(fp.technicalProvisions));
   kv(ctx, "Other liabilities", U(fp.otherLiabilities));
   kv(ctx, "Total liabilities", U(fp.totalLiabilities));
   kv(ctx, "Shareholders' funds", U(fp.shareholdersFunds), fp.shareholdersFunds >= 0 ? C_OK : C_BAD);
