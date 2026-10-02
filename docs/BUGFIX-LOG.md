@@ -10,6 +10,44 @@ convention" note in `CLAUDE.md`.
 
 ---
 
+## 2026-10-02 — Monthly income series counted commission and POL263 payouts; budget compared part-months with whole-month targets
+
+- **Symptom:**
+  - `buildIncomeTimeSeries` (Executive Report charts, budget actuals) gave higher expenses than
+    the Income Statement. Falakhe July was USD 150 + ZAR 3,100 too high, and August ZAR 3,140
+    too high.
+  - The Executive Report's budget comparison set a month-to-date actual against a whole month's
+    target.
+  - Its "new policies" count included legacy captures and deleted policies (UTC bounds), so Q3
+    showed 614 instead of 137.
+  - The Budget tab was only an entry grid, so nobody saw the comparison where they set targets.
+- **Root cause:**
+  - The series' payout query summed every `payment_disbursements` row. `buildIncomeStatement`
+    skips commission payouts and payments to POL263, whose cost is counted when earned or billed,
+    so the two disagreed.
+  - `getBudgetForRange` summed whole months overlapping the range.
+  - `buildExecutiveSummary` counted every created policy.
+- **Fix:**
+  - `settlesCountedCostSql` in `server/financial-statements.ts` applies the same two rules in SQL.
+    The POL263 pattern is bound as a parameter, because backslashes in a `sql` template literal
+    are silently dropped.
+  - New `server/budget-report.ts`: `monthShareInRange`, `budgetForRange` (pro-rates part months,
+    converts currency) and `buildBudgetVsActual`. Route `/api/reports/budget-vs-actual`.
+  - New `budget-panel.tsx`: target, actual and difference per month plus year to date. Inputs are
+    keyed so loaded values show.
+  - The Executive Report uses `budgetForRange`. Executive new policies = new business only,
+    not deleted, local days.
+- **Verified:** Falakhe Jul / Aug / Sep series equal the Income Statement to the cent in both
+  currencies. Sep income USD 15,077.75 matches. Q3 new policies 137 matches the IPEC return.
+  Tests in `tests/unit/budget-report.test.ts`.
+- **Lesson for next time:**
+  - Any second code path that totals the same money (series, buckets, exports) must apply the
+    same exclusions as the statement. Test that they agree on real data.
+  - Never put regex escapes inside a `sql` template literal: `\s` becomes `s`. Bind the pattern
+    as a parameter.
+
+---
+
 ## 2026-10-02 — IPEC return: claims USD 0, cash funerals counted as premium, provisions blank
 
 - **Symptom** (Falakhe, Jul–Sep):

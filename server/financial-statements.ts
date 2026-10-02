@@ -277,6 +277,17 @@ export function isPol263Payment(category: string | null | undefined, description
   const re = /2\.5\s*%\s*platf|platfor?m\s*fee|\bpol\s*263\b/i;
   return re.test(category ?? "") || re.test(description ?? "");
 }
+/** The same two rules in SQL, for queries that total payouts without loading each one: a payout
+ *  that is agents' commission or a payment to POL263 settles a cost counted elsewhere. Keep in
+ *  step with isCommissionPayoutCategory / isPol263Payment. */
+/** POSIX form of isPol263Payment's pattern (\m \M are Postgres word boundaries). Bound as a
+ *  parameter so no escaping is lost in the SQL template. */
+const POL263_PAYMENT_PG_RE = String.raw`2\.5\s*%\s*platf|platfor?m\s*fee|\mpol\s*263\M`;
+const settlesCountedCostSql = (category: any, description: any) => sql`(
+  COALESCE(${category}, '') ~* 'commission'
+  OR COALESCE(${category}, '') ~* ${POL263_PAYMENT_PG_RE}
+  OR COALESCE(${description}, '') ~* ${POL263_PAYMENT_PG_RE})`;
+
 /** Category label disbursementCategories gives a POL263 fee payment. */
 export const POL263_PAYMENT_CATEGORY = "Paid to POL263 (2.5% fees)";
 
@@ -517,8 +528,14 @@ export async function buildIncomeTimeSeries(
       WHERE organization_id = ${orgId} AND status = 'issued' AND issued_at >= ${start} AND issued_at < ${end} ${br(sql`branch_id`)} GROUP BY 1, 2`),
     branchId ? Promise.resolve([]) : q(sql`SELECT ${onDate(sql`payment_date`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM legacy_group_receipts
       WHERE organization_id = ${orgId} AND payment_date >= ${from}::date AND payment_date <= ${to}::date GROUP BY 1, 2`),
-    q(sql`SELECT ${onDate(sql`paid_date`)} AS bucket, currency, COALESCE(SUM(amount), 0) AS total FROM payment_disbursements
-      WHERE organization_id = ${orgId} AND paid_date >= ${from} AND paid_date <= ${to} ${br(sql`branch_id`)} GROUP BY 1, 2`),
+    // Payouts, less commission and POL263 payments (their cost is counted when earned / billed).
+    q(sql`SELECT ${onDate(sql`d.paid_date`)} AS bucket, d.currency, COALESCE(SUM(d.amount), 0) AS total FROM payment_disbursements d
+      LEFT JOIN requisitions rq ON d.entity_type = 'requisition' AND rq.id = d.entity_id
+      LEFT JOIN expenditures ex ON d.entity_type = 'expenditure' AND ex.id = d.entity_id
+      WHERE d.organization_id = ${orgId} AND d.paid_date >= ${from} AND d.paid_date <= ${to} ${br(sql`d.branch_id`)}
+        AND NOT (d.entity_type = 'requisition' AND ${settlesCountedCostSql(sql`rq.category`, sql`rq.description`)})
+        AND NOT (d.entity_type = 'expenditure' AND COALESCE(ex.category, '') ~* 'commission')
+      GROUP BY 1, 2`),
     q(sql`SELECT ${local(sql`e.created_at`)} AS bucket, e.currency, COALESCE(SUM(e.amount), 0) AS total
       FROM commission_ledger_entries e LEFT JOIN policies p ON p.id = e.policy_id
       WHERE e.organization_id = ${orgId} AND e.agent_id IS NOT NULL AND e.created_at >= ${start} AND e.created_at < ${end} ${br(sql`p.branch_id`)} GROUP BY 1, 2`),
@@ -1256,12 +1273,15 @@ export async function buildExecutiveSummary(orgId: string, params: ExecutiveSumm
     GROUP BY status, COALESCE(currency, 'USD')
   `);
 
+  // New business, as the New joinings report counts it: legacy (typed-in) policies aren't sales.
+  const { start: npStart, end: npEnd } = await periodBounds(orgId, from, to);
   const newPolicies = await tdb.execute(sql`
     SELECT COUNT(*) AS count
     FROM policies
     WHERE organization_id = ${orgId}
-      AND created_at >= ${from + "T00:00:00.000Z"}
-      AND created_at <= ${to + "T23:59:59.999Z"}
+      AND deleted_at IS NULL AND COALESCE(is_legacy, false) = false
+      AND created_at >= ${npStart}
+      AND created_at < ${npEnd}
       ${branchId ? sql`AND branch_id = ${branchId}` : sql``}
   `);
 

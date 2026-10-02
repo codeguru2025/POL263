@@ -15421,6 +15421,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ── Budgets (monthly targets by category) ──
+  // Reports → Finance → Budget: each month's target next to the actual (server/budget-report.ts).
+  app.get("/api/reports/budget-vs-actual", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
+    const user = req.user as any;
+    const year = /^\d{4}$/.test(String(req.query.year)) ? String(req.query.year) : (await todayForOrg(user.organizationId)).slice(0, 4);
+    const { buildBudgetVsActual } = await import("./budget-report");
+    return res.json(await buildBudgetVsActual(user.organizationId, year));
+  });
+
   app.get("/api/budgets", requireAuth, requireTenantScope, requirePermission("read:finance"), async (req, res) => {
     const user = req.user as any;
     const from = typeof req.query.from === "string" ? req.query.from : undefined;

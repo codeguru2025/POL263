@@ -67,18 +67,17 @@ export async function buildExecutiveReport(orgId: string, params: ExecutiveRepor
   // ── Budget vs actual (headline categories only — see the budgets table) ──
   const fxMap = await fxMapFor(orgId);
   const sumUsd = (m: Record<string, number>) => Object.entries(m).reduce((s, [c, v]) => s + v * (fxMap[c.toUpperCase()] ?? 0), 0);
-  const [budIncome, budExpenses, budNewPolicies] = await Promise.all([
-    storage.getBudgetForRange(orgId, from, to, "total_income"),
-    storage.getBudgetForRange(orgId, from, to, "total_expenses"),
-    storage.getBudgetForRange(orgId, from, to, "new_policies"),
-  ]);
+  // Targets for exactly [from, to]: a part-covered month counts for its share of days.
+  const { budgetForRange } = await import("./budget-report");
+  const budgetRows = await storage.getBudgets(orgId, { from: `${from.slice(0, 7)}-01`, to });
   const variance = (actual: number, budget: number) => ({
     actual: Number(actual.toFixed(2)), budget: Number(budget.toFixed(2)),
     variance: Number((actual - budget).toFixed(2)),
     variancePct: budget === 0 ? null : Number((((actual - budget) / Math.abs(budget)) * 100).toFixed(1)),
   });
-  const budIncomeUsd = sumUsd(budIncome), budExpensesUsd = sumUsd(budExpenses);
-  const budNewPoliciesTotal = Object.values(budNewPolicies).reduce((s, v) => s + v, 0);
+  const budIncomeUsd = budgetForRange(budgetRows as any, "total_income", from, to, fxMap);
+  const budExpensesUsd = budgetForRange(budgetRows as any, "total_expenses", from, to, fxMap);
+  const budNewPoliciesTotal = budgetForRange(budgetRows as any, "new_policies", from, to, fxMap);
   const hasBudget = budIncomeUsd > 0 || budExpensesUsd > 0 || budNewPoliciesTotal > 0;
   const budget = hasBudget ? {
     totalIncomeUsd: variance(Number(incomeStatement.consolidatedUsd?.income ?? 0), budIncomeUsd),
